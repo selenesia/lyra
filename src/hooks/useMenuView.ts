@@ -18,8 +18,8 @@ interface MenuViewOptions {
   inactiveIcon: string;
   activeIcon: string;
   openedStorageKey: string;
-  oppositeBodyClass?: string;
-  hideOpposite?: () => void;
+  hideOtherViews?: () => void;
+  interceptEscape?: () => boolean;
   onShowFrame?: () => void;
   showOnMount?: boolean;
 }
@@ -41,8 +41,8 @@ export function useMenuView({
   inactiveIcon,
   activeIcon,
   openedStorageKey,
-  oppositeBodyClass,
-  hideOpposite,
+  hideOtherViews,
+  interceptEscape,
   onShowFrame,
   showOnMount = false,
 }: MenuViewOptions): MenuViewState {
@@ -67,13 +67,7 @@ export function useMenuView({
 
   const show = useCallback(() => {
     closeSettingsModalIfOpen();
-    if (
-      oppositeBodyClass &&
-      hideOpposite &&
-      document.body.classList.contains(oppositeBodyClass)
-    ) {
-      hideOpposite();
-    }
+    hideOtherViews?.();
 
     showHomeView();
     document.body.classList.add(bodyClass);
@@ -91,11 +85,10 @@ export function useMenuView({
   }, [
     activeIcon,
     bodyClass,
-    hideOpposite,
+    hideOtherViews,
     iconId,
     onShowFrame,
     openedStorageKey,
-    oppositeBodyClass,
     signal,
   ]);
 
@@ -164,12 +157,13 @@ export function useMenuView({
     if (!visible) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || hasBlockingModalOpen()) return;
+      if (interceptEscape?.()) return;
       hide();
     };
 
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [hide, visible]);
+  }, [hide, interceptEscape, visible]);
 
   return { visible, searchBarRef, show, hide, toggle };
 }

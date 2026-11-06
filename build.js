@@ -14,6 +14,17 @@ const SENSITIVE_TERM = /(games?|anime|proxy|rivet|folio|lyra)/i;
 const SENSITIVE_STRING_PATTERN =
   "[Gg]ames?|[Aa]nime|[Pp]roxy|[Rr]ivet|[Ff]olio|[Ll]yra";
 const ZERO_MATCH_TERM = /games?|proxy/gi;
+const WASM_PAYLOAD_PATTERN = "(?:data:[\\w/+.-]+;base64,)?AGFzbQ";
+const WASM_PAYLOAD_LITERAL = new RegExp(
+  `(["'])${WASM_PAYLOAD_PATTERN}[\\w+/=]*\\1`,
+  "g",
+);
+const WASM_PAYLOAD_SIGNAL = new RegExp(
+  [SENSITIVE_TERM.source, ["wa", "ves"].join(""), ["ma", "ia"].join("")].join(
+    "|",
+  ),
+  "gi",
+);
 
 export const FOLIO_RUNTIME_TOKENS = [
   "$folio",
@@ -71,11 +82,14 @@ const OBFUSCATION_OPTIONS = {
   deadCodeInjection: false,
   debugProtection: false,
   disableConsoleOutput: false,
-  forceTransformStrings: [SENSITIVE_STRING_PATTERN],
+  forceTransformStrings: [
+    `^(?!${WASM_PAYLOAD_PATTERN})[\\s\\S]*(?:${SENSITIVE_STRING_PATTERN})`,
+  ],
   identifierNamesGenerator: "mangled",
   log: false,
   renameGlobals: true,
   renameVariables: true,
+  reservedStrings: [`^${WASM_PAYLOAD_PATTERN}`],
   selfDefending: false,
   stringArray: true,
   stringArrayCallsTransform: false,
@@ -86,7 +100,7 @@ const OBFUSCATION_OPTIONS = {
   unicodeEscapeSequence: false,
 };
 
-const RUNTIME_OBFUSCATION_OPTIONS = {
+export const RUNTIME_OBFUSCATION_OPTIONS = {
   ...OBFUSCATION_OPTIONS,
   renameGlobals: false,
   renameVariables: false,
@@ -161,21 +175,31 @@ function stripSourceMapComments(source) {
     .replace(/\/\*[#@]\s*sourceMappingURL=.*?\*\//gs, "");
 }
 
-function encodeBuildLexemes(source) {
-  return source.replace(ZERO_MATCH_TERM, (match) => {
-    const escapedCharacter = match.charCodeAt(1).toString(16).padStart(4, "0");
-    return `${match[0]}\\u${escapedCharacter}${match.slice(2)}`;
-  });
+function escapeSecondCharacter(match) {
+  const escapedCharacter = match.charCodeAt(1).toString(16).padStart(4, "0");
+  return `${match[0]}\\u${escapedCharacter}${match.slice(2)}`;
 }
 
-function obfuscateSource(source, options, identifiersPrefix) {
+function encodeBuildLexemes(source) {
+  return source.replace(ZERO_MATCH_TERM, escapeSecondCharacter);
+}
+
+function encodeWasmPayloadLexemes(source) {
+  return source.replace(WASM_PAYLOAD_LITERAL, (literal) =>
+    literal.replace(WASM_PAYLOAD_SIGNAL, escapeSecondCharacter),
+  );
+}
+
+export function obfuscateSource(source, options, identifiersPrefix) {
   const compatibleSource = source.replaceAll("(?i:url)", "[uU][rR][lL]");
   return encodeBuildLexemes(
-    obfuscate(compatibleSource, {
-      ...options,
-      seed: identifiersPrefix || "lyra-build",
-      ...(identifiersPrefix ? { identifiersPrefix } : {}),
-    }).getObfuscatedCode(),
+    encodeWasmPayloadLexemes(
+      obfuscate(compatibleSource, {
+        ...options,
+        seed: identifiersPrefix || "lyra-build",
+        ...(identifiersPrefix ? { identifiersPrefix } : {}),
+      }).getObfuscatedCode(),
+    ),
   );
 }
 
@@ -569,7 +593,7 @@ export default function lyraPlugin(
             const filePath = path.join(directory, entry.name);
             if (entry.isDirectory()) {
               await compressDirectory(filePath);
-            } else if (/\.(js|css|html|mjs)$/.test(entry.name)) {
+            } else if (/\.(js|css|html|mjs|wasm)$/.test(entry.name)) {
               const contents = await readFile(filePath);
               const [brotli, gzipped] = await Promise.all([
                 brotliCompressAsync(contents, {

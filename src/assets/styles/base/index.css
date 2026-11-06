@@ -487,12 +487,14 @@ body.browser-view .main-nav {
 }
 
 #games-icon,
-#anime-icon {
+#anime-icon,
+#chat-icon {
   display: flex;
 }
 
 body.games-view #games-icon svg path,
-body.anime-view #anime-icon svg path {
+body.anime-view #anime-icon svg path,
+body.chat-view #chat-icon svg path {
   stroke-width: 2;
 }
 
@@ -505,7 +507,9 @@ body.anime-view #anime-icon svg path {
 .window-controls a[data-tooltip]:hover::before,
 .window-controls a[data-tooltip]:hover::after,
 .omnibox-icon[data-tooltip]:hover::before,
-.omnibox-icon[data-tooltip]:hover::after {
+.omnibox-icon[data-tooltip]:hover::after,
+.chat-tool[data-tooltip]:is(:hover, :focus-visible)::before,
+.chat-tool[data-tooltip]:is(:hover, :focus-visible)::after {
   opacity: 0;
 }
 
@@ -513,7 +517,8 @@ body.anime-view #anime-icon svg path {
 .rivet-toolbar-trigger[data-tooltip]:hover::before,
 .nav-controls a[data-tooltip]:hover::before,
 .window-controls a[data-tooltip]:hover::before,
-.omnibox-icon[data-tooltip]:hover::before {
+.omnibox-icon[data-tooltip]:hover::before,
+.chat-tool[data-tooltip]:is(:hover, :focus-visible)::before {
   content: "";
   position: absolute;
   top: calc(100% + 5px);
@@ -532,7 +537,8 @@ body.anime-view #anime-icon svg path {
 .rivet-toolbar-trigger[data-tooltip]:hover::after,
 .nav-controls a[data-tooltip]:hover::after,
 .window-controls a[data-tooltip]:hover::after,
-.omnibox-icon[data-tooltip]:hover::after {
+.omnibox-icon[data-tooltip]:hover::after,
+.chat-tool[data-tooltip]:is(:hover, :focus-visible)::after {
   content: attr(data-tooltip);
   position: absolute;
   top: calc(100% + 9px);

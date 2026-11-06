@@ -23,6 +23,7 @@ export const IconArrowRotateClockwise = makeIcon("IconArrowRotateClockwise");
 export const IconCheckCircle2 = makeIcon("IconCheckCircle2");
 export const IconChevronBottom = makeIcon("IconChevronBottom");
 export const IconArrowLeft = makeIcon("IconArrowLeft");
+export const IconArrowCornerUpLeft = makeIcon("IconArrowCornerUpLeft");
 export const IconArrowRight = makeIcon("IconArrowRight");
 export const IconCloud = makeIcon("IconCloud");
 export const IconFullScreen = makeIcon("IconFullScreen");

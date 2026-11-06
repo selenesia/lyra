@@ -2,7 +2,7 @@ import { negativeMessage, positiveMessage } from "../../core/runtime/messages.ts
 
 export const USERNAME_MIN_LENGTH = 3;
 export const USERNAME_MAX_LENGTH = 20;
-export const PASSWORD_MIN_LENGTH = 14;
+export const PASSWORD_MIN_LENGTH = 8;
 
 export type HintTone = "neutral" | "error" | "success";
 
@@ -15,7 +15,7 @@ export interface FieldHint {
 const USERNAME_PATTERN = /^[A-Za-z0-9_]+$/;
 
 export const USERNAME_IDLE_TEXT = "3-20 letters, numbers, or underscores";
-export const PASSWORD_IDLE_TEXT = "at least 14 characters; a few random words works great";
+export const PASSWORD_IDLE_TEXT = "at least 8 characters";
 
 function characterCount(value: string): number {
   return [...value].length;

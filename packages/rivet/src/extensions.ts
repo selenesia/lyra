@@ -5,6 +5,7 @@ import {
   dbDeleteEntries,
   dbGet,
   dbGetAll,
+  dbGetEntries,
   dbPut,
   dbPutEntries,
   EXT_FILES_STORE,
@@ -216,13 +217,16 @@ export async function installExtension(
   registry: RivetRegistry,
   host: RivetHostBindings,
   backgroundRoot: HTMLElement,
+  replacesId?: string,
 ): Promise<string> {
   const archive = new ExtensionArchive();
   let meta: ExtensionMeta;
+  let previousId: string | undefined;
   try {
     const { manifest, fileList } = await archive.open(buffer);
     const extId = generateExtensionId(manifest.name + (manifest.version ?? ""));
     if (registry.get(extId)) await uninstallExtension(extId, registry);
+    previousId = replacesId === extId ? undefined : replacesId;
     meta = {
       id: extId,
       manifest,
@@ -240,16 +244,36 @@ export async function installExtension(
           paths.map((path, index) => [`${extId}/${path}`, files[index]] as const),
         );
       }
+      if (previousId) {
+        const previousPrefix = `${previousId}/`;
+        const storage = await dbGetEntries(
+          EXT_STORAGE_STORE,
+          keysWithPrefix(previousPrefix),
+        );
+        await dbPutEntries(
+          EXT_STORAGE_STORE,
+          storage
+            .filter(([key]) => !key.startsWith(`${previousPrefix}session/`))
+            .map(([key, value]) => [
+              `${extId}/${key.slice(previousPrefix.length)}`,
+              value,
+            ] as const),
+        );
+      }
       await dbPut(EXT_STORE, null, meta);
     } catch (error) {
-      await dbDeleteEntries(EXT_FILES_STORE, keysWithPrefix(`${extId}/`));
+      await Promise.all([
+        dbDeleteEntries(EXT_FILES_STORE, keysWithPrefix(`${extId}/`)),
+        dbDeleteEntries(EXT_STORAGE_STORE, keysWithPrefix(`${extId}/`)),
+      ]);
       throw error;
     }
   } finally {
     archive.close();
   }
+  if (previousId) await uninstallExtension(previousId, registry);
   await loadExtension(meta, registry, host, backgroundRoot, {
-    installedReason: "install",
+    installedReason: previousId ? "update" : "install",
   });
   return meta.id;
 }

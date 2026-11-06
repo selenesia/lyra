@@ -70,3 +70,13 @@ export function warmProxyRuntime(): void {
     console.warn("proxy runtime warmup failed:", error, NEGATIVE);
   });
 }
+
+export function warmExtensionRuntime(): void {
+  void ensureProxyRuntime()
+    .then(() => window.Lyra?.waitForTransport?.(10000))
+    .then(() => import("./rivet.ts"))
+    .then(({ initializeRivet }) => initializeRivet())
+    .catch((error) => {
+      console.warn("extension runtime warmup failed:", error, NEGATIVE);
+    });
+}

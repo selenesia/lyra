@@ -25,5 +25,8 @@ declare global {
       language?: "sub" | "dub";
     }) => void;
     toggleSettingsModal?: () => void;
+    showChatPage?: () => void;
+    hideChatPage?: () => void;
+    toggleChatPage?: () => void;
   }
 }

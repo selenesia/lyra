@@ -31,7 +31,10 @@ import {
   readMotionPreference,
   type MotionPreference,
 } from "../../core/config/advancedSettings.ts";
-import { warmProxyRuntime } from "../../core/proxy/proxyRuntime.ts";
+import {
+  warmExtensionRuntime,
+  warmProxyRuntime,
+} from "../../core/proxy/proxyRuntime.ts";
 import { getRivet } from "../../core/proxy/rivetBridge.ts";
 import { NEGATIVE } from "../../core/runtime/messages.ts";
 import { fetchServiceMetadata } from "../../core/runtime/serviceMetadata.ts";
@@ -273,7 +276,7 @@ export default function SettingsModal({
 
   useEffect(() => {
     if (!isOpen || activeTab !== "extensions") return;
-    warmProxyRuntime();
+    warmExtensionRuntime();
     let unsubscribe: (() => void) | undefined;
     const refresh = () => {
       const rivet = getRivet();

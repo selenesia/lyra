@@ -60,6 +60,7 @@ export class Rivet {
   async installExtension(
     buffer: ArrayBuffer,
     filename = "extension.crx",
+    replacesId?: string,
   ): Promise<string> {
     return installExtensionImpl(
       buffer,
@@ -67,6 +68,7 @@ export class Rivet {
       this.registry,
       this.host,
       this.backgroundRoot,
+      replacesId,
     );
   }
 

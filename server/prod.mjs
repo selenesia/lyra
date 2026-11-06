@@ -6,6 +6,7 @@ import { httpError } from "./errors.mjs";
 import { createDnsService } from "./dns.mjs";
 import { createPresence } from "./presence.mjs";
 import { createNoticeBoard, noticeSocketPath } from "./notice.mjs";
+import { startChat } from "./chat-service.mjs";
 import { turnConfig } from "./turn.mjs";
 import {
   negativeMessage,
@@ -28,6 +29,7 @@ const ROOT = process.cwd();
 const notices = createNoticeBoard();
 const connectPresence = createPresence({ maxStreamsPerSource: 1_000, broadcastMs: 1_000, greet: notices.greet });
 const stopNotices = notices.serve({ presence: connectPresence, socketPath: noticeSocketPath(ROOT) });
+const chat = startChat({ root: ROOT });
 const adcash = createAdcash({ root: ROOT });
 const PORT = Number.parseInt(process.env.PORT || "4444", 10);
 const TURN_HEALTH_HOST = process.env.TURN_HEALTH_HOST || "127.0.0.1";
@@ -115,7 +117,7 @@ const MIME_TYPES = {
   ".wasm": "application/wasm",
 };
 
-const COMPRESSIBLE = /\.(js|css|html|mjs|json|svg|xml)$/i;
+const COMPRESSIBLE = /\.(js|css|html|mjs|json|svg|xml|wasm)$/i;
 const ENCODING_MAP = [
   { token: "br", ext: ".br" },
   { token: "gzip", ext: ".gz" },
@@ -622,6 +624,9 @@ async function appFetch(req, server, url) {
     const failure = httpError(429, "RATE_LIMITED", "too many requests, please try again later");
     return jsonResponse(failure.body, failure.status);
   }
+  if (pathname.startsWith("/api/chat/")) {
+    return chat.handle(req, { ip: getClientIp(req, server) });
+  }
   if (pathname === "/api/notice") {
     const result = await notices.handle(req);
     return jsonResponse(result.body, result.status);
@@ -734,6 +739,7 @@ async function gracefulShutdown() {
   shuttingDown = true;
   metrics.close();
   stopNotices();
+  chat.close();
   console.log("\nshutting down...");
   server.stop(true);
   console.log(positiveMessage(`port ${PORT} released`));

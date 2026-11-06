@@ -45,6 +45,7 @@ const runtimeGlobals = {
   URLSearchParams: "readonly",
   WebSocket: "readonly",
   window: "readonly",
+  Worker: "readonly",
 };
 
 export default [

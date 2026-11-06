@@ -2,31 +2,52 @@ import { useCallback, useEffect } from "preact/hooks";
 import {
   gamesViewSignal,
   animeViewSignal,
+  chatViewSignal,
   useUiSignal,
 } from "../../core/ui/uiSignals.ts";
 import { IconCloud, IconSettingsGear4 } from "../icons";
 import { svgIcon } from "../../core/ui/svgIcon";
+import { isManagedModalOpen } from "../../core/ui/modal.ts";
 import { invokeWindowAction } from "../../core/browser/windowActions.ts";import { isStatic } from "../../core/runtime/hosting.ts";
 import {
   preloadAnimeCatalog,
   loadCloudSync,
   preloadGamesCatalog,
   loadSettingsModal,
+  loadChatPage,
 } from "../../app/loaders.ts";
+
+function cloudSyncUsername(): string | null {
+  try {
+    const user = JSON.parse(localStorage.getItem("auth_user") || "{}");
+    return typeof user?.username === "string" && user.username ? user.username : null;
+  } catch {
+    return null;
+  }
+}
+
+function openCloudSync(): void {
+  void loadCloudSync().then(() => {
+    if (!isManagedModalOpen(document.getElementById("cloudsync-modal"))) {
+      document.dispatchEvent(new CustomEvent("toggleCloudSyncModal"));
+    }
+  });
+}
+
+function preloadChat(): void {
+  void (cloudSyncUsername() ? loadChatPage() : loadCloudSync());
+}
 
 export default function TopBar() {
   const gamesView = useUiSignal(gamesViewSignal);
   const animeView = useUiSignal(animeViewSignal);
+  const chatView = useUiSignal(chatViewSignal);
 
   useEffect(() => {
-    if (!isStatic) {
-      try {
-        const user = JSON.parse(localStorage.getItem("auth_user") || "{}");
-        if (typeof user?.username === "string" && user.username) {
-          const statusEl = document.getElementById("auth-status");
-          if (statusEl) statusEl.textContent = user.username;
-        }
-      } catch {}
+    const username = isStatic ? null : cloudSyncUsername();
+    if (username) {
+      const statusEl = document.getElementById("auth-status");
+      if (statusEl) statusEl.textContent = username;
     }
     const choiIcon = document.getElementById("games-icon");
     if (choiIcon && !choiIcon.innerHTML) {
@@ -36,12 +57,17 @@ export default function TopBar() {
     if (animeIcon && !animeIcon.innerHTML) {
       animeIcon.innerHTML = svgIcon("IconSushi", { size: 22, solid: true });
     }
+    const chatIcon = document.getElementById("chat-icon");
+    if (chatIcon && !chatIcon.innerHTML) {
+      chatIcon.innerHTML = svgIcon("IconBubbleText", { solid: true });
+    }
   }, []);
 
   const handleBrandClick = useCallback((e: MouseEvent) => {
     e.preventDefault();
     window.hideGameMenu?.();
     window.hideAnimeMenu?.();
+    window.hideChatPage?.();
   }, []);
 
   const handleGamesClick = useCallback((e: MouseEvent) => {
@@ -53,6 +79,18 @@ export default function TopBar() {
     e.preventDefault();
     invokeWindowAction("toggleAnimeMenu");
   }, []);
+
+  const handleChatClick = useCallback(
+    (e: MouseEvent) => {
+      e.preventDefault();
+      if (!chatView && !cloudSyncUsername()) {
+        openCloudSync();
+        return;
+      }
+      invokeWindowAction("toggleChatPage");
+    },
+    [chatView],
+  );
 
   const handleSettingsClick = useCallback((e: MouseEvent) => {
     e.preventDefault();
@@ -92,6 +130,19 @@ export default function TopBar() {
         >
           <span id="anime-icon" />
         </a>
+        {!isStatic && (
+          <a
+            href="#"
+            id="chat-btn"
+            class="icon-btn"
+            data-tooltip={chatView ? "search" : "chat"}
+            onPointerEnter={preloadChat}
+            onFocus={preloadChat}
+            onClick={handleChatClick}
+          >
+            <span id="chat-icon" />
+          </a>
+        )}
       </div>
       <div id="top-right-stuff">
         {!isStatic && <div

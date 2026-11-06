@@ -33,6 +33,7 @@ export function useUiSignal<T>(signal: UiSignal<T>): T {
 export const sidebarHiddenSignal = uiSignal(false);
 export const gamesViewSignal = uiSignal(false);
 export const animeViewSignal = uiSignal(false);
+export const chatViewSignal = uiSignal(false);
 export const currentUrlSignal = uiSignal<string>("");
 
 export function initUiSignals(): void {

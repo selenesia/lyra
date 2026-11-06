@@ -1,3 +1,4 @@
+use crate::opaque::{count_attempt, reset_attempts, too_many_attempts, Attempt};
 use adaptive_capacity::AdaptiveGate;
 use aes_gcm::Aes256Gcm;
 use argon2::{
@@ -29,13 +30,13 @@ use zeroize::Zeroizing;
 
 const COOKIE_NAME: &str = "token";
 const NEGATIVE: &str = "... /ᐠ - ˕ -マ";
-const MIN_PASSWORD_CHARS: usize = 14;
 const MAX_PASSWORD_CHARS: usize = 128;
 const TOKEN_CACHE_TTL_SECS: u64 = 60;
 const TOKEN_CACHE_MAX_ENTRIES: usize = 10_000;
+const SESSION_DAYS: i64 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthFailure {
+pub(crate) enum AuthFailure {
     Internal,
     Busy,
     InvalidRequest,
@@ -43,7 +44,7 @@ enum AuthFailure {
     InvalidCredentials,
 }
 
-fn failure_message(failure: AuthFailure) -> String {
+pub(crate) fn failure_message(failure: AuthFailure) -> String {
     let message = match failure {
         AuthFailure::Internal => "authentication service is unavailable",
         AuthFailure::Busy => "authentication service is busy",
@@ -54,7 +55,7 @@ fn failure_message(failure: AuthFailure) -> String {
     format!("{message}{NEGATIVE}")
 }
 
-fn negative(message: &str) -> String {
+pub(crate) fn negative(message: &str) -> String {
     format!("{message}{NEGATIVE}")
 }
 
@@ -70,7 +71,7 @@ fn password_hasher() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-fn hash_password(password: &str) -> Result<String, AuthFailure> {
+pub(crate) fn hash_password(password: &str) -> Result<String, AuthFailure> {
     let salt = SaltString::generate(&mut OsRng);
     password_hasher()
         .hash_password(password.as_bytes(), &salt)
@@ -114,15 +115,11 @@ pub fn warm_password_verifier() {
     let _ = dummy_password_hash();
 }
 
-fn valid_username(username: &str) -> bool {
+pub(crate) fn valid_username(username: &str) -> bool {
     (3..=20).contains(&username.len())
         && username
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
-fn valid_new_password(password: &str) -> bool {
-    (MIN_PASSWORD_CHARS..=MAX_PASSWORD_CHARS).contains(&password.chars().count())
 }
 
 fn session_cookie(value: String, max_age: Duration) -> Cookie<'static> {
@@ -144,13 +141,14 @@ fn build_session_cookie(value: String, max_age: Duration, secure: bool) -> Cooki
 }
 
 #[derive(Clone)]
-pub struct AppState {
+pub(crate) struct AppState {
     pub jwt_secret: Zeroizing<String>,
     pub pool: crate::db::DbPool,
     pub aes_cipher: Arc<Aes256Gcm>,
     pub auth_work: Arc<AdaptiveGate>,
     pub sync_work: Arc<AdaptiveGate>,
     pub sync_admission: Arc<crate::admission::Admission>,
+    pub opaque_setup: Arc<opaque_ke::ServerSetup<crate::opaque::Suite>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -159,12 +157,6 @@ struct Claims {
     username: String,
     v: i64,
     exp: usize,
-}
-
-#[derive(Deserialize)]
-pub struct RegisterRequest {
-    pub username: String,
-    pub password: String,
 }
 
 #[derive(Deserialize)]
@@ -184,22 +176,27 @@ struct UsernameAvailability {
 }
 
 #[derive(Serialize)]
-pub struct UserResponse {
+pub(crate) struct UserResponse {
     pub id: i64,
     pub username: String,
     pub sync_salt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 const SYNC_SALT_BYTES: usize = 16;
 
-fn new_sync_salt() -> Vec<u8> {
+pub(crate) fn new_sync_salt() -> Vec<u8> {
     use argon2::password_hash::rand_core::RngCore;
     let mut salt = vec![0; SYNC_SALT_BYTES];
     OsRng.fill_bytes(&mut salt);
     salt
 }
 
-fn sync_salt(connection: &rusqlite::Connection, user_id: i64) -> rusqlite::Result<String> {
+pub(crate) fn sync_salt(
+    connection: &rusqlite::Connection,
+    user_id: i64,
+) -> rusqlite::Result<String> {
     connection.execute(
         "UPDATE users SET sync_salt = ? WHERE id = ? AND sync_salt IS NULL",
         params![new_sync_salt(), user_id],
@@ -212,16 +209,28 @@ fn sync_salt(connection: &rusqlite::Connection, user_id: i64) -> rusqlite::Resul
     Ok(STANDARD.encode(salt))
 }
 
+pub(crate) fn account_created_at(
+    connection: &rusqlite::Connection,
+    user_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    let seconds: Option<i64> = connection.query_row(
+        "SELECT CAST(strftime('%s', created_at) AS INTEGER) FROM users WHERE id = ?",
+        params![user_id],
+        |row| row.get(0),
+    )?;
+    Ok(seconds.map(|seconds| seconds * 1000))
+}
+
 #[derive(Serialize)]
-struct AuthResponse {
+pub(crate) struct AuthResponse {
     success: bool,
     user: Option<UserResponse>,
     error: Option<String>,
 }
 
-type AuthReply = (StatusCode, Json<AuthResponse>);
+pub(crate) type AuthReply = (StatusCode, Json<AuthResponse>);
 
-fn auth_success(status: StatusCode, user: Option<UserResponse>) -> AuthReply {
+pub(crate) fn auth_success(status: StatusCode, user: Option<UserResponse>) -> AuthReply {
     (
         status,
         Json(AuthResponse {
@@ -232,7 +241,7 @@ fn auth_success(status: StatusCode, user: Option<UserResponse>) -> AuthReply {
     )
 }
 
-fn auth_error(status: StatusCode, error: String) -> AuthReply {
+pub(crate) fn auth_error(status: StatusCode, error: String) -> AuthReply {
     (
         status,
         Json(AuthResponse {
@@ -243,128 +252,43 @@ fn auth_error(status: StatusCode, error: String) -> AuthReply {
     )
 }
 
-fn start_session(
+pub(crate) fn session_token(
+    state: &AppState,
+    id: i64,
+    username: &str,
+    token_version: i64,
+    issued_at: time::OffsetDateTime,
+) -> Result<String, AuthFailure> {
+    let claims = Claims {
+        id,
+        username: username.to_owned(),
+        v: token_version,
+        exp: (issued_at + Duration::days(SESSION_DAYS)).unix_timestamp() as usize,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
+    )
+    .map_err(|_| AuthFailure::Internal)
+}
+
+pub(crate) fn start_session(
     state: &AppState,
     cookies: &Cookies,
     id: i64,
     username: &str,
     token_version: i64,
 ) -> Result<(), AuthFailure> {
-    let claims = Claims {
+    let token = session_token(
+        state,
         id,
-        username: username.to_owned(),
-        v: token_version,
-        exp: (time::OffsetDateTime::now_utc() + Duration::days(7)).unix_timestamp() as usize,
-    };
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
-    )
-    .map_err(|_| AuthFailure::Internal)?;
-    cookies.add(session_cookie(token, Duration::days(7)));
+        username,
+        token_version,
+        time::OffsetDateTime::now_utc(),
+    )?;
+    cookies.add(session_cookie(token, Duration::days(SESSION_DAYS)));
     Ok(())
-}
-
-pub async fn register(
-    State(state): State<Arc<AppState>>,
-    cookies: Cookies,
-    payload: Result<Json<RegisterRequest>, JsonRejection>,
-) -> impl IntoResponse {
-    let Json(RegisterRequest { username, password }) = match payload {
-        Ok(payload) => payload,
-        Err(rejection) => {
-            return auth_error(
-                rejection.status(),
-                failure_message(AuthFailure::InvalidRequest),
-            )
-        }
-    };
-    let password = Zeroizing::new(password);
-    if username.len() < 3 || username.len() > 20 {
-        return auth_error(
-            StatusCode::BAD_REQUEST,
-            negative("username must be 3-20 chars"),
-        );
-    }
-    if !valid_username(&username) {
-        return auth_error(
-            StatusCode::BAD_REQUEST,
-            negative("username must be alphanumeric"),
-        );
-    }
-    if password.chars().count() < MIN_PASSWORD_CHARS {
-        return auth_error(
-            StatusCode::BAD_REQUEST,
-            negative("password must be at least 14 characters"),
-        );
-    }
-    if !valid_new_password(&password) {
-        return auth_error(StatusCode::BAD_REQUEST, negative("password is too long"));
-    }
-
-    let Some(permit) = state.auth_work.try_acquire() else {
-        return auth_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            failure_message(AuthFailure::Busy),
-        );
-    };
-
-    let pool = state.pool.clone();
-    let stored_username = username.clone();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let exists = {
-            let conn = pool.get().map_err(|_| AuthFailure::Internal)?;
-            conn.query_row(
-                "SELECT 1 FROM users WHERE username = ?",
-                params![stored_username],
-                |_row: &rusqlite::Row| Ok(true),
-            )
-            .unwrap_or(false)
-        };
-        if exists {
-            return Err(AuthFailure::UsernameTaken);
-        }
-
-        let hashed = hash_password(&password)?;
-        let conn = pool.get().map_err(|_| AuthFailure::Internal)?;
-
-        let salt = new_sync_salt();
-        conn.execute(
-            "INSERT INTO users (username, password_hash, token_version, sync_salt) VALUES (?, ?, 1, ?)",
-            params![stored_username, hashed, salt],
-        )
-        .map_err(|_| AuthFailure::Internal)?;
-
-        Ok((conn.last_insert_rowid(), STANDARD.encode(salt)))
-    })
-    .await
-    .unwrap_or(Err(AuthFailure::Internal))
-    .and_then(|(user_id, sync_salt)| {
-        start_session(&state, &cookies, user_id, &username, 1)?;
-        Ok((user_id, sync_salt))
-    });
-
-    match result {
-        Ok((user_id, sync_salt)) => auth_success(
-            StatusCode::CREATED,
-            Some(UserResponse {
-                id: user_id,
-                username,
-                sync_salt,
-            }),
-        ),
-        Err(failure) => {
-            let status = if failure == AuthFailure::UsernameTaken {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            auth_error(status, failure_message(failure))
-        }
-    }
 }
 
 pub async fn username_available(
@@ -405,11 +329,16 @@ pub async fn username_available(
     }
 }
 
+enum LegacyLogin {
+    Locked(u64),
+    Verified(i64, i64, String),
+}
+
 pub async fn login(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
     payload: Result<Json<LoginRequest>, JsonRejection>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let Json(LoginRequest { username, password }) = match payload {
         Ok(payload) => payload,
         Err(rejection) => {
@@ -417,6 +346,7 @@ pub async fn login(
                 rejection.status(),
                 failure_message(AuthFailure::InvalidRequest),
             )
+            .into_response()
         }
     };
     let password = Zeroizing::new(password);
@@ -427,36 +357,46 @@ pub async fn login(
         return auth_error(
             StatusCode::BAD_REQUEST,
             failure_message(AuthFailure::InvalidCredentials),
-        );
+        )
+        .into_response();
     }
 
     let Some(permit) = state.auth_work.try_acquire() else {
         return auth_error(
             StatusCode::SERVICE_UNAVAILABLE,
             failure_message(AuthFailure::Busy),
-        );
+        )
+        .into_response();
     };
 
     let pool = state.pool.clone();
     let stored_username = username.clone();
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let row: Result<(i64, String, i64), rusqlite::Error> = {
+        let (id, password_hash, token_version) = {
             let conn = pool.get().map_err(|_| AuthFailure::Internal)?;
-            conn.query_row(
-                "SELECT id, password_hash, token_version FROM users WHERE username = ?",
+            let row: Result<(i64, String, i64, bool), rusqlite::Error> = conn.query_row(
+                "SELECT id, password_hash, token_version, opaque_record IS NOT NULL FROM users WHERE username = ?",
                 params![stored_username],
-                |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-        };
-        let (id, password_hash, token_version) = match row {
-            Ok(row) => row,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                let _ = verify_password(&password, dummy_password_hash());
-                return Err(AuthFailure::InvalidCredentials);
+                |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            );
+            match row {
+                Ok((id, password_hash, token_version, false)) => {
+                    if let Attempt::Locked { retry_after } =
+                        count_attempt(&conn, id, now).map_err(|_| AuthFailure::Internal)?
+                    {
+                        return Ok(LegacyLogin::Locked(retry_after));
+                    }
+                    (id, password_hash, token_version)
+                }
+                Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    let _ = verify_password(&password, dummy_password_hash());
+                    return Err(AuthFailure::InvalidCredentials);
+                }
+                Err(_) => return Err(AuthFailure::Internal),
             }
-            Err(_) => return Err(AuthFailure::Internal),
         };
 
         let check = verify_password(&password, &password_hash);
@@ -464,6 +404,7 @@ pub async fn login(
             return Err(AuthFailure::InvalidCredentials);
         }
         let conn = pool.get().map_err(|_| AuthFailure::Internal)?;
+        reset_attempts(&conn, id).map_err(|_| AuthFailure::Internal)?;
         if check.needs_upgrade {
             let upgraded = hash_password(&password)?;
             conn.execute(
@@ -474,12 +415,12 @@ pub async fn login(
         }
         let sync_salt = sync_salt(&conn, id).map_err(|_| AuthFailure::Internal)?;
 
-        Ok((id, token_version, sync_salt))
+        Ok(LegacyLogin::Verified(id, token_version, sync_salt))
     })
     .await;
 
     match result {
-        Ok(Ok((id, token_version, sync_salt))) => {
+        Ok(Ok(LegacyLogin::Verified(id, token_version, sync_salt))) => {
             match start_session(&state, &cookies, id, &username, token_version) {
                 Ok(()) => auth_success(
                     StatusCode::OK,
@@ -487,18 +428,25 @@ pub async fn login(
                         id,
                         username,
                         sync_salt,
+                        created_at: None,
                     }),
-                ),
+                )
+                .into_response(),
                 Err(failure) => {
                     auth_error(StatusCode::INTERNAL_SERVER_ERROR, failure_message(failure))
+                        .into_response()
                 }
             }
         }
-        Ok(Err(failure)) => auth_error(StatusCode::UNAUTHORIZED, failure_message(failure)),
+        Ok(Ok(LegacyLogin::Locked(retry_after))) => too_many_attempts(retry_after),
+        Ok(Err(failure)) => {
+            auth_error(StatusCode::UNAUTHORIZED, failure_message(failure)).into_response()
+        }
         Err(_) => auth_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             failure_message(AuthFailure::Internal),
-        ),
+        )
+        .into_response(),
     }
 }
 
@@ -533,18 +481,21 @@ pub async fn me(State(state): State<Arc<AppState>>, cookies: Cookies) -> impl In
         return auth_error(StatusCode::UNAUTHORIZED, negative("unauthorized"));
     };
     let pool = state.pool.clone();
-    let salt = tokio::task::spawn_blocking(move || {
+    let account = tokio::task::spawn_blocking(move || {
         let connection = pool.get().map_err(|_| AuthFailure::Internal)?;
-        sync_salt(&connection, id).map_err(|_| AuthFailure::Internal)
+        let salt = sync_salt(&connection, id).map_err(|_| AuthFailure::Internal)?;
+        let created_at = account_created_at(&connection, id).map_err(|_| AuthFailure::Internal)?;
+        Ok::<_, AuthFailure>((salt, created_at))
     })
     .await;
-    match salt {
-        Ok(Ok(sync_salt)) => auth_success(
+    match account {
+        Ok(Ok((sync_salt, created_at))) => auth_success(
             StatusCode::OK,
             Some(UserResponse {
                 id,
                 username,
                 sync_salt,
+                created_at,
             }),
         ),
         _ => auth_error(
@@ -622,7 +573,33 @@ fn cached_token_invalidate(user_id: i64) {
     get_token_cache().remove(&user_id);
 }
 
-pub async fn get_current_user(state: &AppState, cookies: &Cookies) -> Result<(i64, String), ()> {
+pub(crate) async fn get_current_user(
+    state: &AppState,
+    cookies: &Cookies,
+) -> Result<(i64, String), ()> {
+    current_session(state, cookies)
+        .await
+        .map(|(id, username, _)| (id, username))
+}
+
+pub(crate) async fn get_recent_user(
+    state: &AppState,
+    cookies: &Cookies,
+    max_age_secs: i64,
+) -> Result<(i64, String), ()> {
+    let (id, username, exp) = current_session(state, cookies).await?;
+    let issued_at = i64::try_from(exp)
+        .map_err(|_| ())?
+        .checked_sub(Duration::days(SESSION_DAYS).whole_seconds())
+        .ok_or(())?;
+    let age = time::OffsetDateTime::now_utc().unix_timestamp() - issued_at;
+    if age > max_age_secs {
+        return Err(());
+    }
+    Ok((id, username))
+}
+
+async fn current_session(state: &AppState, cookies: &Cookies) -> Result<(i64, String, usize), ()> {
     let token_cookie = cookies.get(COOKIE_NAME).ok_or(())?;
     let token = token_cookie.value();
 
@@ -645,7 +622,7 @@ pub async fn get_current_user(state: &AppState, cookies: &Cookies) -> Result<(i6
             if cached_v != token_v {
                 return Err(());
             }
-            return Ok((user_id, token_data.claims.username));
+            return Ok((user_id, token_data.claims.username, token_data.claims.exp));
         }
     }
 
@@ -676,6 +653,10 @@ pub async fn get_current_user(state: &AppState, cookies: &Cookies) -> Result<(i6
         return Err(());
     }
 
-    Ok((token_data.claims.id, token_data.claims.username))
+    Ok((
+        token_data.claims.id,
+        token_data.claims.username,
+        token_data.claims.exp,
+    ))
 }
 

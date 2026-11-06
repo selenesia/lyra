@@ -24,6 +24,8 @@ export const loadNewTabModal = () =>
 export const loadSettingsModal = () =>
   import("../components/settings/SettingsModal.tsx");
 
+export const loadChatPage = () => import("../components/chat/ChatPage.tsx");
+
 export const loadCloudSync = () =>
   Promise.all([
     import("../assets/styles/cloudsync/cloudsync-modal.css"),

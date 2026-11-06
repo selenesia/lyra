@@ -24,12 +24,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 time = "0.3"
 sha2 = "0.10"
+hmac = "0.12"
 tower_governor = "0.4"
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 mimalloc = "0.1"
 dashmap = "6"
 zeroize = "1"
+opaque-ke = { version = "=4.0.1", features = ["argon2"] }
 
 [profile.release]
 lto = "fat"

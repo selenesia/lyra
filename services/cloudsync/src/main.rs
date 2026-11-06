@@ -1,6 +1,7 @@
 mod admission;
 mod auth;
 mod db;
+mod opaque;
 mod sync;
 mod tuning;
 
@@ -169,6 +170,7 @@ async fn main() {
         auth_work,
         sync_work,
         sync_admission: admission::Admission::new(),
+        opaque_setup: Arc::new(opaque::server_setup_from_env()),
     });
 
     auth::warm_password_verifier();
@@ -268,8 +270,22 @@ async fn main() {
     );
 
     let auth_routes_strict = Router::new()
-        .route("/register", axum::routing::post(auth::register))
+        .route(
+            "/register/start",
+            axum::routing::post(opaque::register_start),
+        )
+        .route(
+            "/register/finish",
+            axum::routing::post(opaque::register_finish),
+        )
         .route("/login", axum::routing::post(auth::login))
+        .route("/login/start", axum::routing::post(opaque::login_start))
+        .route("/login/finish", axum::routing::post(opaque::login_finish))
+        .route("/upgrade/start", axum::routing::post(opaque::upgrade_start))
+        .route(
+            "/upgrade/finish",
+            axum::routing::post(opaque::upgrade_finish),
+        )
         .route("/me", axum::routing::delete(auth::delete_account))
         .layer(DefaultBodyLimit::max(2048))
         .layer(GovernorLayer {

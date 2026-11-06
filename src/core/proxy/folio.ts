@@ -2,7 +2,7 @@ import { createRivetFramePlugins, initializeRivet } from "./rivet";
 import type { ProxyTransport } from "@mercuryworkshop/proxy-transports";
 import { MochiTransport, resolveMochiOrigin } from "./mochiTransport";
 import { folioPageStateDocuments } from "./folioPageState";
-import { negativeMessage } from "../runtime/messages.ts";
+import { negativeMessage, NEGATIVE } from "../runtime/messages.ts";
 import { runtimeAssetPath } from "../runtime/build.ts";
 import { appPath } from "../runtime/hosting.ts";
 
@@ -744,39 +744,35 @@ export async function initializeFolioController(options: {
 
   currentTransportKey = transportKey;
   const pending = (async () => {
-    const [, readyController] = await Promise.all([
-      initializeRivet(),
-      (async () => {
-        const transport = await createTransport(
-          options.transport,
-          options.wispUrl,
-        );
-        if (controller) {
-          controller.setServiceWorker(options.serviceWorker);
-          controller.setTransport(transport);
-        } else {
-          const Controller = getControllerConstructor();
-          const folioGlobals = (
-            window as unknown as {
-              $folio?: FolioRuntimeGlobals;
-            }
-          ).$folio;
-          const nextController = new Controller({
-            serviceworker: options.serviceWorker,
-            transport,
-            config: folioRuntimeConfig(),
-            folioConfig:
-              folioGlobals?.defaultConfig ?? folioGlobals?.defaultConfigDev,
-          });
-          await nextController.wait();
-          controller = nextController;
-          try {
-            folioGlobals?.prewarmRewriter?.();
-          } catch {}
+    const transport = await createTransport(
+      options.transport,
+      options.wispUrl,
+    );
+    let readyController: FolioControllerInstance;
+    if (controller) {
+      controller.setServiceWorker(options.serviceWorker);
+      controller.setTransport(transport);
+      readyController = controller;
+    } else {
+      const Controller = getControllerConstructor();
+      const folioGlobals = (
+        window as unknown as {
+          $folio?: FolioRuntimeGlobals;
         }
-        return controller;
-      })(),
-    ]);
+      ).$folio;
+      readyController = new Controller({
+        serviceworker: options.serviceWorker,
+        transport,
+        config: folioRuntimeConfig(),
+        folioConfig:
+          folioGlobals?.defaultConfig ?? folioGlobals?.defaultConfigDev,
+      });
+      await readyController.wait();
+      controller = readyController;
+      try {
+        folioGlobals?.prewarmRewriter?.();
+      } catch {}
+    }
 
     const app = ((window as unknown as Record<string, unknown>)["Lyra"] ??=
       {}) as Record<string, unknown>;
@@ -832,6 +828,15 @@ async function ensureFolioFrame(
   if (existing) return existing;
 
   const ctrl = await waitForFolioController();
+  await initializeRivet().catch((error) => {
+    console.error(
+      "[rivet] extension runtime failed to start:",
+      error,
+      NEGATIVE,
+    );
+  });
+  const createdMeanwhile = frameByIframe.get(iframe);
+  if (createdMeanwhile) return createdMeanwhile;
   const cachePlugin = createFolioHttpCachePlugin();
   const mochiPlugin = createMochiAcceleratorPlugin();
   const pageStatePlugin = createFolioPageStatePlugin(iframe);

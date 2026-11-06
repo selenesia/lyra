@@ -124,8 +124,10 @@ export default function AnimeCatalog({
     inactiveIcon: SVG_SUSHI,
     activeIcon: SVG_SEARCH,
     openedStorageKey: "lyraUserOpenedAnimeMenu",
-    oppositeBodyClass: "games-view",
-    hideOpposite: () => window.hideGameMenu?.(),
+    hideOtherViews: () => {
+      window.hideGameMenu?.();
+      window.hideChatPage?.();
+    },
     onShowFrame: loadAnimeIfNeeded,
     showOnMount: openOnMount,
   });

@@ -76,7 +76,16 @@ function createIcon(name: string, svg: string, solidSvg: string): IconPathData {
   });
 }
 
+function createOutlineIcon(name: string, content: string): IconPathData {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${content}</svg>`;
+  return createIcon(name, svg, svg);
+}
+
 export const ICON_PATHS = {
+  IconArrowCornerUpLeft: createOutlineIcon(
+    "IconArrowCornerUpLeft",
+    '<path d="M20.25 19.25V10.75C20.25 9.64543 19.3546 8.75 18.25 8.75H4.75"/><path d="M7.75 12.75L3.75 8.75L7.75 4.75"/>',
+  ),
   IconArrowRotateClockwise: createIcon(
     "IconArrowRotateClockwise",
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.5 7.00891C16.6791 4.95438 14.7962 3.75 11.979 3.75C7.42266 3.75 3.729 7.44365 3.729 12C3.729 16.5563 7.42266 20.25 11.979 20.25C15.5711 20.25 18.627 17.9543 19.7596 14.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.25 4V8H15.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -301,6 +310,10 @@ export const ICON_PATHS = {
     "IconPaintBrush",
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.25 10.75V3.75C19.25 3.19772 18.8023 2.75 18.25 2.75H11.5L10 4.75L8.5 2.75H5.75C5.19772 2.75 4.75 3.19771 4.75 3.75V10.75C4.75 12.4069 6.09315 13.75 7.75 13.75H9.75L9.42705 18.7557C9.33117 20.2419 10.5107 21.5 12 21.5C13.4893 21.5 14.6688 20.2419 14.5729 18.7557L14.25 13.75H16.25C17.9069 13.75 19.25 12.4069 19.25 10.75Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.75 10.25H19.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"><path d="M20 12.25C20 13.7688 18.7688 15 17.25 15H14.5L14.8008 19.5068C14.9087 21.1267 13.6235 22.5 12 22.5C10.3765 22.5 9.09135 21.1267 9.19922 19.5068L9.5 15H6.75C5.23122 15 4 13.7688 4 12.25V12H20V12.25Z" fill="currentColor"></path><path d="M8.125 2C8.36094 2 8.58296 2.11114 8.72461 2.2998L9.7998 3.7334C9.8998 3.86673 10.1002 3.86673 10.2002 3.7334L11.2754 2.2998C11.417 2.11114 11.6391 2 11.875 2H18.25C19.2165 2 20 2.7835 20 3.75V10.5H4V3.75C4 2.7835 4.7835 2 5.75 2H8.125Z" fill="currentColor"></path></svg>',
+  ),
+  IconMegaphone: createOutlineIcon(
+    "IconMegaphone",
+    '<path d="M18.2461 14C19.9029 14 21.2461 12.6569 21.2461 11C21.2461 9.34315 19.9029 8 18.2461 8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M18.2461 5.4606V16.5393C18.2461 17.8857 16.9426 18.8475 15.6561 18.4502L4.15607 14.8995C3.31782 14.6407 2.74609 13.8659 2.74609 12.9886V9.01129C2.74609 8.134 3.31782 7.35912 4.15607 7.1003L15.6561 3.54961C16.9426 3.1524 18.2461 4.11418 18.2461 5.4606Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M12.5754 18.25C12.1636 19.4152 11.0523 20.25 9.74609 20.25C8.08924 20.25 6.74609 18.9069 6.74609 17.25V15.75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M6.75 6.25V15.75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path>',
   ),
 } as const;
 

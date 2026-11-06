@@ -1083,6 +1083,12 @@ else
   "$BUN_BIN" install
 fi
 
+log "preparing chat image models and database"
+if ! retry 3 "$BUN_BIN" run setup:chat; then
+  fail "chat setup failed"
+  exit 1
+fi
+
 if [ -d "$ROOT/services/mochi" ]; then
   (
     cd "$ROOT/services/mochi"
@@ -1392,6 +1398,7 @@ http://127.0.0.1:4001 {
         ~^/api/auth/ auth
         ~^/api/sync/ sync
         ~^/api/anime/ anime
+        ~^/api/chat/ chat
         ~^/api/static/ static_gateway
         /api/presence presence
         /api/search/suggestions suggestions
@@ -1417,7 +1424,7 @@ http://127.0.0.1:4001 {
     respond @internal_metrics "metrics access denied... /ᐠ - ˕ -マ" 403
 
     @compressible {
-        not path /stream/* /api/static/v1/*
+        not path /stream/* /api/static/v1/* /api/chat/stream
     }
     encode @compressible zstd gzip
 
@@ -1778,11 +1785,35 @@ if command -v ufw >/dev/null 2>&1; then
   fi
 fi
 
+read_opaque_server_setup() {
+  OPAQUE_SERVER_SETUP=""
+  if [ -f "$1" ]; then
+    OPAQUE_SERVER_SETUP=$(grep -m 1 "^OPAQUE_SERVER_SETUP=." "$1" | cut -d '=' -f2-) || OPAQUE_SERVER_SETUP=""
+  fi
+}
+
+new_opaque_server_setup() {
+  OPAQUE_SERVER_SETUP=$(cd "$ROOT" && "$BUN_BIN" -e 'const opaque = await import("@serenity-kit/opaque"); await opaque.ready; console.log(opaque.server.createSetup());') || OPAQUE_SERVER_SETUP=""
+  if [ -z "$OPAQUE_SERVER_SETUP" ]; then
+    fail "opaque server setup could not be generated"
+    exit 1
+  fi
+}
+
+recover_opaque_server_setup() {
+  read_opaque_server_setup "$ROOT/services/cloudsync/.env"
+  if [ -z "$OPAQUE_SERVER_SETUP" ]; then
+    new_opaque_server_setup
+  fi
+}
+
 if [ ! -f .env ]; then
   JWT_SECRET=$(openssl rand -hex 64)
   SYNC_SECRET=$(openssl rand -hex 32)
+  recover_opaque_server_setup
   echo "JWT_SECRET=$JWT_SECRET" >.env
   echo "SYNC_SECRET=$SYNC_SECRET" >>.env
+  echo "OPAQUE_SERVER_SETUP=$OPAQUE_SERVER_SETUP" >>.env
   chmod 600 .env
 else
   if ! grep -q "JWT_SECRET" .env; then
@@ -1799,13 +1830,28 @@ else
   else
     SYNC_SECRET=$(grep "^SYNC_SECRET=" .env | cut -d '=' -f2)
   fi
+
+  read_opaque_server_setup .env
+  if [ -z "$OPAQUE_SERVER_SETUP" ]; then
+    recover_opaque_server_setup
+    echo "OPAQUE_SERVER_SETUP=$OPAQUE_SERVER_SETUP" >>.env
+  fi
 fi
 
 chmod 600 .env
 
 if [ -d "$ROOT/services/cloudsync" ]; then
+  ROOT_OPAQUE_SERVER_SETUP=$OPAQUE_SERVER_SETUP
+  read_opaque_server_setup "$ROOT/services/cloudsync/.env"
+  CLOUDSYNC_OPAQUE_SERVER_SETUP=$OPAQUE_SERVER_SETUP
+  OPAQUE_SERVER_SETUP=$ROOT_OPAQUE_SERVER_SETUP
+  if [ -n "$ROOT_OPAQUE_SERVER_SETUP" ] && [ -n "$CLOUDSYNC_OPAQUE_SERVER_SETUP" ] && [ "$ROOT_OPAQUE_SERVER_SETUP" != "$CLOUDSYNC_OPAQUE_SERVER_SETUP" ]; then
+    fail "opaque server setup differs between .env files; resolve it before continuing"
+    exit 1
+  fi
   echo "JWT_SECRET=$JWT_SECRET" >"$ROOT/services/cloudsync/.env"
   echo "SYNC_SECRET=$SYNC_SECRET" >>"$ROOT/services/cloudsync/.env"
+  echo "OPAQUE_SERVER_SETUP=$OPAQUE_SERVER_SETUP" >>"$ROOT/services/cloudsync/.env"
   echo "COOKIE_SECURE=true" >>"$ROOT/services/cloudsync/.env"
   chmod 600 "$ROOT/services/cloudsync/.env"
   if [ -f "$ROOT/services/cloudsync/.env" ]; then
@@ -1888,6 +1934,11 @@ done
 
 health_ok() {
   local response
+  if [[ "$1" = */api/chat/me ]]; then
+    response="$(curl --silent --max-time 3 "$1")" || return 1
+    jq -e '.code == "CHAT_LOGIN_REQUIRED"' <<< "$response" >/dev/null 2>&1
+    return
+  fi
   response="$(curl --fail --silent --max-time 3 "$1")" || return 1
   if [[ "$1" = */api/static/v1/status ]]; then
     jq -e '.protocol == 1 and .enabled == true' <<< "$response" >/dev/null 2>&1
@@ -1916,6 +1967,7 @@ SERVICE_HEALTH_CHECKS=(
   "mochi|http://127.0.0.1:4000/health"
   "nuru|http://127.0.0.1:4001/health"
   "eturnal|http://127.0.0.1:4444/eturnal/health"
+  "chat|http://127.0.0.1:4444/api/chat/me"
 )
 for ((i = 0; i < MOCHI_INSTANCES; i++)); do
   SERVICE_HEALTH_CHECKS+=("mochi@$i|http://127.0.0.1:$((4100 + i))/health")
@@ -1933,3 +1985,4 @@ for health_check in "${SERVICE_HEALTH_CHECKS[@]}"; do
 done
 
 success "all done; lyra is now running"
+log "to become chat owner, open chat once while logged in, then run: bun run chat role <username> owner"

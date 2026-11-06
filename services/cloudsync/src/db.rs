@@ -57,6 +57,11 @@ pub fn init_pool(
 
     ensure_column(&conn, "users", "token_version", "INTEGER DEFAULT 1")?;
     ensure_column(&conn, "users", "sync_salt", "BLOB")?;
+    ensure_column(&conn, "users", "opaque_record", "BLOB")?;
+    ensure_column(&conn, "users", "wrapped_key", "BLOB")?;
+    ensure_column(&conn, "users", "failed_logins", "INTEGER DEFAULT 0")?;
+    ensure_column(&conn, "users", "locked_until", "INTEGER DEFAULT 0")?;
+    ensure_column(&conn, "users", "opaque_credential", "TEXT")?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS sync_data (

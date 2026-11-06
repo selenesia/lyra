@@ -21,9 +21,10 @@ import { store } from "../../state/store";
 import { toast } from "../ui/toast";
 import { registerRivetBridge } from "./rivetBridge.ts";
 import { applyRivetAppearance } from "./rivetAppearance.ts";
-import { ensureUblockOrigin } from "./rivetUblock.ts";
+import { ensureUblockOrigin, hasCurrentUblock } from "./rivetUblock.ts";
 import { resolveRivetDns } from "./rivetDns.ts";
 import { NEGATIVE } from "../runtime/messages.ts";
+import { scheduleIdleTask } from "../runtime/scheduler.ts";
 
 type LyraTab = (typeof store.tabs)[number];
 
@@ -33,6 +34,8 @@ let instance: RivetFacade | null = null;
 let ready: Promise<RivetFacade> | null = null;
 let ublockFiltering: Promise<void> | null = null;
 const UBLOCK_FILTERING_TIMEOUT_MS = 10_000;
+const UBLOCK_REQUEST_HOLD_MS = 2_000;
+const UBLOCK_INSTALL_IDLE_TIMEOUT_MS = 2_000;
 let commandListenerInstalled = false;
 let contextMenuElement: HTMLDivElement | null = null;
 const extensionPageMountVersions = new WeakMap<HTMLIFrameElement, number>();
@@ -445,7 +448,41 @@ async function mountNewTabOverride(
   }
 }
 
-function waitForUblockFiltering(rivet: Rivet): Promise<void> {
+function afterFirstTabPageLoad(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallback);
+      document.removeEventListener("load", onLoad, true);
+      scheduleIdleTask(resolve, UBLOCK_INSTALL_IDLE_TIMEOUT_MS);
+    };
+    const onLoad = (event: Event) => {
+      if (
+        event.target instanceof HTMLIFrameElement &&
+        event.target.dataset.tabId
+      )
+        finish();
+    };
+    const fallback = setTimeout(finish, UBLOCK_FILTERING_TIMEOUT_MS);
+    document.addEventListener("load", onLoad, true);
+  });
+}
+
+function waitForUblockFiltering(rivet: Rivet): Promise<void> | null {
+  if (!hasCurrentUblock(rivet)) {
+    void afterFirstTabPageLoad()
+      .then(() => ensureUblockOrigin(rivet))
+      .catch((error) => {
+        console.error(
+          "[rivet] failed to install ublock origin:",
+          error,
+          NEGATIVE,
+        );
+      });
+    return null;
+  }
   const filtering = (async () => {
     try {
       const extId = await ensureUblockOrigin(rivet);
@@ -470,7 +507,7 @@ function waitForUblockFiltering(rivet: Rivet): Promise<void> {
   return Promise.race([
     filtering,
     new Promise<void>((resolve) =>
-      setTimeout(resolve, UBLOCK_FILTERING_TIMEOUT_MS),
+      setTimeout(resolve, UBLOCK_REQUEST_HOLD_MS),
     ),
   ]);
 }

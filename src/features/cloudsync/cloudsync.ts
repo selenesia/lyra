@@ -16,14 +16,21 @@ import {
   usernameHint,
   usernameSubmitError,
 } from "./accountFields.ts";
+import {
+  AccountAuthError,
+  createAccount,
+  signIn,
+  type AccountFailure,
+} from "./accountAuth.ts";
 import { prepareSnapshot } from "./prepareSnapshot.ts";
 import type { SnapshotPayload } from "./snapshotPayload.ts";
 import {
   canEncryptSync,
-  deriveSyncKeys,
   forgetSyncKeys,
+  keysFromMaster,
   loadSyncKeys,
   saveSyncKeys,
+  type SyncBytes,
   type SyncKeys,
 } from "./syncCrypto.ts";
 import {
@@ -102,6 +109,10 @@ const FOLLOW_UP_MAX = 30_000;
 const SYNC_LOCK = "lyra-cloudsync";
 const SYNC_META_KEY = "lyra-sync-meta";
 const LOCKED_STATUS = "sync is locked; enter your password... /ᐠ - ˕ -マ";
+const TOO_MANY_ATTEMPTS_TEXT =
+  "too many attempts; wait a moment and try again... /ᐠ - ˕ -マ";
+const SECURE_CONNECTION_TEXT =
+  "sign in needs a secure (https) connection... /ᐠ - ˕ -マ";
 
 const LOADING_SCREEN = `
     <div id="loading-screen" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-body); z-index: 99999; display: flex; justify-content: center; align-items: center; color: var(--text-muted); font-family: 'Lexend', sans-serif;">
@@ -121,6 +132,10 @@ function fetchWithTimeout(
     ...options,
     signal: controller.signal,
   }).finally(() => clearTimeout(id));
+}
+
+function authFailure(error: unknown): AccountFailure | null {
+  return error instanceof AccountAuthError ? error.failure : null;
 }
 
 function now(): number {
@@ -442,13 +457,13 @@ export class CloudSync {
     this.updateModalState();
   }
 
-  async adoptKeys(password: string, salt: unknown): Promise<void> {
-    if (!canEncryptSync() || typeof salt !== "string" || !salt) {
+  async adoptKeys(master: SyncBytes): Promise<void> {
+    if (!canEncryptSync()) {
       this.keys = null;
       return;
     }
     try {
-      const keys = await deriveSyncKeys(password, salt);
+      const keys = await keysFromMaster(master);
       await saveSyncKeys(this.user.id, keys);
       this.keys = keys;
       this.locked = false;
@@ -1290,8 +1305,17 @@ export class CloudSync {
     if (cls === "success") this.updateModalState();
   }
 
+  rejectInsecureContext(): boolean {
+    if (canEncryptSync()) return false;
+    if (window.showToast)
+      window.showToast("error", SECURE_CONNECTION_TEXT, "IconExclamationTriangle");
+    else this.showError(SECURE_CONNECTION_TEXT);
+    return true;
+  }
+
   async handleLogin(e: Event): Promise<void> {
     e.preventDefault();
+    if (this.rejectInsecureContext()) return;
     const username = (
       document.getElementById("login-username") as HTMLInputElement
     ).value;
@@ -1310,37 +1334,34 @@ export class CloudSync {
       );
 
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ username, password }),
-      });
-
-      const sessionPayload = (await response
-        .json()
-        .catch(() => null)) as Record<string, unknown> | null;
-
-      if (response.ok && sessionPayload) {
-        this.setSession(sessionPayload as unknown as SessionData);
-        await this.adoptKeys(password, this.user.sync_salt);
-        if (toastController) toastController.hide();
-        this.toggleCloudSyncModal();
-        await this.restoreData(false, true);
-      } else {
-        if (toastController) toastController.hide();
-        const message = "login failed... /ᐠ - ˕ -マ";
-        if (window.showToast)
-          window.showToast("error", message, "IconExclamationTriangle");
-        else this.showError(message);
+      const { session, master } = await signIn(username, password);
+      try {
+        this.setSession(session as unknown as SessionData);
+        await this.adoptKeys(master);
+      } finally {
+        master.fill(0);
       }
-    } catch {
       if (toastController) toastController.hide();
-      const message = "connection error... /ᐠ - ˕ -マ";
+      this.toggleCloudSyncModal();
+      await this.restoreData(false, true);
+    } catch (error) {
+      if (toastController) toastController.hide();
+      const failure = authFailure(error);
+      const message =
+        failure === "invalid_credentials"
+          ? "login failed... /ᐠ - ˕ -マ"
+          : failure === "too_many_attempts"
+            ? TOO_MANY_ATTEMPTS_TEXT
+            : "connection error... /ᐠ - ˕ -マ";
       if (window.showToast)
         window.showToast("error", message, "IconExclamationTriangle");
       else this.showError(message);
-      console.error("login failed... /ᐠ - ˕ -マ");
+      if (failure === "unavailable" && !this.isAuthenticated) {
+        await this.checkAuthStatus();
+      }
+      if (failure !== "invalid_credentials" && failure !== "too_many_attempts") {
+        console.error("login failed... /ᐠ - ˕ -マ");
+      }
     }
   }
 
@@ -1368,6 +1389,7 @@ export class CloudSync {
 
   async handleRegister(e: Event): Promise<void> {
     e.preventDefault();
+    if (this.rejectInsecureContext()) return;
     const usernameInput = document.getElementById(
       "reg-username",
     ) as HTMLInputElement;
@@ -1409,56 +1431,51 @@ export class CloudSync {
       );
 
     try {
-      const response = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ username, password }),
-      });
-
-      const sessionPayload = (await response
-        .json()
-        .catch(() => null)) as Record<string, unknown> | null;
-
-      if (response.ok && sessionPayload) {
-        passwordInput.value = "";
-        this.setSession(sessionPayload as unknown as SessionData);
-        await this.adoptKeys(password, this.user.sync_salt);
-        if (toastController) toastController.hide();
-        this.toggleCloudSyncModal();
-        this.syncMeta = { dirty: true, last_synced: null };
-        this.saveMeta();
-        await this.syncData(true);
-      } else {
-        if (toastController) toastController.hide();
-        if (response.status === 409) {
-          this.usernameAvailability.set(username, false);
-          if (usernameFeedback) {
-            setFieldHint(usernameFeedback, "error", USERNAME_TAKEN_TEXT);
-          }
-          usernameInput.focus();
-          return;
-        }
-        const message =
-          response.status === 429
-            ? "too many attempts; wait a moment and try again... /ᐠ - ˕ -マ"
-            : "account creation failed... /ᐠ - ˕ -マ";
-        if (window.showToast)
-          window.showToast("error", message, "IconExclamationTriangle");
-        else this.showError(message);
+      const { session, master } = await createAccount(username, password);
+      passwordInput.value = "";
+      try {
+        this.setSession(session as unknown as SessionData);
+        await this.adoptKeys(master);
+      } finally {
+        master.fill(0);
       }
-    } catch {
       if (toastController) toastController.hide();
-      const message = "connection error... /ᐠ - ˕ -マ";
+      this.toggleCloudSyncModal();
+      this.syncMeta = { dirty: true, last_synced: null };
+      this.saveMeta();
+      await this.syncData(true);
+    } catch (error) {
+      if (toastController) toastController.hide();
+      const failure = authFailure(error);
+      if (failure === "username_taken") {
+        this.usernameAvailability.set(username, false);
+        if (usernameFeedback) {
+          setFieldHint(usernameFeedback, "error", USERNAME_TAKEN_TEXT);
+        }
+        usernameInput.focus();
+        return;
+      }
+      const message =
+        failure === "too_many_attempts"
+          ? TOO_MANY_ATTEMPTS_TEXT
+          : failure === "invalid_credentials"
+            ? "account creation failed... /ᐠ - ˕ -マ"
+            : "connection error... /ᐠ - ˕ -マ";
       if (window.showToast)
         window.showToast("error", message, "IconExclamationTriangle");
       else this.showError(message);
-      console.error("account creation failed... /ᐠ - ˕ -マ");
+      if (failure === "unavailable" && !this.isAuthenticated) {
+        await this.checkAuthStatus();
+      }
+      if (failure !== "too_many_attempts" && failure !== "invalid_credentials") {
+        console.error("account creation failed... /ᐠ - ˕ -マ");
+      }
     }
   }
 
   async handleUnlock(e: Event): Promise<void> {
     e.preventDefault();
+    if (this.rejectInsecureContext()) return;
     const input = document.getElementById(
       "unlock-password",
     ) as HTMLInputElement | null;
@@ -1475,20 +1492,13 @@ export class CloudSync {
         0,
       );
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ username: this.user.username, password }),
-      });
-      const sessionPayload = (await response
-        .json()
-        .catch(() => null)) as Record<string, unknown> | null;
-      if (!response.ok || !sessionPayload) {
-        throw new Error(negativeMessage("unlock failed"));
+      const { session, master } = await signIn(this.user.username, password);
+      try {
+        this.setSession(session as unknown as SessionData);
+        await this.adoptKeys(master);
+      } finally {
+        master.fill(0);
       }
-      this.setSession(sessionPayload as unknown as SessionData);
-      await this.adoptKeys(password, this.user.sync_salt);
       if (!this.keys) throw new Error(negativeMessage("unlock failed"));
       toastController?.hide();
       this._lockNotified = false;
@@ -1498,11 +1508,15 @@ export class CloudSync {
       this.syncMeta.dirty = true;
       this.saveMeta();
       await this.sync(true);
-    } catch {
+    } catch (error) {
       toastController?.hide();
+      const message =
+        authFailure(error) === "too_many_attempts"
+          ? TOO_MANY_ATTEMPTS_TEXT
+          : "unlock failed... /ᐠ - ˕ -マ";
       if (window.showToast)
-        window.showToast("error", "unlock failed... /ᐠ - ˕ -マ", "IconExclamationTriangle");
-      else this.showError("unlock failed... /ᐠ - ˕ -マ");
+        window.showToast("error", message, "IconExclamationTriangle");
+      else this.showError(message);
     }
   }
 
@@ -1512,6 +1526,7 @@ export class CloudSync {
     localStorage.setItem("auth_user", JSON.stringify(this.user));
     this.updateModalState();
     this.startPolling();
+    document.dispatchEvent(new CustomEvent("cloudsync-session"));
   }
 
   async logout(): Promise<void> {

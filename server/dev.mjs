@@ -5,6 +5,7 @@ import express from "express";
 import { Readable } from "node:stream";
 import { createPresence } from "./presence.mjs";
 import { createNoticeBoard, noticeSocketPath } from "./notice.mjs";
+import { startChat } from "./chat-service.mjs";
 import { turnConfig } from "./turn.mjs";
 import { createDevRuntime } from "./dev-secrets.mjs";
 import { httpError } from "./errors.mjs";
@@ -21,8 +22,8 @@ import { createSourceBuildId } from "../build-id.mjs";
 let shuttingDown = false;
 
 const ROOT = process.cwd();
-const devRuntime = createDevRuntime();
-let cleanupOnExit = () => devRuntime.cleanup();
+const devRuntime = createDevRuntime(ROOT);
+let cleanupOnExit = () => {};
 process.on("exit", () => cleanupOnExit());
 Object.assign(process.env, devRuntime.env);
 const DEV_SERVICE_ENV = devRuntime.env;
@@ -303,6 +304,7 @@ const app = express();
 const notices = createNoticeBoard();
 const connectPresence = createPresence({ greet: notices.greet });
 const stopNotices = notices.serve({ presence: connectPresence, socketPath: noticeSocketPath(ROOT) });
+const chat = startChat({ root: ROOT });
 app.set("trust proxy", 1);
 app.use(setIsolationHeaders);
 app.get("/api/presence", (req, res) => {
@@ -310,6 +312,32 @@ app.get("/api/presence", (req, res) => {
   res.on("close", () => abort.abort());
   const response = connectPresence(abort.signal, req.query.id);
   response.headers.forEach((value, name) => res.setHeader(name, value));
+  res.flushHeaders();
+  Readable.fromWeb(response.body)
+    .on("error", () => res.destroy())
+    .pipe(res);
+});
+app.use("/api/chat/", async (req, res) => {
+  const abort = new AbortController();
+  res.on("close", () => abort.abort());
+  const response = await chat.handle(
+    new Request(new URL(req.originalUrl, "http://localhost"), {
+      method: req.method,
+      headers: {
+        cookie: req.get("cookie") || "",
+        "content-type": req.get("content-type") || "",
+        "content-length": req.get("content-length") || "",
+        "sec-fetch-site": req.get("sec-fetch-site") || "",
+        "if-none-match": req.get("if-none-match") || "",
+      },
+      ...(req.method === "POST" && { body: Readable.toWeb(req), duplex: "half" }),
+      signal: abort.signal,
+    }),
+    { ip: req.ip },
+  );
+  res.status(response.status);
+  response.headers.forEach((value, name) => res.setHeader(name, value));
+  if (!response.body) return res.end();
   res.flushHeaders();
   Readable.fromWeb(response.body)
     .on("error", () => res.destroy())
@@ -760,6 +788,7 @@ async function gracefulShutdown() {
   shuttingDown = true;
   console.log("\nshutting down...");
   stopNotices();
+  chat.close();
   killServices();
   proxyAgent.destroy();
   await vite.close().catch(() => {});
@@ -774,10 +803,7 @@ async function gracefulShutdown() {
 
 process.on("SIGINT", gracefulShutdown);
 process.on("SIGTERM", gracefulShutdown);
-cleanupOnExit = () => {
-  killServices();
-  devRuntime.cleanup();
-};
+cleanupOnExit = () => killServices();
 
 server.listen(PORT, () => {
   console.log(``);

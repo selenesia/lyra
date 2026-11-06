@@ -16,6 +16,7 @@ import {
   loadGamesCatalog,
   loadNewTabModal,
   loadSettingsModal,
+  loadChatPage,
 } from "./loaders.ts";
 
 const peakUrls = [hachiiUrl, konaUrl, osaUrl, azuUrl];
@@ -54,12 +55,14 @@ const GamesCatalog = lazy(loadGamesCatalog);
 const AnimeCatalog = lazy(loadAnimeCatalog);
 const NewTabModal = lazy(loadNewTabModal);
 const SettingsModal = lazy(loadSettingsModal);
+const ChatPage = lazy(loadChatPage);
 
 export default function App() {
   const [gamesMounted, setGamesMounted] = useState(false);
   const [animeMounted, setAnimeMounted] = useState(false);
   const [newTabMounted, setNewTabMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const [chatMounted, setChatMounted] = useState(false);
   const [peakSrc] = useState(
     () =>
       document.documentElement.dataset.peakSrc ||
@@ -75,6 +78,7 @@ export default function App() {
     const showSettings = () => {
       setSettingsMounted(true);
     };
+    const showChat = () => setChatMounted(true);
     const runtimeWindow = window as typeof window & {
       showNewTabModal?: () => void;
     };
@@ -85,6 +89,8 @@ export default function App() {
     window.toggleAnimeMenu = showAnime;
     runtimeWindow.showNewTabModal = showNewTab;
     window.toggleSettingsModal = showSettings;
+    window.showChatPage = showChat;
+    window.toggleChatPage = showChat;
 
     return () => {
       if (window.showGameMenu === showGames) delete window.showGameMenu;
@@ -97,6 +103,8 @@ export default function App() {
       if (window.toggleSettingsModal === showSettings) {
         delete window.toggleSettingsModal;
       }
+      if (window.showChatPage === showChat) delete window.showChatPage;
+      if (window.toggleChatPage === showChat) delete window.toggleChatPage;
     };
   }, []);
 
@@ -130,6 +138,11 @@ export default function App() {
         {animeMounted && (
           <Suspense fallback={null}>
             <AnimeCatalog openOnMount />
+          </Suspense>
+        )}
+        {chatMounted && (
+          <Suspense fallback={null}>
+            <ChatPage openOnMount />
           </Suspense>
         )}
         <div id="iframe-container">
