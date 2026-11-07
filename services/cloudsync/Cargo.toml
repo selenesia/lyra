@@ -32,12 +32,3 @@ mimalloc = "0.1"
 dashmap = "6"
 zeroize = "1"
 opaque-ke = { version = "=4.0.1", features = ["argon2"] }
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-opt-level = 3
-strip = true
-overflow-checks = false
-debug = false

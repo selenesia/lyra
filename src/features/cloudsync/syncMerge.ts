@@ -1,4 +1,4 @@
-import type { SyncSnapshot } from "./syncSnapshot.ts";
+import type { SyncSnapshot } from "./snapshotSchema.ts";
 import { FOLIO_DB } from "./syncPolicy.ts";
 
 export type SnapshotIndex = Map<string, string>;

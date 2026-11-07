@@ -18,7 +18,7 @@ export function flaggedFrames(screened, boxes) {
   return frames;
 }
 
-export function cropScores({ clip, nsfw, safety }) {
+function cropScores({ clip, nsfw, safety }) {
   const explicit = nsfw.hentai + nsfw.porn;
   return {
     explicit,

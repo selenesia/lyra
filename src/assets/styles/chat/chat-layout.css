@@ -1,0 +1,231 @@
+body.chat-view {
+  background-color: var(--bg-body);
+}
+
+body.chat-view .meow {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.chat-view .content-area {
+  flex-shrink: 0;
+  height: 100%;
+}
+
+body.chat-view .footer {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+body.chat-view .main-container,
+body.chat-view #bookmarks-container,
+body.chat-view .games-page,
+body.chat-view .anime-page {
+  display: none !important;
+}
+
+#chat-btn.has-unread #chat-icon::after {
+  background-color: var(--text-white);
+  border: 2px solid var(--bg-body);
+  border-radius: 50%;
+  content: "";
+  height: 8px;
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 8px;
+}
+
+#chat-btn.has-mention #chat-icon::after {
+  background-color: var(--notif-badge-bg);
+}
+
+.chat-page {
+  box-sizing: border-box;
+  display: none;
+  flex-shrink: 0;
+  gap: 24px;
+  grid-template-columns: 180px minmax(0, 1fr) 190px;
+  height: 100%;
+  margin: 0 auto;
+  max-width: 1200px;
+  min-height: 480px;
+  padding: 100px clamp(16px, 3vw, 32px) 24px;
+  text-transform: none;
+  width: 100%;
+}
+
+body.chat-view .chat-page.is-visible {
+  display: grid;
+}
+
+.chat-channels,
+.chat-members {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 24px;
+  scrollbar-width: none;
+}
+
+.chat-panel-title {
+  color: var(--color-sublabel);
+  font-size: 12px;
+  margin: 0 0 6px 10px;
+  user-select: none;
+}
+
+.chat-category {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-category + .chat-category {
+  margin-top: 20px;
+}
+
+.chat-category-title {
+  align-items: center;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--color-sublabel);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 12px;
+  gap: 4px;
+  margin: 0 0 6px;
+  padding: 0 0 0 4px;
+  transition: color var(--motion-control) var(--motion-ease);
+  user-select: none;
+}
+
+.chat-category-title:hover {
+  color: var(--text-primary);
+}
+
+.chat-category-chevron {
+  flex-shrink: 0;
+  transition: transform var(--motion-control) var(--motion-ease);
+}
+
+.chat-category.collapsed .chat-category-chevron {
+  transform: rotate(-90deg);
+}
+
+.chat-category.collapsed .chat-channel:not(.active, .unread) {
+  display: none;
+}
+
+.chat-channel,
+.chat-member,
+.chat-suggestion {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-item);
+  color: var(--color-result);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 14px;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  transition:
+    color var(--motion-control) var(--motion-ease),
+    background-color var(--motion-control) var(--motion-ease);
+}
+
+.chat-channel,
+.chat-member {
+  border-radius: var(--radius-control);
+}
+
+.chat-channel:hover,
+.chat-member:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.chat-suggestion:hover,
+.chat-suggestion.active {
+  background-color: var(--hover-bg-toast);
+  color: var(--text-primary);
+}
+
+.chat-channel.active {
+  background-color: var(--active-bg);
+  color: var(--text-primary);
+}
+
+.chat-channel.unread {
+  color: var(--text-primary);
+}
+
+.chat-channel-icon {
+  color: var(--color-sublabel);
+  flex-shrink: 0;
+}
+
+.chat-channel-hash {
+  text-align: center;
+  width: 18px;
+}
+
+.chat-channel.active .chat-channel-icon,
+.chat-channel.unread .chat-channel-icon {
+  color: var(--text-primary);
+}
+
+.chat-channel-name,
+.chat-member-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-badge {
+  background-color: var(--btn-primary-bg);
+  border-radius: var(--radius-pill);
+  color: var(--btn-primary-text);
+  font-size: 11px;
+  line-height: 18px;
+  min-width: 18px;
+  padding: 0 5px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.chat-badge.mention {
+  background-color: var(--notif-badge-bg);
+  color: var(--notif-badge-text);
+}
+
+.chat-member.blocked {
+  opacity: 0.4;
+}
+
+.chat-member-dot {
+  background-color: var(--status-success-text);
+  border-radius: 50%;
+  flex-shrink: 0;
+  height: 8px;
+  width: 8px;
+}
+
+.chat-member-tag,
+.chat-member-lurkers {
+  color: var(--color-sublabel);
+  font-size: 11px;
+}
+
+.chat-member-lurkers {
+  margin: 8px 0 0 10px;
+}

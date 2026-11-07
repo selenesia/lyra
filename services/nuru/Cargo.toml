@@ -57,12 +57,3 @@ toml = ["dep:toml"]
 twisp = ["dep:pty-process", "dep:libc", "dep:shell-words"]
 speed-limit = ["dep:async-speed-limit"]
 tokio-console = ["dep:console-subscriber"]
-
-[profile.release]
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-opt-level = 3
-strip = true
-overflow-checks = false
-debug = false

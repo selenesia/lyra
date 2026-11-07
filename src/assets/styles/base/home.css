@@ -1,0 +1,235 @@
+#top-left-stuff,
+#top-right-stuff {
+  display: flex;
+  gap: 10px;
+  position: fixed;
+  top: 25px;
+  z-index: 1200;
+}
+
+#top-left-stuff {
+  align-items: center;
+  height: 35px;
+  left: 25px;
+}
+
+#top-right-stuff {
+  align-items: center;
+  height: 35px;
+  right: 25px;
+}
+
+#branding-container {
+  border-radius: var(--radius-bar);
+  cursor: pointer;
+  gap: 8px;
+  height: auto;
+  position: relative;
+  width: auto;
+}
+
+#brand {
+  color: var(--brand-color);
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 400;
+  margin: 0;
+  padding-left: 2px;
+  position: relative;
+  text-align: left;
+  transition: color var(--motion-control) var(--motion-ease);
+  white-space: nowrap;
+}
+
+#brand,
+#oneko {
+  display: inline-block;
+}
+
+#oneko {
+  background-image: url(/assets/images/gifs/oneko.gif);
+  animation: onekoIdle var(--motion-idle) steps(1) infinite;
+  height: 32px;
+  image-rendering: pixelated;
+  margin-left: -7px;
+  margin-top: -10px;
+  vertical-align: middle;
+  width: 32px;
+}
+
+.footer {
+  align-items: flex-start;
+  box-sizing: border-box;
+  color: var(--color-footer);
+  display: flex;
+  font-size: 11.5px;
+  gap: 11px;
+  justify-content: space-between;
+  margin-top: auto;
+  padding: 0 25px 25px;
+  width: 100%;
+}
+
+.client-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.client-count-value {
+  color: var(--color-label);
+}
+
+#cute {
+  align-self: flex-end;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-left: auto;
+  text-align: right;
+}
+
+.main-container {
+  position: relative;
+  text-align: center;
+  width: 90%;
+  max-width: 640px;
+  z-index: 5;
+  margin-top: 19vh;
+}
+
+.title {
+  display: inline-block;
+  margin-bottom: 5px;
+}
+
+.title img {
+  max-height: 90px;
+  -webkit-user-drag: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.title img:active {
+  cursor: grabbing;
+}
+
+.search-bar {
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 5px;
+  max-width: 100%;
+  position: relative;
+  width: min(520px, calc(100vw - 32px));
+  z-index: 8;
+  margin-bottom: 70px;
+}
+
+.search-bar .editable-field {
+  background-color: transparent;
+  border: transparent;
+  border-radius: var(--radius-bar);
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-inline: auto;
+  outline: none;
+  padding: 18px;
+  position: relative;
+  text-align: left;
+  transition: background-color var(--motion-control) var(--motion-ease);
+  width: calc(100% - 90px);
+  min-width: 0;
+  z-index: 3;
+}
+
+.search-icon {
+  color: var(--input-placeholder-search);
+  font-size: 18px;
+  left: 16px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: color var(--motion-control) var(--motion-ease);
+  z-index: 4;
+}
+
+.search-bar:focus-within .search-icon {
+  color: var(--input-focus-search);
+}
+
+.light-border::before {
+  background-image: radial-gradient(
+    circle at center,
+    var(--search-glow-border),
+    hsla(0, 0%, 83%, 0) 60%
+  );
+}
+
+.light-border {
+  z-index: 1;
+}
+
+.light,
+.light-border {
+  backface-visibility: hidden;
+  border-radius: var(--radius-bar);
+  inset: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity var(--motion-reveal) var(--motion-ease);
+  will-change: transform, opacity;
+}
+
+.light::before,
+.light-border::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 300px;
+  height: 300px;
+  background-repeat: no-repeat;
+  background-size: 300px 300px;
+  transform: translate3d(var(--bg-x), var(--bg-y), 0);
+  will-change: transform;
+}
+
+.light::before {
+  background-image: radial-gradient(
+    circle at center,
+    var(--search-glow-bg),
+    hsla(0, 0%, 83%, 0) 60%
+  );
+}
+
+.light {
+  z-index: 10;
+}
+
+.light-inset-bg {
+  background-color: var(--search-inset-bg);
+  border-radius: calc(var(--radius-bar) - 0.8px);
+  inset: 0.8px;
+  position: absolute;
+  transition: background-color var(--motion-control) var(--motion-ease);
+  z-index: 2;
+}
+
+.search-bar:focus-within .light-inset-bg {
+  background-color: var(--search-inset-bg-focus);
+}
+
+.link {
+  color: var(--color-link);
+  cursor: pointer;
+  position: relative;
+  text-decoration: none;
+  text-decoration: underline;
+  transition: color var(--motion-control) var(--motion-ease);
+}
+
+.link:hover {
+  color: var(--color-link-hover);
+}

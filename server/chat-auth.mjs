@@ -4,7 +4,7 @@ import { NEGATIVE } from "../src/core/runtime/messages.ts";
 const SESSION_COOKIE = "token";
 const CACHE_LIMIT = 5_000;
 
-export function cloudsyncOrigin() {
+function cloudsyncOrigin() {
   return process.env.CLOUDSYNC_ORIGIN || `http://127.0.0.1:${process.env.CLOUDSYNC_PORT || "4005"}`;
 }
 

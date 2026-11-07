@@ -52,6 +52,7 @@ const PROFILE_FIELD_LABELS: Record<string, string> = {
 const BLOCKED_STORAGE = "lyra-chat-blocked";
 const VISIBLE_LIMIT = 400;
 const TYPING_MS = 4_000;
+const BACKGROUND_RELEASE_MS = 5_000;
 
 function readBlocked(): ChatMember[] {
   try {
@@ -72,6 +73,30 @@ function withCard<T extends ChatMember | ChatMessage>(entry: T, card: ChatMember
     else delete next[key];
   }
   return next as T;
+}
+
+function useForegroundTab(): boolean {
+  const [foreground, setForeground] = useState(() => document.visibilityState !== "hidden");
+  useEffect(() => {
+    let release: ReturnType<typeof setTimeout> | undefined;
+    const update = () => {
+      clearTimeout(release);
+      if (document.visibilityState !== "hidden") setForeground(true);
+      else release = setTimeout(() => setForeground(false), BACKGROUND_RELEASE_MS);
+    };
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      clearTimeout(release);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  return foreground;
+}
+
+function newestId(entries: ChatEntry[]): number {
+  let newest = 0;
+  for (const entry of entries) if (!entry.pending) newest = Math.max(newest, Number(entry.id) || 0);
+  return newest;
 }
 
 function emptyHistory(): ChatHistory {
@@ -114,7 +139,7 @@ function accessFrom(status: number, body: Record<string, unknown>): ChatAccess {
   return { state: "unavailable" };
 }
 
-export function describeFailure(code: unknown, body: Record<string, unknown>): ChatFailure {
+function describeFailure(code: unknown, body: Record<string, unknown>): ChatFailure {
   const until = typeof body.until === "number" ? body.until : undefined;
   const category = isModerationCategory(body.category) ? body.category : undefined;
   const blockedText = (subject: string) =>
@@ -186,7 +211,11 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
   const [attempt, setAttempt] = useState(0);
   const viewRef = useRef({ channel, visible, viewer });
   viewRef.current = { channel, visible, viewer };
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const syncedRef = useRef(false);
   const loadingOlderRef = useRef(false);
+  const foreground = useForegroundTab();
 
   const post = useCallback(async (path: string, payload: BodyInit, type: string): Promise<ChatResult> => {
     try {
@@ -239,11 +268,29 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
   const ready = access.state === "ready";
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !foreground) return;
     let events: EventSource | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let retryDelay = 1_000;
     const parse = <T,>(event: MessageEvent<string>) => JSON.parse(event.data) as T;
+    const markUnread = (messages: ChatMessage[]) => {
+      const view = viewRef.current;
+      const self = view.viewer;
+      if (!self) return;
+      const waiting = messages.filter(
+        (message) => message.author !== self.author && !(view.visible && view.channel === message.channel),
+      );
+      if (!waiting.length) return;
+      setUnread((current) => {
+        const next = { ...current };
+        for (const message of waiting) {
+          const previous = next[message.channel];
+          const mention = mentionsName(message.text, self.name) || message.reply?.author === self.author;
+          next[message.channel] = { count: (previous?.count ?? 0) + 1, mention: !!previous?.mention || mention };
+        }
+        return next;
+      });
+    };
 
     const listeners: Array<[string, (event: MessageEvent<string>) => void]> = [
       [
@@ -258,6 +305,16 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         "history",
         (event) => {
           const snapshot = parse<Partial<ChatHistory>>(event);
+          if (syncedRef.current) {
+            const known = historyRef.current;
+            markUnread(
+              CHAT_CHANNELS.flatMap((key) => {
+                const newest = newestId(known[key]);
+                return (snapshot[key] ?? []).filter((message) => Number(message.id) > newest);
+              }),
+            );
+          }
+          syncedRef.current = true;
           setExhausted(emptyFlags());
           setHistory((current) => {
             const next = emptyHistory();
@@ -276,17 +333,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
           const message = parse<ChatMessage>(event);
           setHistory((current) => patchChannel(current, message.channel, (entries) => upsert(entries, message)));
           setTyping((current) => current.filter((entry) => entry.author !== message.author));
-          const view = viewRef.current;
-          const self = view.viewer;
-          if (!self || message.author === self.author || (view.visible && view.channel === message.channel)) return;
-          const mention = mentionsName(message.text, self.name) || message.reply?.author === self.author;
-          setUnread((current) => {
-            const previous = current[message.channel];
-            return {
-              ...current,
-              [message.channel]: { count: (previous?.count ?? 0) + 1, mention: !!previous?.mention || mention },
-            };
-          });
+          markUnread([message]);
         },
       ],
       [
@@ -402,7 +449,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
       clearTimeout(retry);
       close();
     };
-  }, [ready, recheck]);
+  }, [foreground, ready, recheck]);
 
   useEffect(() => {
     if (!typing.length) return;

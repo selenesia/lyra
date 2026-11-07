@@ -1,4 +1,5 @@
 import { encodeMochiUrl } from "../runtime/utils.ts";
+import { isStatic } from "../runtime/hosting.ts";
 
 export interface Bookmark {
   name: string;
@@ -14,11 +15,7 @@ export const DEFAULT_BOOKMARKS: Bookmark[] = [
   },
   { name: "games", url: "lyra://games" },
   { name: "anime", url: "lyra://anime" },
-  {
-    name: "ao3",
-    url: "https://archiveofourown.org/",
-    icon: `/!cover!/${encodeMochiUrl("https://archiveofourown.org/favicon.ico")}/`,
-  },
+  ...(!isStatic ? [{ name: "chat", url: "lyra://chat" }] : []),
   { name: "youtube", url: "https://youtube.com/" },
 ];
 

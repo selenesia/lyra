@@ -1,10 +1,4 @@
-import { moderationModel } from "./moderationModel.ts";
-import {
-  featureBuckets,
-  readModerationText,
-  squeeze,
-  type ModerationText,
-} from "./moderationText.ts";
+import { readModerationText, squeeze, type ModerationText } from "./moderationText.ts";
 
 export type ModerationCategory =
   | "slur"
@@ -21,6 +15,23 @@ export interface ModerationVerdict {
   allowed: boolean;
   category?: ModerationCategory;
   strikes: number;
+}
+
+interface ModerationSuspect {
+  category: ModerationCategory;
+  strikes: number;
+}
+
+export interface ModerationReading {
+  verdict: ModerationVerdict;
+  suspect?: ModerationSuspect;
+  playful: boolean;
+  hyperbole: boolean;
+  screen: boolean;
+}
+
+interface RuleHit extends ModerationSuspect {
+  suspect?: boolean;
 }
 
 const CATEGORY_LABELS: Record<ModerationCategory, string> = {
@@ -41,15 +52,19 @@ export function isModerationCategory(value: unknown): value is ModerationCategor
 
 export function blockedNotice(subject: string, category: ModerationCategory, tense: "was" | "would be" = "was"): string {
   if (category === "crisis") {
-    return `that ${subject} ${tense === "was" ? "was not" : "will not be"} posted. findahelpline.com can connect you with someone to talk to`;
+    return `that ${subject} ${tense === "was" ? "was not" : "will not be"} posted.  findahelpline.com can connect you with someone to talk to`;
   }
   return `that ${subject} ${tense} blocked for ${CATEGORY_LABELS[category]}`;
 }
 
 const ALLOWED: ModerationVerdict = { allowed: true, strikes: 0 };
 
-function blocked(category: ModerationCategory, strikes: number): ModerationVerdict {
-  return { allowed: false, category, strikes };
+function blocked(category: ModerationCategory, strikes: number): RuleHit {
+  return { category, strikes };
+}
+
+function suspected(category: ModerationCategory, strikes: number): RuleHit {
+  return { category, strikes, suspect: true };
 }
 
 function stemPattern(stem: string): string {
@@ -150,10 +165,12 @@ const INTENT = alt([
 const VIOLENCE = alt([
   "kill", "murder", "shoot", "stab", "hurt", "strangle", "choke", "rape", "behead", "lynch", "bomb", "swat", "torture",
   "slit", "decapitate", "kidnap", "stalk", "beat the shit out of", "break your neck", "snap your neck", "hunt down",
-  "track down", "burn down", "bash in", "beat to death",
+  "track down", "burn down", "burn it down", "bash in", "beat to death", "beat up", "beat the crap out of",
+  "beat the hell out of",
 ]);
 const HARMLESS_OBJECTS = squeezedSet([
   "feelings", "ego", "chances", "rank", "kd", "score", "stats", "record", "streak", "team", "base", "build", "time", "vibe",
+  "page", "profile", "account", "insta", "socials", "posts", "channel", "pfp",
 ]);
 const HARMLESS_SENDS = squeezedSet(["dm", "message", "msg", "text", "email", "link", "invite", "pic", "photo", "call"]);
 const DOX = alt(["dox", "doxx", "leak", "expose"]);
@@ -163,15 +180,27 @@ const TARGET = alt([
 const GAMING = phrases([
   "game", "games", "match", "round", "lobby", "pvp", "fortnite", "minecraft", "roblox", "valorant", "ranked", "ivi",
   "spawn", "server", "boss", "level", "smash", "chess", "among us", "warzone", "cod", "apex", "overwatch", "league",
-  "rivals", "the next round", "bedwars", "skywars", "duel", "duels",
+  "rivals", "the next round", "bedwars", "skywars", "duel", "duels", "raid", "dungeon", "npc", "mob", "mobs", "respawn",
+]);
+const FICTION = phrases([
+  "episode", "episodes", "season", "chapter", "arc", "anime", "manga", "manhwa", "webtoon", "show", "movie", "film", "series",
+  "character", "villain", "finale", "book", "plot", "spoil", "spoils", "spoiling", "spoiler", "spoilers", "isekai", "isekaid",
+  "isekaied",
 ]);
 const REAL_WORLD = phrases(["irl", "in real life", "for real", "your house", "where you live", "your family", "at school"]);
 const JOKING = phrases(["lol", "lmao", "lmfao", "jk", "jking", "haha", "hahaha", "hehe", "xd", "rofl", "kidding", "joking"]);
 const JOKING_SYMBOLS = /😂|🤣|💀|\/j\b|\/jk\b/u;
+const HYPERBOLE = new RegExp(
+  ` (?:${alt(["made me want to", "makes me want to", "made me wanna", "makes me wanna"])} die|${alt(["this", "that"])} ${alt([
+    "song", "exam", "test", "quiz", "homework", "essay", "class", "lecture", "ending", "episode", "chapter", "show", "movie",
+    "anime", "manga", "game", "level", "boss", "update", "lag", "meme", "video", "edit", "traffic", "weather",
+  ])}) `,
+);
 
 const VIOLENT_INTENT = new RegExp(` ${INTENT} ${AFFIRMING_GAP(3)}${VIOLENCE}[a-z]* ${GAP(3)}${TARGET} `, "g");
+const VIOLENT_WORD = new RegExp(` ${VIOLENCE}`);
 const DOX_INTENT = new RegExp(` ${INTENT} ${AFFIRMING_GAP(2)}${DOX}[a-z]* ${GAP(2)}${TARGET} `);
-const SEVERE_VIOLENCE = new RegExp(` ${alt(["rape", "behead", "lynch", "swat", "kidnap", "stalk", "torture", "bomb"])}`);
+const SEVERE_VIOLENCE = new RegExp(` ${alt(["rape", "behead", "lynch", "swat", "kidnap", "torture"])}`);
 
 const SELF_HARM_WORDS = [
   "kys", "kill yourself", "kill urself", "kill your self", "kill ur self", "kill yoself", "kill yo self", "kill ya self",
@@ -182,7 +211,8 @@ const SELF_HARM_WORDS = [
   "you should die", "u should die", "ur should die", "you should kill yourself", "you should kys", "u should kys",
   "just kys", "do everyone a favor and die", "do us a favor and die", "do the world a favor and die", "jump off a bridge",
   "jump off a cliff", "slit your wrists", "slit ur wrists", "go cut yourself", "go cut urself", "should cut yourself",
-  "cut yourself again", "cut your wrists", "cut ur wrists", "off yourself", "off urself",
+  "cut yourself again", "cut your wrists", "cut ur wrists", "go off yourself", "go off urself", "just off yourself",
+  "just off urself",
   "rope yourself", "rope urself", "go rope", "go commit suicide", "commit suicide already", "go commit sudoku",
   "commit sudoku", "the world is better without you", "the world would be better without you", "an hero",
   "you should commit suicide", "u should commit suicide", "go overdose", "take all your pills",
@@ -227,13 +257,19 @@ const KILOMETERS = /\d\s*kms\b/;
 
 const WATCH_YOUR_BACK = phrases(["watch your back", "watch ur back"]);
 const THREATS = phrases([
-  "i know where you live", "i know where u live", "i know where you go to school",
-  "you are going to die", "youre going to die", "ur going to die", "you will die", "you gonna die", "i will find you",
-  "ill find you", "im coming for you", "sleep with one eye open", "your family is next", "ill make you suffer",
-  "i will make you suffer", "i will leak your nudes", "ill leak your nudes", "ill leak your pics", "i will leak your pics",
+  "i know where you live", "i know where u live", "i know where you go to school", "sleep with one eye open",
+  "your family is next", "i will leak your nudes", "ill leak your nudes", "ill leak your pics", "i will leak your pics",
   "ill post your nudes", "i have your nudes", "ill send your nudes", "i will send your nudes", "ill burn your house",
   "i will burn your house", "beat you to death", "beat u to death", "stab you to death", "choke you to death",
-  "kill you slowly", "hunt you down", "hunt u down", "track you down", "track u down",
+  "kill you slowly",
+]);
+const LOCATING = phrases([
+  "i will find you", "ill find you", "im coming for you", "hunt you down", "hunt u down", "track you down", "track u down",
+  "find your house", "come to your house", "coming to your house", "show up at your house", "show up at your school",
+]);
+const DOOM = phrases([
+  "you are going to die", "youre going to die", "ur going to die", "you will die", "you gonna die", "ill make you suffer",
+  "i will make you suffer",
 ]);
 const EXTORTION = new RegExp(
   ` send ${GAP(2)}${alt(["nudes", "noods", "pics", "pictures", "money", "robux", "vbucks", "nitro"])} ${GAP(2)}or ${GAP(2)}${alt([
@@ -241,10 +277,13 @@ const EXTORTION = new RegExp(
   ])} ${GAP(2)}`,
 );
 
+const PLACES = alt([
+  "school", "church", "mosque", "synagogue", "temple", "mall", "office", "building", "class", "concert", "hospital", "airport",
+]);
 const MASS_VIOLENCE = new RegExp(
-  ` ${alt(["shoot up", "blow up", "bomb", "shoot"])} ${alt(["the", "a", "this", "that", "my", "our", "your", "ur"])} ${alt([
-    "school", "church", "mosque", "synagogue", "temple", "mall", "office", "building", "class", "concert", "hospital", "airport",
-  ])} `,
+  ` (?:${alt(["shoot up", "blow up", "bomb", "shoot"])} ${alt(["the", "a", "this", "that", "my", "our", "your", "ur"])}|${alt([
+    "bring", "bringing", "brought", "take", "taking",
+  ])} ${GAP(1)}${alt(["gun", "guns", "rifle", "bomb", "weapon", "weapons"])} to(?: [a-z]+)?) ${PLACES} `,
 );
 
 const HARM_TARGET = alt(
@@ -260,7 +299,7 @@ const HARM = alt([
 ]);
 const DEATH_WISH = new RegExp(` ${alt(["hope", "wish", "pray", "hoping", "praying"])} ${GAP(1)}${HARM_TARGET} ${AFFIRMING_GAP(2)}${HARM} `, "g");
 const HARASSMENT = phrases([
-  "die in a fire", "you deserve to die", "u deserve to die", "you deserve to be raped", "you deserve to get raped",
+  "you deserve to die", "u deserve to die", "you deserve to be raped", "you deserve to get raped",
   "deserve to be raped", "deserve to get raped", "should get raped", "should be raped", "go get raped",
   "should have been aborted", "shouldve been aborted", "should of been aborted", "should have aborted you",
   "shouldve aborted you", "should of aborted you", "should have swallowed you", "shouldve swallowed you",
@@ -287,13 +326,16 @@ const GROUP_TRAITS = alt([
 ]);
 const DEHUMANIZING = alt([
   "animals", "subhuman", "subhumans", "vermin", "parasites", "rats", "cockroaches", "roaches", "a disease", "a cancer",
-  "savages", "monkeys", "apes", "a plague", "not human", "less than human", "inferior", "filth", "groomers", "pedos",
-  "pedophiles", "predators", "mentally ill", "a mental illness", "terrorists", "criminals", "rapists", "thieves", "a virus",
-  "scum", "trash", "garbage", "evil", "dirty",
+  "savages", "monkeys", "apes", "a plague", "not human", "less than human", "filth", "groomers", "pedos", "pedophiles",
+  "rapists", "a virus", "scum",
+]);
+const DEMEANING = alt([
+  "inferior", "predators", "mentally ill", "a mental illness", "terrorists", "criminals", "thieves", "trash", "garbage", "evil",
+  "dirty",
 ]);
 const ERASURE = alt([
   "exterminated", "gassed", "eradicated", "wiped out", "sterilized", "put in camps", "killed", "purged",
-  "lynched", "hanged", "burned", "banned from existing", "shot",
+  "lynched", "hanged", "burned", "banned from existing", "shot", "put down", "euthanized",
 ]);
 const HATE_RULES = [
   new RegExp(` ${GROUPS} ${GAP(2)}${alt(["are", "r", "is"])} ${AFFIRMING_GAP(2)}${DEHUMANIZING} `),
@@ -305,8 +347,12 @@ const HATE_RULES = [
   phrases([
     "heil hitler", "sieg heil", "hitler was right", "white power", "white pride world wide", "gas the jews",
     "jews will not replace us", "you will not replace us", "race war now", "fourteen words", "holocaust never happened",
-    "six million wasnt enough", "go back to your country", "go back to africa", "go back to mexico",
+    "six million wasnt enough", "go back to your country", "go back to africa", "go back to mexico", "go back to the jungle",
   ]),
+];
+const HATE_DEMEANING = [
+  new RegExp(` ${GROUPS} ${GAP(2)}${alt(["are", "r", "is"])} ${AFFIRMING_GAP(2)}${DEMEANING} `),
+  new RegExp(` ${GROUPS} ${alt(["belong in the kitchen", "shouldnt be allowed to vote", "should not be allowed to vote", "shouldnt have rights"])} `),
 ];
 const HATE_DISLIKE = new RegExp(
   ` i ${alt(["hate", "despise", "cant stand"])} (?:${alt(["all", "every", "those", "these", "the", "fucking"])} )?${GROUPS} `,
@@ -374,7 +420,9 @@ const SEX_EDUCATION = / sex (?:ed|education) /g;
 
 const EMAIL = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/;
 const SPELLED_EMAIL = /\b[a-z0-9._-]{3,}\s*[[(]?\s*at\s*[\])]?\s*[a-z0-9-]+\s*[[(]?\s*dot\s*[\])]?\s*(?:com|net|org|edu|io|co|me)\b/;
-const PHONE = /(?<![\d.])(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}(?![\d.])/;
+const PHONE = /(?<![\d.])(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s*|\d{3}[\s.-])\d{3}[\s.-]?\d{4}(?![\d.])/;
+const BARE_PHONE = /(?<![\d.#])\+?1?\d{10}(?![\d.])/;
+const PHONE_WORDS = /\b(?:call|text|phone|number|cell|digits|whatsapp|dial)\b/;
 const INTERNATIONAL_PHONE = /(?<![\d.])\+\d{1,3}(?:[\s.-]?\d{2,4}){3,5}(?![\d.])/;
 const SSN = /(?<!\d)\d{3}-\d{2}-\d{4}(?!\d)/;
 const CARD = /(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)/g;
@@ -395,8 +443,15 @@ const DOX_WORDS = phrases([
   "dox him", "dox her", "dox them", "doxx him", "doxx her", "leaked his address", "leaked her address",
   "here is his address", "heres his address", "heres her address", "here is her address", "found his address",
   "found her address", "found your address", "found ur address", "got your ip", "got ur ip", "have your ip", "have ur ip",
-  "i have your address", "i got your address", "i know your ip", "i know ur ip",
+  "i have your address", "i got your address", "i know your ip", "i know ur ip", "found out where she lives",
+  "found out where he lives", "found out where they live", "found out where she goes to school",
+  "found out where he goes to school",
 ]);
+const DOX_LEAK = new RegExp(
+  ` ${alt(["leak", "leaking", "expose", "exposing", "dox", "doxx"])} ${alt(["his", "her", "their", "your", "ur"])} ${alt([
+    "face", "address", "addy", "school", "ip", "info", "real name", "full name", "number", "location", "pics", "photos",
+  ])} `,
+);
 const LIVES_AT = /\blives?\s+(?:at|on)\s+\d/;
 
 function isPrivateIp(address: string): boolean {
@@ -435,6 +490,7 @@ function hasStreetAddress(folded: string): boolean {
 function hasPersonalInfo(folded: string): boolean {
   if (EMAIL.test(folded) || SPELLED_EMAIL.test(folded)) return true;
   if (PHONE.test(folded) || INTERNATIONAL_PHONE.test(folded) || SSN.test(folded)) return true;
+  if (BARE_PHONE.test(folded) && PHONE_WORDS.test(folded)) return true;
   if (COORDINATES.test(folded) || LIVES_AT.test(folded)) return true;
   for (const match of folded.matchAll(CARD)) {
     const digits = match[0].replace(/\D/g, "");
@@ -457,14 +513,14 @@ function hasSlur(text: ModerationText): boolean {
   return SLUR_PHRASES.test(text.plain);
 }
 
-function selfHarmVerdict(text: ModerationText): ModerationVerdict | null {
+function selfHarmHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
   let matched = false;
   for (const match of text.plain.matchAll(SELF_HARM)) {
     matched = true;
     const before = wordsBefore(text.plain, match.index, 3);
     if (before.some((word) => NEGATIONS.has(word)) || REPORTED.test(before.join(" "))) continue;
     if (!before.some((word) => SECOND_PERSON.has(word)) && before.some((word) => FIRST_PERSON.has(word))) {
-      if (GAMING.test(text.plain) || match[0] === phrase("go die")) continue;
+      if (hyperbole || match[0] === phrase("go die")) continue;
       return blocked("crisis", 0);
     }
     return blocked("self_harm", 3);
@@ -472,8 +528,9 @@ function selfHarmVerdict(text: ModerationText): ModerationVerdict | null {
   return !matched && compactHas(text, SELF_HARM_COMPACT) ? blocked("self_harm", 3) : null;
 }
 
-function hasCrisis(text: ModerationText): boolean {
+function hasCrisis(text: ModerationText, hyperbole: boolean): boolean {
   if (SEEKING_METHODS.test(text.plain) || SUICIDAL_THOUGHTS.test(text.plain)) return true;
+  if (hyperbole) return false;
   if (SUICIDAL.test(text.plain) && !negated(text.plain, text.plain.indexOf(" suicidal ") + 1)) return true;
   let matched = false;
   for (const match of text.plain.matchAll(CRISIS)) {
@@ -482,39 +539,45 @@ function hasCrisis(text: ModerationText): boolean {
     if (match[0] === "kms" && KILOMETERS.test(text.folded)) continue;
     return true;
   }
-  if (!GAMING.test(text.plain)) {
-    for (const match of text.plain.matchAll(ENDING_IT)) {
-      if (!negated(text.plain, match.index)) return true;
-    }
+  for (const match of text.plain.matchAll(ENDING_IT)) {
+    if (!negated(text.plain, match.index)) return true;
   }
   return !matched && compactHas(text, CRISIS_COMPACT);
 }
 
-function threatVerdict(text: ModerationText): ModerationVerdict | null {
+function threatHit(text: ModerationText, playful: boolean): RuleHit | null {
   const severe = REAL_WORLD.test(text.plain);
   if (THREATS.test(text.plain) || MASS_VIOLENCE.test(text.plain) || EXTORTION.test(text.plain)) return blocked("threat", 3);
   if (WATCH_YOUR_BACK.test(text.plain) && !GAMING.test(text.plain)) return blocked("threat", 3);
+  if (LOCATING.test(text.plain) && !playful) {
+    return VIOLENT_WORD.test(text.plain) ? blocked("threat", 3) : suspected("threat", 3);
+  }
   for (const match of text.plain.matchAll(VIOLENT_INTENT)) {
     if (negated(text.plain, match.index + 1)) continue;
     const [next = "", after = ""] = text.plain.slice(match.index + match[0].length).split(" ");
     if (HARMLESS_OBJECTS.has(next) || ((next === "a" || next === "an") && HARMLESS_SENDS.has(after))) continue;
     if (SEVERE_VIOLENCE.test(match[0]) || severe) return blocked("threat", 3);
-    if (GAMING.test(text.plain)) continue;
-    const joking = JOKING.test(text.plain) || JOKING_SYMBOLS.test(text.folded);
-    return blocked("threat", joking ? 1 : 3);
+    if (!playful) return suspected("threat", 3);
+  }
+  return DOOM.test(text.plain) && !playful ? suspected("threat", 3) : null;
+}
+
+function hateHit(text: ModerationText): RuleHit | null {
+  if (HATE_RULES.some((rule) => rule.test(text.plain)) || HATE_NUMBERS.test(text.folded)) return blocked("hate", 3);
+  if (HATE_DEMEANING.some((rule) => rule.test(text.plain)) || HATE_DISLIKE.test(text.plain)) return suspected("hate", 2);
+  return null;
+}
+
+function harassmentHit(text: ModerationText): RuleHit | null {
+  if (HARASSMENT.test(text.plain) || HARASS_CALL.test(text.plain)) return blocked("harassment", 2);
+  if (GAMING.test(text.plain) || FICTION.test(text.plain)) return null;
+  for (const match of text.plain.matchAll(DEATH_WISH)) {
+    if (!negated(text.plain, match.index + 1)) return blocked("harassment", 2);
   }
   return null;
 }
 
-function hasExtremeHarassment(text: ModerationText): boolean {
-  if (HARASSMENT.test(text.plain) || HARASS_CALL.test(text.plain)) return true;
-  for (const match of text.plain.matchAll(DEATH_WISH)) {
-    if (!negated(text.plain, match.index + 1)) return true;
-  }
-  return false;
-}
-
-function sexualVerdict(text: ModerationText): ModerationVerdict | null {
+function sexualHit(text: ModerationText): RuleHit | null {
   const plain = text.plain.replace(SEX_EDUCATION, " ");
   const explicit = EXPLICIT.test(plain);
   if (MINOR_SEXUAL.test(plain) || CP_TRADE.test(plain)) return blocked("sexual", 3);
@@ -526,97 +589,39 @@ function sexualVerdict(text: ModerationText): ModerationVerdict | null {
   return null;
 }
 
-function vocabulary(list: string[]): RegExp {
-  return new RegExp(` (?:${list.map((word) => (word.endsWith("*") ? `${phrase(word.slice(0, -1))}[a-z]*` : phrase(word))).join("|")}) `);
+function doxHit(text: ModerationText): RuleHit | null {
+  if ([DOX_TARGET, DOX_WORDS, DOX_INTENT, DOX_LEAK].some((rule) => rule.test(text.plain))) return blocked("doxxing", 3);
+  return hasPersonalInfo(text.folded) ? blocked("doxxing", 1) : null;
 }
 
-const MODEL_GATES: Record<string, RegExp> = {
-  crisis: vocabulary([
-    "die", "dying", "dead", "death", "kil*", "suicid*", "alive", "exist*", "end*", "gone", "wake", "pil*", "cut*",
-    "hurt*", "rope", "hang*", "jump*", "bleach", "overdos*", "harm*", "disapear*", "living", "life", "goodbye", "kms",
-  ]),
-  self_harm: vocabulary([
-    "die", "dead", "death", "kil*", "kys", "suicid*", "exist*", "end*", "gone", "pil*", "cut*", "rope", "hang*", "neck",
-    "jump*", "bleach", "overdos*", "alive", "unalive", "traffic", "bridge", "train",
-  ]),
-  threat: vocabulary([
-    "kil*", "murder*", "shoot*", "stab*", "hurt*", "strangl*", "chok*", "rape*", "behead*", "bomb*", "swat*", "tortur*",
-    "slit*", "kidnap*", "stalk*", "beat*", "break*", "bury", "end", "hunt*", "find", "house", "adres*", "school", "gun*",
-    "knife", "weapon*", "hamer", "machete", "rifle", "hospital", "bone*", "dead", "die", "leak*", "door", "regret*",
-  ]),
-  harassment: vocabulary([
-    "die*", "dead", "death", "cancer", "rape*", "abort*", "kil*", "shoot", "shot", "burn*", "rot", "sufer*", "funeral",
-    "exist", "live", "deserve*", "bully", "harass*", "spam", "tortur*", "stab*", "crash", "drown", "sick", "put down",
-  ]),
-  sexual: vocabulary([
-    "sex*", "nude*", "nod*", "naked", "cum*", "dick*", "cock*", "pusy", "tit*", "bob*", "body", "thigh*", "nip*", "bals",
-    "suck*", "lick*", "ride", "finger*", "moan*", "wet", "hard", "jerk*", "fap*", "strip*", "undres*", "grind*", "spank*",
-    "bend", "spread", "onlyfans", "nsfw", "lewd*", "erp", "hentai", "porn*", "cam", "inside", "loli*", "horny", "feet",
-  ]),
-  hate: vocabulary([
-    "jew*", "muslim*", "black*", "gay*", "lesbian*", "trans*", "imigrant*", "refuge*", "mexican*", "asian*", "chinese",
-    "arab*", "indian*", "latino*", "women", "christian*", "hindu*", "disabled", "african*", "white*", "native*", "sikh*",
-    "migrant*", "foreign*", "gyps*", "roma", "quer*", "homosexual*", "autistic", "bisexual*",
-  ]),
-};
+export function readModeration(input: string): ModerationReading {
+  const text = readModerationText(input);
+  const playful = [GAMING, FICTION, JOKING].some((rule) => rule.test(text.plain)) || JOKING_SYMBOLS.test(text.folded);
+  const hyperbole = playful || HYPERBOLE.test(text.plain);
+  const reading: ModerationReading = { verdict: ALLOWED, playful, hyperbole, screen: text.contentTokens.length > 0 };
+  if (!text.tokens.length && !/\d/.test(text.folded)) return reading;
 
-const decodedLabels = moderationModel.labels.map((label) => {
-  const bytes = Uint8Array.from(atob(label.weights), (char) => char.charCodeAt(0));
-  return {
-    name: label.name,
-    bias: label.bias,
-    scale: label.scale,
-    threshold: label.threshold,
-    weights: new Int8Array(bytes.buffer),
-  };
-});
-
-export function modelScores(text: ModerationText): Record<string, number> {
-  const buckets = featureBuckets(text.contentTokens, moderationModel.buckets);
-  const scores: Record<string, number> = {};
-  for (const label of decodedLabels) {
-    let sum = label.bias;
-    for (const bucket of buckets) sum += (label.weights[bucket] ?? 0) * label.scale;
-    scores[label.name] = 1 / (1 + Math.exp(-sum));
+  const sexual = sexualHit(text);
+  const rules = [
+    () => (hasSlur(text) ? blocked("slur", 3) : null),
+    () => (sexual?.strikes === 3 ? sexual : null),
+    () => selfHarmHit(text, hyperbole),
+    () => (hasCrisis(text, hyperbole) ? blocked("crisis", 0) : null),
+    () => threatHit(text, playful),
+    () => hateHit(text),
+    () => harassmentHit(text),
+    () => sexual,
+    () => doxHit(text),
+  ];
+  for (const rule of rules) {
+    const hit = rule();
+    if (!hit) continue;
+    if (!hit.suspect) return { ...reading, verdict: { allowed: false, category: hit.category, strikes: hit.strikes } };
+    reading.suspect ??= { category: hit.category, strikes: hit.strikes };
   }
-  return scores;
-}
-
-function modelVerdict(text: ModerationText): ModerationVerdict {
-  const scores = modelScores(text);
-  let worst: (typeof decodedLabels)[number] | undefined;
-  for (const label of decodedLabels) {
-    const score = scores[label.name] ?? 0;
-    if (!MODEL_GATES[label.name]?.test(text.plain)) continue;
-    if (score >= label.threshold && (!worst || score - label.threshold > (scores[worst.name] ?? 0) - worst.threshold)) worst = label;
-  }
-  if (!worst) return ALLOWED;
-  const category = worst.name as ModerationCategory;
-  return blocked(category, category === "crisis" ? 0 : 1);
+  return reading;
 }
 
 export function moderate(input: string): ModerationVerdict {
-  const text = readModerationText(input);
-  if (!text.tokens.length && !/\d/.test(text.folded)) return ALLOWED;
-
-  if (hasSlur(text)) return blocked("slur", 3);
-  const sexual = sexualVerdict(text);
-  if (sexual?.strikes === 3) return sexual;
-  const selfHarm = selfHarmVerdict(text);
-  if (selfHarm) return selfHarm;
-  if (hasCrisis(text)) return blocked("crisis", 0);
-  const threat = threatVerdict(text);
-  if (threat) return threat;
-  if (HATE_RULES.some((rule) => rule.test(text.plain)) || HATE_NUMBERS.test(text.folded)) {
-    return blocked("hate", 3);
-  }
-  if (HATE_DISLIKE.test(text.plain)) return blocked("hate", 2);
-  if (hasExtremeHarassment(text)) return blocked("harassment", 2);
-  if (sexual) return sexual;
-  const targetedDox = DOX_TARGET.test(text.plain) || DOX_WORDS.test(text.plain) || DOX_INTENT.test(text.plain);
-  if (targetedDox) return blocked("doxxing", 3);
-  if (hasPersonalInfo(text.folded)) return blocked("doxxing", 1);
-
-  if (!text.contentTokens.length) return ALLOWED;
-  return modelVerdict(text);
+  return readModeration(input).verdict;
 }

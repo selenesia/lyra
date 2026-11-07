@@ -1,0 +1,61 @@
+html.theme-transitioning * {
+  transition: none !important;
+}
+
+html.theme-transitioning #iframe-container .iframe.active > iframe {
+  view-transition-name: theme-iframe-active;
+}
+
+html.theme-transitioning #iframe-container .iframe.active-split-left > iframe {
+  view-transition-name: theme-iframe-left;
+}
+
+html.theme-transitioning #iframe-container .iframe.active-split-right > iframe {
+  view-transition-name: theme-iframe-right;
+}
+
+::view-transition,
+::view-transition-group(*),
+::view-transition-image-pair(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  pointer-events: none !important;
+}
+
+html.theme-transitioning::view-transition-group(root) {
+  animation-duration: var(--motion-reveal);
+}
+
+html.theme-transitioning::view-transition-old(root),
+html.theme-transitioning::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.theme-transitioning::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.theme-transitioning::view-transition-new(root) {
+  z-index: 9999;
+}
+
+html.theme-transitioning::view-transition-group(theme-iframe-active),
+html.theme-transitioning::view-transition-group(theme-iframe-left),
+html.theme-transitioning::view-transition-group(theme-iframe-right) {
+  animation: none;
+  z-index: 10000;
+}
+
+html.theme-transitioning::view-transition-old(theme-iframe-active),
+html.theme-transitioning::view-transition-old(theme-iframe-left),
+html.theme-transitioning::view-transition-old(theme-iframe-right) {
+  display: none;
+}
+
+html.theme-transitioning::view-transition-new(theme-iframe-active),
+html.theme-transitioning::view-transition-new(theme-iframe-left),
+html.theme-transitioning::view-transition-new(theme-iframe-right) {
+  animation: none;
+  mix-blend-mode: normal;
+}

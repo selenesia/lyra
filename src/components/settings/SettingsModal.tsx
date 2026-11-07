@@ -87,7 +87,7 @@ const SETTINGS_TABS: readonly {
   { id: "preferences", icon: "IconSettingsSliderHor", label: "preferences" },
   { id: "appearance", icon: "IconPaintBrush", label: "appearance" },
   { id: "anime", icon: "IconSushi", label: "anime" },
-  { id: "cloaking", icon: "IconGhost", label: "cloaking" },
+  { id: "cloaking", icon: "IconGhost", label: "tab identity" },
   { id: "extensions", icon: "IconPuzzle", label: "extensions" },
   { id: "advanced", icon: "IconHammer2", label: "advanced" },
 ] as const;
@@ -514,7 +514,7 @@ export default function SettingsModal({
             <div class="tab-content active">
               <div class="settings-item">
                 <label>preferred audio</label>
-                <p>choose the default audio for when playback starts, if avaliable.</p>
+                <p>choose the default audio for when playback starts, if available.</p>
                 <Selector
                   label="anime-language"
                   value={animeLanguage}
@@ -638,8 +638,8 @@ export default function SettingsModal({
           {activeTab === "cloaking" && (
             <div class="tab-content active">
               <div class="settings-item">
-                <label>site cloaking</label>
-                <p>cloak the site title and favicon as a different site.</p>
+                <label>title and icon</label>
+                <p>choose the title and icon shown for this tab.</p>
                 <Selector
                   label="site-cloaking"
                   value={siteCloaking}
@@ -653,8 +653,8 @@ export default function SettingsModal({
                 />
               </div>
               <div class="settings-item">
-                <label>link cloaking</label>
-                <p>cloak the site link in the url bar.</p>
+                <label>address display</label>
+                <p>choose how the site appears in the address bar.</p>
                 <Selector
                   label="link-cloaking"
                   value={linkCloaking}
@@ -668,8 +668,8 @@ export default function SettingsModal({
                 />
               </div>
               <div class="settings-item">
-                <label>focus cloaking</label>
-                <p>cloak the title and favicon when clicking off the tab.</p>
+                <label>inactive tab identity</label>
+                <p>apply the selected title and icon only while this tab is unfocused.</p>
                 <Toggle
                   id="focus-cloaking-toggle"
                   checked={focusCloaking}
@@ -705,7 +705,7 @@ export default function SettingsModal({
                   load the browser engine early so the first page opens faster.
                 </p>
                 <Toggle
-                  id="preload-proxy-toggle"
+                  id="preload-engine-toggle"
                   checked={preloadProxy}
                   onChange={(value) =>
                     handleToggle(
@@ -744,7 +744,7 @@ export default function SettingsModal({
                 <p>install chrome extensions into the browser.</p>
                 <div class="rivet-manager-actions">
                   <label class="rivet-file-button rivet-action-primary">
-                    {extensionBusy ? "working…" : "upload extension"}
+                    {extensionBusy ? "working..." : "upload extension"}
                     <input
                       type="file"
                       accept=".zip,.crx,application/zip"

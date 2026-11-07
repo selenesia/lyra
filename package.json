@@ -21,9 +21,9 @@
     "sync:prod": "bash scripts/sync-prod.sh",
     "notice": "bun scripts/notice.mjs",
     "chat": "bun scripts/chat.mjs",
-    "train:chat-moderation": "bun scripts/train-chat-moderation.mjs",
     "build:chat-image-labels": "bun scripts/build-chat-image-labels.mjs",
     "check:chat-image": "bun scripts/check-chat-image.mjs",
+    "check:chat-text": "bun scripts/check-chat-text.mjs",
     "setup:chat": "bun scripts/setup-chat.mjs",
     "test": "bun test --isolate scripts src",
     "test:sync-prod": "bun test --isolate scripts/sync-prod.test.mjs",
@@ -59,7 +59,6 @@
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^9.5.0",
     "javascript-obfuscator": "^5.0.1",
-    "knip": "^6.33.0",
     "terser": "^5.46.1",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "8.71.2"

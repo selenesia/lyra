@@ -1,4 +1,4 @@
-import type { SyncSnapshot } from "./syncSnapshot.ts";
+import type { SyncSnapshot } from "./snapshotSchema.ts";
 
 declare global {
   interface Window {

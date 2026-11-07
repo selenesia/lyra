@@ -2,9 +2,11 @@ export const FOLIO_DB = "__folio_controller";
 
 export const IDB_REGISTRY_KEY = "lyra-sync-idb-names";
 const LOCAL_ONLY_RIVET_STORES = new Set(["extensions", "extension_files"]);
+const LOCAL_ONLY_EXTENSION_CACHE = /^[^/]+\/local\/cache\/(?:compiled|selfie)\//;
 export const SYNC_LOCAL_DATABASE = "lyra-sync-local";
 export const LOCAL_ONLY_DATABASES = new Set([
   "uBlock0CacheStorage",
+  "UnityCache",
   SYNC_LOCAL_DATABASE,
 ]);
 const GAME_FILE_FIELDS = new Set(["timestamp", "mode", "contents"]);
@@ -115,6 +117,19 @@ export function canSyncIndexedDBStore(
     !LOCAL_ONLY_DATABASES.has(databaseName) &&
     (databaseName !== "rivet_extensions" ||
       !LOCAL_ONLY_RIVET_STORES.has(storeName))
+  );
+}
+
+export function isLocalOnlyRecord(
+  databaseName: string,
+  storeName: string,
+  key: unknown,
+): boolean {
+  return (
+    databaseName === "rivet_extensions" &&
+    storeName === "extension_storage" &&
+    typeof key === "string" &&
+    LOCAL_ONLY_EXTENSION_CACHE.test(key)
   );
 }
 

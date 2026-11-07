@@ -2,6 +2,7 @@ import { negativeMessage, NEGATIVE } from "../runtime/messages.ts";
 
 let runtimePromise: Promise<void> | null = null;
 let scriptPromise: Promise<void> | null = null;
+let extensionRuntimePromise: Promise<void> | null = null;
 
 function hasProxyGlobals(): boolean {
   const runtime = window as typeof window & {
@@ -72,11 +73,13 @@ export function warmProxyRuntime(): void {
 }
 
 export function warmExtensionRuntime(): void {
-  void ensureProxyRuntime()
+  extensionRuntimePromise ??= ensureProxyRuntime()
     .then(() => window.Lyra?.waitForTransport?.(10000))
     .then(() => import("./rivet.ts"))
     .then(({ initializeRivet }) => initializeRivet())
+    .then(() => undefined)
     .catch((error) => {
+      extensionRuntimePromise = null;
       console.warn("extension runtime warmup failed:", error, NEGATIVE);
     });
 }

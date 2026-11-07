@@ -1,6 +1,9 @@
 import { render } from "preact";
 import App from "./App.tsx";
 import { store } from "../state/store.ts";
+import { handleServiceWorkerMessage } from "../state/serviceWorkerMessages.ts";
+import { initSplitResize } from "../state/splitResize.ts";
+import { setupWindowLyra } from "../state/windowLyra.ts";
 import { initUiSignals } from "../core/ui/uiSignals";
 import { scheduleIdleTask } from "../core/runtime/scheduler.ts";
 import { initCloaking } from "../features/cloaking.ts";
@@ -81,7 +84,7 @@ function initializeLyraApp() {
 
   initUiSignals();
   initCloaking();
-  store.setupWindowLyra();
+  setupWindowLyra();
 
   if (!isStatic) document.addEventListener(
     "toggleCloudSyncModal",
@@ -126,13 +129,13 @@ function initializeLyraApp() {
     if (readAdvancedToggle("preloadProxy")) warmProxyRuntime();
   }, 750);
 
-  const onSwMessage = (e: MessageEvent) => store.handleServiceWorkerMessage(e);
+  const onSwMessage = (e: MessageEvent) => handleServiceWorkerMessage(e);
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("message", onSwMessage);
   }
   window.addEventListener("message", onSwMessage);
 
-  store.initSplitResize();
+  initSplitResize();
 
   store.addTab(null, "fetching data...", false, null, {
     applyNewTabOverride: false,

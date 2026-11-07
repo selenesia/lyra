@@ -59,7 +59,7 @@ export default function TopBar() {
     }
     const chatIcon = document.getElementById("chat-icon");
     if (chatIcon && !chatIcon.innerHTML) {
-      chatIcon.innerHTML = svgIcon("IconBubbleText", { solid: true });
+      chatIcon.innerHTML = svgIcon("IconChat", { solid: true });
     }
   }, []);
 

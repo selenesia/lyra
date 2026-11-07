@@ -1,0 +1,70 @@
+.sidebar-footer-oneko {
+  background-image: url(/assets/images/gifs/oneko.gif);
+  height: 32px;
+  width: 32px;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+  margin-left: -20px;
+  margin-bottom: -15px;
+  animation: onekoIdle var(--motion-idle) steps(1) infinite;
+}
+
+.sidebar-footer.loading .sidebar-footer-oneko {
+  animation: onekoGroom var(--motion-groom) steps(1) infinite;
+}
+
+html.modal-motion-paused #oneko,
+html.modal-motion-paused .sidebar-footer-oneko {
+  animation-play-state: paused;
+}
+
+.sidebar-footer-text {
+  display: none;
+  color: var(--color-loading-text);
+  opacity: 0.8;
+  font-size: 11px;
+  font-weight: 300;
+  margin-left: -3px;
+  margin-bottom: -30.8px;
+}
+
+.sidebar-footer.loading .sidebar-footer-text,
+.sidebar-footer.has-status .sidebar-footer-text {
+  display: inline;
+}
+
+.sidebar-footer.status-error .sidebar-footer-text {
+  color: var(--status-error-text);
+}
+
+@keyframes onekoIdle {
+  0%,
+  100% {
+    background-position: -64px 0;
+  }
+  50% {
+    background-position: -64px -32px;
+  }
+}
+
+@keyframes onekoGroom {
+  0% {
+    background-position: -96px -96px;
+  }
+
+  20% {
+    background-position: -96px -64px;
+  }
+
+  40% {
+    background-position: -160px 0px;
+  }
+
+  60% {
+    background-position: -192px 0px;
+  }
+
+  80% {
+    background-position: -224px 0px;
+  }
+}

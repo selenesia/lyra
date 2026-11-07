@@ -1,4 +1,8 @@
+import { evaluateInContentScope } from "../contentScope";
+import { tabFrameWindows } from "../contentScripts";
 import { EventHub } from "../eventHub";
+import { readExtFileText } from "../fileStore";
+import { urlMatchesPatterns } from "../manifest";
 import { installExtensionNetwork } from "../network";
 import {
   buildTabObject,
@@ -8,9 +12,12 @@ import {
   injectCss,
   openUrlInTab,
 } from "./common";
-import type { ChromeApiContext } from "./context";
+import type { ChromeApiContext, ContentScopeInTab } from "./context";
 
-export function createTabApis(context: ChromeApiContext) {
+export function createTabApis(
+  context: ChromeApiContext,
+  contentScopeInTab: ContentScopeInTab,
+) {
   const {
     realm,
     extId,
@@ -23,12 +30,27 @@ export function createTabApis(context: ChromeApiContext) {
     senderDocumentId,
   } = context;
 
+  const executionWindows = (
+    targetTabId: number,
+    details: { frameId?: number; allFrames?: boolean } | undefined,
+  ): Window[] => {
+    const top = host.getTabWindow?.(targetTabId);
+    if (!top) return [];
+    if (details?.frameId) {
+      const frame = tabFrameWindows(targetTabId).get(details.frameId);
+      return frame ? [frame] : [];
+    }
+    if (!details?.allFrames) return [top];
+    return [...new Set([top, ...tabFrameWindows(targetTabId).values()])];
+  };
+
   const tabs = {
     query: (
-      queryInfo: { active?: boolean; url?: string } = {},
+      queryInfo: { active?: boolean; url?: string | string[] } = {},
       cb?: (tabs: unknown[]) => void,
     ) => {
       const active = host.getActiveTabId?.();
+      const urlPatterns = [queryInfo.url ?? []].flat().filter(Boolean);
       const result = host
         .getAllTabs()
         .filter((tab) => {
@@ -38,7 +60,11 @@ export function createTabApis(context: ChromeApiContext) {
           ) {
             return false;
           }
-          if (queryInfo.url && !tab.url.includes(queryInfo.url)) return false;
+          if (
+            urlPatterns.length &&
+            !urlMatchesPatterns(tab.url, urlPatterns)
+          )
+            return false;
           return true;
         })
         .map((tab) => buildTabObject(host, tab.id, realm));
@@ -152,7 +178,7 @@ export function createTabApis(context: ChromeApiContext) {
     onUpdated: events.tabsOnUpdated.toApi(),
     onRemoved: events.tabsOnRemoved.toApi(),
     onActivated: events.tabsOnActivated.toApi(),
-    executeScript: (
+    executeScript: async (
       tabIdOrDetails: unknown,
       detailsOrCb?: unknown,
       maybeCb?: unknown,
@@ -161,29 +187,30 @@ export function createTabApis(context: ChromeApiContext) {
         typeof tabIdOrDetails === "number" ? tabIdOrDetails : tabId;
       const details = (
         typeof tabIdOrDetails === "object" ? tabIdOrDetails : detailsOrCb
-      ) as { code?: string; file?: string } | undefined;
+      ) as
+        | { code?: string; file?: string; frameId?: number; allFrames?: boolean }
+        | undefined;
       const cb = (typeof detailsOrCb === "function" ? detailsOrCb : maybeCb) as
         ((results: unknown[]) => void) | undefined;
-      const win =
-        actualTabId !== null ? host.getTabWindow?.(actualTabId) : null;
-      let result: unknown[] = [];
-      if (win && details?.code) {
-        installExtensionNetwork(
-          win,
-          actualTabId === null ? undefined : host.getTab(actualTabId)?.url,
-        );
-        try {
-          result = [
-            (win as unknown as { eval: (source: string) => unknown }).eval(
-              details.code,
-            ),
-          ];
-        } catch {
-          result = [];
-        }
-      }
+      const source =
+        typeof details?.code === "string"
+          ? details.code
+          : details?.file
+            ? await readExtFileText(extId, details.file.replace(/^\/+/, ""))
+            : null;
+      const result =
+        source === null || actualTabId === null
+          ? []
+          : executionWindows(actualTabId, details).map((win) => {
+              installExtensionNetwork(win, host.getTab(actualTabId)?.url);
+              return evaluateInContentScope(
+                win,
+                contentScopeInTab(win, actualTabId),
+                source,
+              );
+            });
       cb?.(result);
-      return Promise.resolve(result);
+      return result;
     },
     insertCSS: (
       tabIdOrDetails: unknown,

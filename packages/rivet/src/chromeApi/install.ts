@@ -20,7 +20,7 @@ import {
   setRealmApi,
   traceCalls,
 } from "./common";
-import type { ChromeApiContext } from "./context";
+import type { ChromeApiContext, ContentScopeInTab } from "./context";
 import { createDnsApi } from "./dns";
 import { createNetworkApis } from "./network";
 import { createPlatformApis } from "./platform";
@@ -86,7 +86,9 @@ export function createChromeApi(
     );
   }
 
-  installExtensionNetwork(realm, senderUrl);
+  installExtensionNetwork(realm, senderUrl, () =>
+    host.extensionResponseTimeoutMs?.(extId),
+  );
   const events = createRealmEvents();
   const frameId = senderFrameId ?? (tabId === null ? undefined : 0);
   const documentId =
@@ -124,7 +126,22 @@ export function createChromeApi(
   const { runtime, extension } = createRuntimeApis(context);
   const dns = createDnsApi(context);
   const storage = createStorageApi(context);
-  const { tabs, windows } = createTabApis(context);
+  const contentScopeInTab: ContentScopeInTab = (targetRealm, targetTabId) => {
+    const existing = contentScriptScope(targetRealm, extId);
+    if (existing) return existing;
+    const { chrome, browser } = createChromeApi(targetRealm, {
+      extId,
+      tabId: targetTabId,
+      isBackground: false,
+      registry,
+      host,
+      senderUrl: host.getTab(targetTabId)?.url,
+      senderFrameId: 0,
+      senderDocumentId: generateDocumentId(),
+    });
+    return createContentScriptScope(targetRealm, extId, { chrome, browser });
+  };
+  const { tabs, windows } = createTabApis(context, contentScopeInTab);
   const {
     i18n,
     identity,
@@ -149,21 +166,7 @@ export function createChromeApi(
     createNetworkApis(context);
   const { contentScripts, scripting, userScripts } = createScriptingApis(
     context,
-    (targetRealm, targetTabId) => {
-      const existing = contentScriptScope(targetRealm, extId);
-      if (existing) return existing;
-      const { chrome, browser } = createChromeApi(targetRealm, {
-        extId,
-        tabId: targetTabId,
-        isBackground: false,
-        registry,
-        host,
-        senderUrl: host.getTab(targetTabId)?.url,
-        senderFrameId: 0,
-        senderDocumentId: generateDocumentId(),
-      });
-      return createContentScriptScope(targetRealm, extId, { chrome, browser });
-    },
+    contentScopeInTab,
   );
   const { alarms, permissions, history, bookmarks, downloads } =
     createStateApis(context);

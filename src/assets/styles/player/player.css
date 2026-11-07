@@ -358,7 +358,7 @@
 .player-btn:disabled,
 .player-selector-selected:disabled {
   cursor: not-allowed;
-  opacity: 0.35;
+  opacity: 0.5;
   transform: none;
 }
 .player-control-popover {

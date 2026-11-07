@@ -334,6 +334,7 @@ export default function NavBar() {
         <a
           id="erudaBtn"
           href="#"
+          data-tooltip="devtools"
           onClick={(e) => {
             e.preventDefault();
             toggleEruda();

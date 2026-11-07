@@ -1,0 +1,258 @@
+.sidebar {
+  background-color: var(--bg-surface-0);
+  border-right: 1px solid var(--border-transparent);
+  box-sizing: border-box;
+  contain: layout style paint;
+  flex-shrink: 0;
+  overflow: hidden;
+  padding: 10px;
+  transition:
+    margin-left var(--motion-enter) var(--motion-ease),
+    opacity var(--motion-enter) var(--motion-ease),
+    visibility 0s;
+  white-space: nowrap;
+  width: 220px;
+  will-change: margin-left, opacity;
+  z-index: 3;
+}
+
+.sidebar,
+.meow {
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+}
+
+body.browser-view .main-container,
+body.browser-view #bookmarks-container,
+body.browser-view #top-left-stuff,
+body.browser-view #top-right-stuff,
+body.browser-view #support,
+body.browser-view #share,
+body.browser-view #oneko,
+body.browser-view .footer {
+  display: none !important;
+}
+
+.meow {
+  display: flex;
+  flex-grow: 1;
+  min-width: 0;
+  width: 100%;
+}
+
+body:not(.browser-view) .meow {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+body.sidebar-hidden .sidebar {
+  margin-left: -220px;
+  opacity: 0;
+  transition:
+    margin-left var(--motion-enter) var(--motion-ease),
+    opacity var(--motion-enter) var(--motion-ease),
+    visibility 0s var(--motion-enter);
+  visibility: hidden;
+}
+
+body.browser-view .sidebar {
+  display: flex;
+  visibility: visible;
+}
+
+body:not(.browser-view) .sidebar {
+  display: none;
+}
+
+body.is-picking-split #iframe-container,
+body.split-view #iframe-container {
+  border: none;
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+  height: 99%;
+  transition:
+    transform var(--motion-control) var(--motion-ease),
+    opacity var(--motion-control) var(--motion-ease);
+}
+
+body.is-picking-split #iframe-container .iframe,
+body.split-view #iframe-container .iframe {
+  border: 1px solid var(--split-border);
+  border-radius: var(--radius-frame);
+  display: none;
+  flex-basis: 0;
+  flex-grow: 1;
+  height: 100%;
+  left: auto;
+  overflow: hidden;
+  position: relative;
+  top: auto;
+  transform: translateZ(0);
+  transition:
+    transform var(--motion-control) var(--motion-ease),
+    opacity var(--motion-control) var(--motion-ease),
+    border-radius var(--motion-control) var(--motion-ease);
+  z-index: 0;
+}
+
+body.is-picking-split #iframe-container .iframe.active-focus,
+body.split-view #iframe-container .iframe.active-focus {
+  border: 1px solid var(--split-focus-border);
+}
+body.is-picking-split #iframe-container .iframe.active,
+body.split-view #iframe-container .iframe.active {
+  display: none;
+}
+
+body.is-picking-split #iframe-container .iframe.active-split-left,
+body.split-view #iframe-container .iframe.active-split-left {
+  animation: splitIn var(--motion-enter) var(--motion-ease);
+  display: block;
+  order: 1;
+}
+
+body.split-view #iframe-container .iframe.active-split-right {
+  animation: splitIn var(--motion-enter) var(--motion-ease);
+  display: block;
+  order: 3;
+}
+
+#iframe-container {
+  border-radius: var(--radius-frame);
+  contain: layout style;
+  display: none;
+  flex-grow: 1;
+  height: 99%;
+  margin: 0 auto 5px;
+  overflow: hidden;
+  position: relative;
+  transform: translateZ(0);
+  transition: opacity var(--motion-control) var(--motion-ease);
+  width: calc(100% - 10px);
+  z-index: 1;
+}
+
+#iframe-container .iframe {
+  background-color: var(--bg-body);
+  background-image:
+    radial-gradient(circle at 50% 50%, #05050580 0, var(--bg-body) 80%),
+    linear-gradient(var(--bg-body-grid) 1px, transparent 0),
+    linear-gradient(90deg, var(--bg-body-grid) 1px, var(--bg-body) 0);
+  background-size:
+    100% 100%,
+    20px 20px,
+    20px 20px;
+  border: 1px solid var(--border-medium);
+  border-radius: 0;
+  box-sizing: border-box;
+  display: none;
+  height: 100%;
+  left: 0;
+  position: absolute;
+  top: 0;
+  transition:
+    transform var(--motion-control) var(--motion-ease),
+    opacity var(--motion-control) var(--motion-ease),
+    border-radius var(--motion-control) var(--motion-ease);
+  width: 100%;
+  z-index: 2;
+}
+
+#iframe-container .iframe > iframe {
+  background: transparent;
+  border: none;
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+#iframe-container .iframe.active {
+  display: block;
+  height: 100% !important;
+  width: 100% !important;
+}
+
+#iframe-resize-divider {
+  display: block !important;
+}
+
+body.split-view #iframe-resize-divider {
+  animation: splitIn var(--motion-enter) var(--motion-ease);
+  background-color: var(--split-divider-bg);
+  cursor: ew-resize;
+  flex-shrink: 0;
+  order: 2;
+  width: 4px;
+  z-index: 10;
+}
+
+body:not(.split-view):not(.is-picking-split)
+  #iframe-container
+  .iframe.active-split-left,
+body:not(.split-view):not(.is-picking-split)
+  #iframe-container
+  .iframe.active-split-right {
+  display: none;
+}
+
+body:not(.split-view):not(.is-picking-split) #iframe-container .iframe.active {
+  display: block;
+}
+
+#splitViewBtn.active {
+  background-color: var(--active-bg);
+  color: var(--text-white);
+}
+
+.tab.split-pair {
+  padding-left: 20px;
+  position: relative;
+}
+
+.tab.split-pair:before {
+  background-color: var(--split-indicator);
+  border-radius: 50%;
+  content: "";
+  height: 6px;
+  left: 8px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+}
+
+body.is-picking-split .tab.split-active-left {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+body.browser-view #iframe-container {
+  display: flex;
+  height: 100%;
+}
+
+body.browser-view .meow {
+  flex-direction: row;
+  margin-left: 0;
+}
+
+.content-area {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-width: 0;
+  width: 100%;
+  max-width: 100vw;
+  align-items: center;
+}
+
+body.browser-view:before {
+  background-color: var(--bg-surface-0);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}

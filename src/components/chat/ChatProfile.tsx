@@ -111,6 +111,7 @@ export default function ChatProfile({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; tone: "error" | "success" } | null>(null);
   const [draft, setDraft] = useState<TextDraft | null>(null);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [media, setMedia] = useState<MediaDraft>({});
   const [sampled, setSampled] = useState<{ src: string; color: string | null } | null>(null);
   const closingRef = useRef(false);
@@ -189,6 +190,24 @@ export default function ChatProfile({
     setDraft(null);
   }, [replaceMedia]);
 
+  const commitStatus = useCallback(async () => {
+    if (liveStatus === null) return;
+    const value = liveStatus.trim();
+    if (value === (shown.status ?? "")) {
+      setLiveStatus(null);
+      return;
+    }
+    setNotice(null);
+    const result = await saveProfile({ status: value || null });
+    if (result.failure) {
+      setNotice({ text: result.failure.error, tone: "error" });
+      return;
+    }
+    if (result.profile) setProfile(result.profile);
+    setLiveStatus(null);
+    setNotice({ text: positiveMessage("status saved"), tone: "success" });
+  }, [liveStatus, saveProfile, shown.status]);
+
   const run = useCallback(
     async (type: ChatModeration, extra: Record<string, unknown>, success: string) => {
       setBusy(true);
@@ -266,6 +285,7 @@ export default function ChatProfile({
   }, [draft, media, saveProfile, shown, stopEditing, uploadMedia]);
 
   const look = editing ? previewOf(shown, draft) : shown;
+  const statusValue = editing ? draft.status : (liveStatus ?? shown.status ?? "");
   const avatarSrc = media.avatar === undefined ? undefined : (media.avatar?.url ?? null);
   const bannerSrc =
     media.banner === undefined ? (look.banner ? chatMediaUrl("banner", author, look.banner) : null) : (media.banner?.url ?? null);
@@ -365,18 +385,29 @@ export default function ChatProfile({
             </span>
           )}
         </button>
-        {editing ? (
+        {self ? (
           <label class="chat-card-status is-editing">
-            <span aria-hidden="true">{draft.status || TEXT_FIELD_COPY.status.placeholder}</span>
+            <span aria-hidden="true">{statusValue || TEXT_FIELD_COPY.status.placeholder}</span>
             <textarea
               rows={1}
               cols={1}
-              value={draft.status}
+              value={statusValue}
               maxLength={CHAT_PROFILE_LIMITS.status}
               placeholder={TEXT_FIELD_COPY.status.placeholder}
               aria-label={TEXT_FIELD_COPY.status.label}
-              onKeyDown={(event) => event.key === "Enter" && event.preventDefault()}
-              onInput={(event) => editDraft({ status: event.currentTarget.value.replace(/\s*\n\s*/g, " ") })}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                if (!editing) event.currentTarget.blur();
+              }}
+              onInput={(event) => {
+                const next = event.currentTarget.value.replace(/\s*\n\s*/g, " ");
+                if (editing) editDraft({ status: next });
+                else setLiveStatus(next);
+              }}
+              onBlur={() => {
+                if (!editing) void commitStatus();
+              }}
             />
           </label>
         ) : (
@@ -387,7 +418,7 @@ export default function ChatProfile({
           )
         )}
         {self && !editing && (
-          <button type="button" class="chat-card-edit" onClick={() => setDraft(draftOf(shown))}>
+          <button type="button" class="chat-card-edit" onClick={() => setDraft({ ...draftOf(shown), status: statusValue })}>
             <IconPencil size={14} />
             edit profile
           </button>
@@ -470,7 +501,7 @@ export default function ChatProfile({
         {roles.length > 0 && (
           <div class="chat-profile-field">
             <label>role</label>
-            <p class="chat-profile-hint">mods can time out. admins can also ban and set roles</p>
+            <p class="chat-profile-hint">mods can time out. admins can also ban and set roles.</p>
             <div class="chat-profile-row">
               {roles.map((role) => (
                 <button
@@ -490,7 +521,7 @@ export default function ChatProfile({
         {timeoutAllowed && (
           <div class="chat-profile-field">
             <label>timeout</label>
-            <p class="chat-profile-hint">they can still read chat but cannot send messages</p>
+            <p class="chat-profile-hint">they can still read chat but cannot send messages.</p>
             <div class="chat-profile-row">
               {CHAT_TIMEOUTS.map((option) => (
                 <button
@@ -517,7 +548,7 @@ export default function ChatProfile({
         {timeoutAllowed && (
           <div class="chat-profile-field">
             <label>reset profile</label>
-            <p class="chat-profile-hint">clears everything they set, including images</p>
+            <p class="chat-profile-hint">clears everything they set, including images.</p>
             <div class="chat-profile-row">
               <button
                 type="button"
@@ -536,7 +567,7 @@ export default function ChatProfile({
             <label for="chat-ban-reason">ban</label>
             {shown.bannedUntil ? (
               <>
-                <p class="chat-profile-hint">they cannot use chat until they are unbanned</p>
+                <p class="chat-profile-hint">they cannot use chat until they are unbanned.</p>
                 <div class="chat-profile-row">
                   <button type="button" disabled={busy} onClick={() => void run("unban", {}, `${shown.name} is unbanned`)}>
                     unban
@@ -545,7 +576,7 @@ export default function ChatProfile({
               </>
             ) : (
               <>
-                <p class="chat-profile-hint">removes them from chat. they will see the reason if you give one</p>
+                <p class="chat-profile-hint">removes them from chat. they will see the reason if you give one.</p>
                 <input
                   id="chat-ban-reason"
                   type="text"

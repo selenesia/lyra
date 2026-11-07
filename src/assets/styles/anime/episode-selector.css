@@ -1,4 +1,4 @@
-.episode-selector-grid {
+.episode-selector-options {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   gap: 6px;
@@ -43,7 +43,7 @@
 
 .episode-selector-button:disabled {
   cursor: not-allowed;
-  opacity: 0.35;
+  opacity: 0.5;
   transform: none;
 }
 

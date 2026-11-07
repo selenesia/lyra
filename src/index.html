@@ -96,7 +96,8 @@
           recoveryAttempted = true;
           const target = new URL(window.location.href);
           target.searchParams.set("lyra-recovery", "1");
-          window.location.replace(target.href);
+          window.history.replaceState(window.history.state, "", target.href);
+          window.location.reload();
         };
         window.addEventListener(
           "vite:preloadError",

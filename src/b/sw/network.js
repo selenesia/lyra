@@ -274,6 +274,16 @@ function trackPrefetchUrl(urlStr) {
   }
 }
 
+function rememberPrefetchTime(urlKey) {
+  const now = Date.now();
+  _prefetchTimes.delete(urlKey);
+  _prefetchTimes.set(urlKey, now);
+  for (const [key, at] of _prefetchTimes) {
+    if (now - at < PREFETCH_VALIDITY) break;
+    _prefetchTimes.delete(key);
+  }
+}
+
 async function matchPrefetchedNavHtml(request) {
   const key = prefetchNavCacheKeyRequest(request.url);
   try {
@@ -421,7 +431,7 @@ async function handlePrefetchProxyRequest(event) {
           const cacheKey = prefetchNavCacheKeyRequest(request.url);
           const cache = await caches.open(PREFETCH_CACHE);
           await cache.put(cacheKey, response.clone());
-          _prefetchTimes.set(urlKey, Date.now());
+          rememberPrefetchTime(urlKey);
           capCache(PREFETCH_CACHE, MAX_PREFETCH_ENTRIES);
         } catch {}
         return response;

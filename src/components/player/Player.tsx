@@ -11,34 +11,25 @@ import type { PlayerStatus } from "../../state/store.ts";
 import { showToast } from "../../core/ui/toast.ts";
 import { recordStreamDiagnostic } from "../../core/media/streamDiagnostics.ts";
 import {
-  PLAYER_SIZE_ABR_CONFIG,
-  applyQualitySelection,
-  preferredQualityLevel,
   qualityMenuLabel,
 } from "../../core/media/hlsQuality.ts";
-import { negativeMessage, RequestError } from "../../core/runtime/messages.ts";
+import { negativeMessage } from "../../core/runtime/messages.ts";
 import {
   readMediaState,
   type MediaState,
   type MediaStateHints,
 } from "../../core/media/mediaState.ts";
 import {
-  fetchAnimeEpisodeCount,
-  isAnimeMovieFormat,
   type AnimeSeason,
+  isAnimeMovieFormat,
 } from "../../features/anime/anime.ts";
-import { saveAnimeProgress } from "../../features/anime/animeProgress.ts";
 import {
-  ANIME_QUALITY_KEY,
-  ANIME_LANGUAGE_KEY,
   ANIME_SUBTITLE_KEY,
   ANIME_SUBTITLE_PREFERENCES,
   readAnimeSubtitles,
-  ANIME_SETTING_KEYS,
   readAnimeLanguage,
   readAnimeQuality,
   readAnimeSetting,
-  type AnimeQuality,
 } from "../../core/media/animeSettings.ts";
 import {
   animeIdentityCacheKey,
@@ -48,314 +39,82 @@ import {
   type AnimeIds,
 } from "../../features/anime/animeIdentity.ts";
 import {
-  IconChevronBottom,
-  IconBubbleText,
   IconPlay,
   IconPause,
   IconBack10s,
   IconForwards10s,
-  IconVolumeFull,
-  IconVolumeHalf,
-  IconVolumeMinimum,
-  IconVolumeOff,
   IconFullScreen,
   IconDownsize,
 } from "../icons";
-import EpisodePickerModal from "../anime/EpisodePickerModal.tsx";
 import { attachSeekBar } from "./seekBar.ts";
-import { PlayerMenu, PlayerOption } from "./PlayerMenu.tsx";
-import { attachPlaybackTracks } from "./playbackTracks.ts";
-import { createSourceRecovery } from "./sourceRecovery.ts";
 import { attachCaptionLayout } from "./captionLayout.ts";
 import {
   applySubtitleTrack,
   audioLabels,
-  externalSubtitleTracks,
   preferredAudioVersion,
   selectTrack,
   subtitleLabels,
   trackLabel,
-  trackPreference,
-  trackLanguage,
-  trackRole,
   type AudioTrack,
   type SubtitleTrack,
 } from "./tracks.ts";
-
-const STREAM_INFO_TIMEOUT_MS = 23_000;
-const SUBTITLE_PREFERENCE_KEY = "lyra-anime-subtitle";
-
-interface StreamQualityOption {
-  index: number;
-  label: string;
-  width: number;
-  height: number;
-  bitrate: number;
-}
-
-interface StreamInfoResponse {
-  duration?: number | null;
-  needs_transmux?: boolean;
-  hls?: boolean;
-  quality_fallback?: boolean;
-  available_4k?: boolean;
-  tracks?: unknown;
-  source?: {
-    provider?: string;
-    id?: string;
-    server?: number | string;
-    language?: "sub" | "dub" | string | null;
-    url?: string;
-  };
-  intro?: { start: number; end: number } | null;
-  outro?: { start: number; end: number } | null;
-  qualities?: Array<{
-    index: number;
-    width?: number;
-    height?: number;
-    bitrate?: number;
-    codecs?: string;
-  }>;
-}
-
-interface PlaybackEpisodePartRange {
-  start: number;
-  end: number;
-  ids: AnimeIds;
-}
-
-function mergeEpisodeCount(...counts: number[]): number {
-  return counts.reduce(
-    (largest, count) =>
-      Number.isInteger(count) && count > largest ? count : largest,
-    0,
-  );
-}
-
-function resolvePlayerStatus(
-  status: PlayerStatus,
-  hasSource: boolean,
-  detailsLoading: boolean,
-): PlayerStatus {
-  if (!hasSource) return "idle";
-  if (status === "error") return status;
-  return detailsLoading ? "loading" : status;
-}
-
-function parsePlaybackEpisodeParts(
-  value: string | null,
-): PlaybackEpisodePartRange[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((part) => {
-      if (!part || typeof part !== "object") return [];
-      const candidate = part as {
-        start?: unknown;
-        end?: unknown;
-        ids?: unknown;
-      };
-      const start = Number(candidate.start);
-      const end = Number(candidate.end);
-      if (
-        !Number.isInteger(start) ||
-        !Number.isInteger(end) ||
-        start < 1 ||
-        end < start ||
-        !candidate.ids ||
-        typeof candidate.ids !== "object"
-      ) {
-        return [];
-      }
-      return [
-        { start, end, ids: normalizeAnimeIds(candidate.ids as AnimeIds) },
-      ];
-    });
-  } catch {
-    return [];
-  }
-}
-
-async function fetchStreamInfo(
-  params: URLSearchParams,
-  signal?: AbortSignal,
-): Promise<StreamInfoResponse> {
-  const controller = new AbortController();
-  const abortFromCaller = () => controller.abort(signal?.reason);
-  if (signal?.aborted) abortFromCaller();
-  else signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timeout = window.setTimeout(
-    () =>
-      controller.abort(
-        new DOMException(
-          "stream information request timed out... /ᐠ - ˕ -マ",
-          "TimeoutError",
-        ),
-      ),
-    STREAM_INFO_TIMEOUT_MS,
-  );
-  try {
-    const response = await fetch(`/stream/info?${params.toString()}`, {
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new RequestError("stream information request failed", {
-        code: "STREAM_INFO_UNAVAILABLE",
-        status: response.status,
-      });
-    }
-    return (await response.json()) as StreamInfoResponse;
-  } catch (error) {
-    if (controller.signal.aborted && !signal?.aborted) {
-      throw new RequestError("stream information request timed out", {
-        code: "STREAM_INFO_TIMEOUT",
-      });
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeout);
-    signal?.removeEventListener("abort", abortFromCaller);
-  }
-}
-
-function formatTime(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return "0:00";
-  const totalSeconds = Math.floor(seconds);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const remainingSeconds = totalSeconds % 60;
-  const formattedMinutes = minutes.toString().padStart(2, "0");
-  const formattedSeconds = remainingSeconds.toString().padStart(2, "0");
-
-  return hours > 0
-    ? `${hours}:${formattedMinutes}:${formattedSeconds}`
-    : `${minutes}:${formattedSeconds}`;
-}
-
-function cleanDuration(seconds: number): number {
-  return Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
-}
-
-function sameRenderedMediaState(left: MediaState, right: MediaState): boolean {
-  return (
-    left.status === right.status &&
-    left.sourceReady === right.sourceReady &&
-    left.buffering === right.buffering &&
-    left.bufferingReason === right.bufferingReason &&
-    left.paused === right.paused &&
-    left.ended === right.ended &&
-    left.seeking === right.seeking &&
-    left.duration === right.duration &&
-    left.volume === right.volume &&
-    left.muted === right.muted &&
-    left.playbackRate === right.playbackRate &&
-    left.error === right.error &&
-    left.readyState >= 2 === right.readyState >= 2
-  );
-}
-
-interface SkipRange {
-  start: number;
-  end: number;
-}
-
-interface SkipMarker {
-  label: "skip intro" | "skip outro";
-  end: number;
-}
-
-function activeSkipMarker(
-  state: MediaState,
-  intro: SkipRange | null,
-  outro: SkipRange | null,
-): SkipMarker | null {
-  const time = state.currentTime;
-  if (state.seeking || time === null) return null;
-  if (intro && time >= intro.start && time < intro.end)
-    return { label: "skip intro", end: intro.end };
-  if (outro && time >= outro.start && time < outro.end)
-    return { label: "skip outro", end: outro.end };
-  return null;
-}
-
-function buildNextEpisodeStreamUrl(
-  episode: number,
-  episodeParts: PlaybackEpisodePartRange[],
-  identityIds: AnimeIds,
-  language: "sub" | "dub",
-  session: string,
-  qualityRequest: string,
-): string {
-  const part = episodeParts.find(
-    (candidate) => episode >= candidate.start && episode <= candidate.end,
-  );
-  const sourceEpisode = part ? episode - part.start + 1 : episode;
-  const ids = normalizeAnimeIds({
-    ...(part?.ids || identityIds),
-    anikotoEpisode: undefined,
-  });
-  if (!hasMegaPlayIdentifier(ids)) return "";
-  const query = new URLSearchParams({
-    episode: String(sourceEpisode),
-    language,
-    session,
-  });
-  if (qualityRequest) query.set("preferred_quality", qualityRequest);
-  appendMegaPlayParams(query, ids);
-  return `/stream/anikoto?${query}`;
-}
-
-function startsIn4k(quality: AnimeQuality): boolean {
-  return quality === "auto" || quality === "2160p";
-}
-
-function qualityLabel(height: number, bitrate: number): string {
-  if (height > 0) {
-    const rate =
-      bitrate > 0 ? ` · ${(bitrate / 1_000_000).toFixed(1)} mbps` : "";
-    return `${height === 2160 ? "4k" : `${height}p`}${rate}`;
-  }
-  return bitrate > 0 ? `${(bitrate / 1_000_000).toFixed(1)} mbps` : "source";
-}
-
-function qualityName(label: string | undefined): string {
-  return label?.split(" · ", 1)[0] || "source";
-}
-
-function hlsLoadPolicy(
-  maxTimeToFirstByteMs: number,
-  maxLoadTimeMs: number,
-  timeoutRetries: number,
-  errorRetries: number,
-) {
-  return {
-    default: {
-      maxTimeToFirstByteMs,
-      maxLoadTimeMs,
-      timeoutRetry: {
-        maxNumRetry: timeoutRetries,
-        retryDelayMs: 500,
-        maxRetryDelayMs: 4_000,
-        backoff: "exponential" as const,
-      },
-      errorRetry: {
-        maxNumRetry: errorRetries,
-        retryDelayMs: 500,
-        maxRetryDelayMs: 5_000,
-        backoff: "exponential" as const,
-      },
-    },
-  };
-}
-
-function readPlayerStorage(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
+import type { StreamInfoResponse, StreamQualityOption } from "./streamInfo.ts";
+import {
+  parsePlaybackEpisodeParts,
+  type PlaybackEpisodePartRange,
+  mergeEpisodeCount,
+} from "./episodeParts.ts";
+import {
+  readPlayerStorage,
+  startsIn4k,
+  cleanDuration,
+  type SkipRange,
+  type SkipMarker,
+  SUBTITLE_PREFERENCE_KEY,
+  formatTime,
+  activeSkipMarker,
+  sameRenderedMediaState,
+  resolvePlayerStatus,
+  qualityName,
+  type PlayerSelector,
+} from "./playerState.ts";
+import { attachPlayerShortcuts } from "./playerShortcuts.ts";
+import { attachControlsActivity } from "./playerActivity.ts";
+import { attachMediaEvents } from "./playerMediaEvents.ts";
+import { switchPlayerLanguage, pickAudioTrack } from "./playerLanguage.ts";
+import {
+  loadSidecarSubtitle,
+  pickSubtitle,
+  checkSubtitlePreference,
+} from "./playerSubtitles.ts";
+import { loadStreamDetails } from "./playerStreamDetails.ts";
+import {
+  applyQualityPreference,
+  pickQuality,
+  probeRemote4k,
+  syncQualityPreference,
+} from "./playerQuality.ts";
+import { preloadNextEpisode } from "./playerPreload.ts";
+import { attachPlayerSource, resetSourceState } from "./playerSource.ts";
+import {
+  changePlayerEpisode,
+  scheduleAutoNext,
+  watchAnimeSettings,
+  loadEpisodeCount,
+} from "./playerEpisodes.ts";
+import { persistPlayerProgress } from "./playerProgress.ts";
+import {
+  renderQualityMenu,
+  renderSubtitleMenu,
+  renderAudioMenu,
+  renderLanguageMenu,
+  renderEpisodeMenu,
+} from "./playerMenus.tsx";
+import {
+  renderVolumeControl,
+  renderAutoNextNotice,
+} from "./playerControls.tsx";
+import { togglePlayback } from "./playerPlayback.ts";
 
 export default function Player() {
   const params = useRef(new URLSearchParams(window.location.search)).current;
@@ -478,36 +237,11 @@ export default function Player() {
   const episodeCountRef = useRef(episodeCount);
   episodeCountRef.current = episodeCount;
   const persistProgress = useCallback(
-    (currentTime: number, duration: number, completed = false) => {
-      saveAnimeProgress(
-        {
-          title,
-          posterUrl: poster,
-          ids: normalizeAnimeIds({
-            ...identityIds,
-            anikotoEpisode: activeAnikotoEpisodeId || undefined,
-          }),
-          episode: episodeNumber,
-          sourceEpisode: sourceEpisodeNumber,
-          season: Number(params.get("season")) || 1,
-          episodeCount: episodeCountRef.current,
-          year: Number(params.get("year")) || undefined,
-          format,
-          language,
-          parts: episodeParts.map((part) => ({
-            id: part.start,
-            title,
-            ids: part.ids,
-            episodeCount: part.end - part.start + 1,
-          })),
-          currentTime,
-          duration: cleanDuration(duration),
-          completed,
-          updatedAt: Date.now(),
-        },
-        resumeKey,
-      );
-    },
+    (currentTime: number, duration: number, completed = false) => persistPlayerProgress({
+    title, poster, identityIds, activeAnikotoEpisodeId, episodeNumber,
+    sourceEpisodeNumber, params, episodeCountRef, format, language,
+    episodeParts, resumeKey,
+  }, currentTime, duration, completed),
     [
       title,
       poster,
@@ -743,9 +477,9 @@ export default function Player() {
   const lastSubtitlePreferenceRef = useRef(
     subtitlePreference === "off" ? "" : subtitlePreference,
   );
-  const [openSelector, setOpenSelector] = useState<
-    "episodes" | "language" | "subtitles" | "quality" | "audio" | null
-  >(null);
+  const [openSelector, setOpenSelector] = useState<PlayerSelector | null>(
+    null,
+  );
   const [episodeSelectorMounted, setEpisodeSelectorMounted] = useState(false);
   const episodeSelectorOpen = openSelector === "episodes";
   const episodeSelectorRendered = episodeSelectorOpen || episodeSelectorMounted;
@@ -960,34 +694,10 @@ export default function Player() {
     return () => document.removeEventListener("click", close);
   }, [openSelector]);
 
-  useEffect(() => {
-    if (
-      (!playbackIds.mal &&
-        !playbackIds.anilist &&
-        !playbackIds.anikotoEpisode) ||
-      isAnimeMovieFormat(format) ||
-      episodeParts.length > 1
-    ) {
-      setLoadingEpisodeCount(false);
-      return;
-    }
-    let cancelled = false;
-    setLoadingEpisodeCount(true);
-    fetchAnimeEpisodeCount(playbackIds)
-      .then((count) => {
-        if (!cancelled && count > 0) {
-          setEpisodeCount((currentCount) =>
-            mergeEpisodeCount(currentCount, count, episodeNumber),
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingEpisodeCount(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
+  useEffect(() => loadEpisodeCount({
+    playbackIds, format, episodeParts, setLoadingEpisodeCount, setEpisodeCount,
+    episodeNumber,
+  }), [
     episodeNumber,
     format,
     playbackIds.anilist,
@@ -996,33 +706,10 @@ export default function Player() {
     episodeParts.length,
   ]);
 
-  const togglePlay = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      if (video.ended) {
-        try {
-          video.currentTime = 0;
-        } catch {}
-      }
-      const requestId = ++playRequestRef.current;
-      playIntentRef.current = true;
-      hlsRef.current?.resumeBuffering();
-      video.play().catch(() => {
-        if (requestId !== playRequestRef.current) return;
-        playIntentRef.current = false;
-        playAfterSeekRef.current = false;
-        hlsRef.current?.pauseBuffering();
-        syncMediaState({ buffering: false, bufferingReason: null });
-      });
-    } else {
-      playRequestRef.current += 1;
-      playIntentRef.current = false;
-      playAfterSeekRef.current = false;
-      video.pause();
-      hlsRef.current?.pauseBuffering();
-    }
-  }, [syncMediaState]);
+  const togglePlay = useCallback(() => togglePlayback({
+    videoRef, playRequestRef, playIntentRef, hlsRef, playAfterSeekRef,
+    syncMediaState,
+  }), [syncMediaState]);
 
   const seekTo = useCallback(
     (seconds: number) => {
@@ -1146,141 +833,27 @@ export default function Player() {
     setAutoNext(null);
   }, []);
 
-  useEffect(() => {
-    const syncAnimeSettings = () => {
-      const nextAutoPlay = readAnimeSetting("autoPlayNextEpisode");
-      const nextAutoSkip = readAnimeSetting("autoSkipIntroOutro");
-      setAutoPlayNextEpisode(nextAutoPlay);
-      setAutoSkipIntroOutro(nextAutoSkip);
-      if (!nextAutoPlay) clearAutoNext();
-      if (!nextAutoSkip) autoSkippedMarkerRef.current = null;
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (
-        event.key !== null &&
-        event.key !== ANIME_SETTING_KEYS.autoPlayNextEpisode &&
-        event.key !== ANIME_SETTING_KEYS.autoSkipIntroOutro
-      ) {
-        return;
-      }
-      syncAnimeSettings();
-    };
-    const onAnimeSettingUpdated = () => syncAnimeSettings();
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("animeSettingUpdated", onAnimeSettingUpdated);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener(
-        "animeSettingUpdated",
-        onAnimeSettingUpdated,
-      );
-    };
-  }, [clearAutoNext]);
+  useEffect(() => watchAnimeSettings({
+    setAutoPlayNextEpisode, setAutoSkipIntroOutro, clearAutoNext,
+    autoSkippedMarkerRef,
+  }), [clearAutoNext]);
 
-  useEffect(() => {
-    const apply = () => {
-      const quality = readAnimeQuality();
-      const next = quality === "2160p";
-      const nextAuto4k = startsIn4k(quality);
-      if (next === prefer4k && nextAuto4k === auto4k) return;
-      sourceSwitchTimeRef.current = Math.max(0, pendingSeekRef.current ?? videoRef.current?.currentTime ?? 0);
-      setFailed4kContext("");
-      setPrefer4k(next);
-      setAuto4k(nextAuto4k);
-      setRequested4kContext(next ? playbackContext : "");
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === null || event.key === ANIME_QUALITY_KEY) apply();
-    };
-    const onSetting = (event: Event) => {
-      if ((event as CustomEvent).detail?.key === ANIME_QUALITY_KEY) apply();
-    };
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("animeSettingUpdated", onSetting);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener("animeSettingUpdated", onSetting);
-    };
-  }, [prefer4k, auto4k, playbackContext]);
+  useEffect(() => syncQualityPreference({
+    prefer4k, auto4k, sourceSwitchTimeRef, pendingSeekRef, videoRef,
+    setFailed4kContext, setPrefer4k, setAuto4k, setRequested4kContext,
+    playbackContext,
+  }), [prefer4k, auto4k, playbackContext]);
 
   const changeEpisode = useCallback(
-    (nextEpisode: number, autoplay = false) => {
-      if (
-        nextEpisode === episodeNumber ||
-        nextEpisode < 1 ||
-        (episodeCount > 0 && nextEpisode > episodeCount)
-      ) {
-        setOpenSelector(null);
-        return;
-      }
-
-      clearAutoNext();
-      const video = videoRef.current;
-      sourceContextGenerationRef.current += 1;
-      languageRequestRef.current?.abort();
-      languageRequestRef.current = null;
-      setChangingLanguage(false);
-      const shouldKeepPlaying =
-        autoplay ||
-        Boolean(video && !video.paused && !video.ended) ||
-        playIntentRef.current;
-      const resumeTime = video
-        ? video.currentTime
-        : (currentTimeRef.current ?? 0);
-      if (resumeTime > 0) {
-        persistProgress(
-          resumeTime,
-          mediaStateRef.current.duration || 0,
-          video?.ended,
-        );
-      }
-
-      playIntentRef.current = shouldKeepPlaying;
-      playAfterSeekRef.current = shouldKeepPlaying;
-      if (video && !shouldKeepPlaying) video.pause();
-      syncMediaState({
-        sourceReady: false,
-        buffering: true,
-        bufferingReason: "waiting",
-        error: null,
-        durationHint: null,
-        logicalOffset: 0,
-      });
-      setOpenSelector(null);
-      setConfirmedEpisodeNumber(null);
-      setEpisodeNumber(nextEpisode);
-      setLanguage(nextAudioLanguageRef.current);
-      setActiveAnikotoEpisodeId("");
-      const nextPart = episodeParts.find(
-        (part) => nextEpisode >= part.start && nextEpisode <= part.end,
-      );
-      setActivePartRange(nextPart || null);
-      setActivePartIds(nextPart?.ids || identityIds);
-      setEpisodeOffset(nextPart ? nextPart.start - 1 : 0);
-
-      const currentUrl = new URL(window.location.href);
-      currentUrl.searchParams.set("episode", String(nextEpisode));
-      currentUrl.searchParams.set("language", nextAudioLanguageRef.current);
-      currentUrl.searchParams.set("season", String(currentSeason.number || 1));
-      currentUrl.searchParams.set("episodeName", `E${nextEpisode}`);
-      if (nextPart) {
-        currentUrl.searchParams.set(
-          "source_episode",
-          String(nextEpisode - nextPart.start + 1),
-        );
-      } else {
-        currentUrl.searchParams.delete("source_episode");
-      }
-      for (const key of ["anilist_id", "mal_id", "anikoto_episode_id"]) {
-        currentUrl.searchParams.delete(key);
-      }
-      appendMegaPlayParams(
-        currentUrl.searchParams,
-        nextPart?.ids || identityIds,
-      );
-      currentUrl.searchParams.delete("mochi_url");
-      window.history.replaceState(null, "", currentUrl);
-    },
+    (nextEpisode: number, autoplay = false) => changePlayerEpisode({
+    episodeNumber, episodeCount, setOpenSelector, clearAutoNext, videoRef,
+    sourceContextGenerationRef, languageRequestRef, setChangingLanguage,
+    playIntentRef, currentTimeRef, persistProgress, mediaStateRef,
+    playAfterSeekRef, syncMediaState, setConfirmedEpisodeNumber,
+    setEpisodeNumber, setLanguage, nextAudioLanguageRef,
+    setActiveAnikotoEpisodeId, episodeParts, setActivePartRange,
+    setActivePartIds, identityIds, setEpisodeOffset, currentSeason,
+  }, nextEpisode, autoplay),
     [
       episodeCount,
       episodeNumber,
@@ -1293,25 +866,10 @@ export default function Player() {
     ],
   );
 
-  const startAutoNext = useCallback(() => {
-    const nextEp = episodeNumber + 1;
-    if (!autoPlayNextEpisode || episodeCount <= 0 || nextEp > episodeCount) {
-      return;
-    }
-
-    clearAutoNext();
-    let seconds = 10;
-    setAutoNext({ episode: nextEp, seconds });
-    autoNextTimerRef.current = setInterval(() => {
-      seconds -= 1;
-      if (seconds <= 0) {
-        clearAutoNext();
-        changeEpisode(nextEp, true);
-      } else {
-        setAutoNext({ episode: nextEp, seconds });
-      }
-    }, 1000);
-  }, [
+  const startAutoNext = useCallback(() => scheduleAutoNext({
+    episodeNumber, autoPlayNextEpisode, episodeCount, clearAutoNext,
+    setAutoNext, autoNextTimerRef, changeEpisode,
+  }), [
     autoPlayNextEpisode,
     clearAutoNext,
     changeEpisode,
@@ -1328,400 +886,39 @@ export default function Player() {
     if (video.volume > 0) lastVolumeRef.current = video.volume;
   }, []);
 
-  useLayoutEffect(() => {
-    clearAutoNext();
-    setAvailable4kSource("");
-    preferenceNoticesRef.current.clear();
-    fallbackPendingRef.current = false;
-    subtitleRetryRef.current = false;
-    failedSubtitleIdsRef.current.clear();
-    setFailedSubtitleIds([]);
-    setLoadedSubtitle(null);
-    setSubtitleTracks([]);
-    setEmbeddedSubtitles([]);
-    setActiveSubtitle(-1);
-    setAudioTracksReady(false);
-    const video = videoRef.current;
-    if (video) applySubtitleTrack(video, undefined, hlsRef.current);
-    setConfirmedEpisodeNumber(null);
-    setPlaybackStarted(false);
-    manifestDurationRef.current = null;
-    sourceContextGenerationRef.current += 1;
-    const switchTime = sourceSwitchTimeRef.current;
-    sourceSwitchTimeRef.current = null;
-    pendingSeekRef.current = switchTime;
-    resumeAppliedRef.current = false;
-    retryCountRef.current = 0;
-    playRequestRef.current += 1;
-    playAfterSeekRef.current = playIntentRef.current;
-    mediaHintsRef.current = {
-      ...mediaHintsRef.current,
-      logicalOffset: 0,
-      sourceReady: false,
-      buffering: Boolean(baseVideoSrc),
-      bufferingReason: baseVideoSrc ? "waiting" : null,
-      error: null,
-      durationHint: null,
-    };
-    renderPlaybackTime(null);
-    syncMediaState(mediaHintsRef.current);
-  }, [baseVideoSrc, clearAutoNext, renderPlaybackTime, syncMediaState]);
+  useLayoutEffect(() => resetSourceState({
+    clearAutoNext, setAvailable4kSource, preferenceNoticesRef,
+    fallbackPendingRef, subtitleRetryRef, failedSubtitleIdsRef,
+    setFailedSubtitleIds, setLoadedSubtitle, setSubtitleTracks,
+    setEmbeddedSubtitles, setActiveSubtitle, setAudioTracksReady, videoRef,
+    hlsRef, setConfirmedEpisodeNumber, setPlaybackStarted, manifestDurationRef,
+    sourceContextGenerationRef, sourceSwitchTimeRef, pendingSeekRef,
+    resumeAppliedRef, retryCountRef, playRequestRef, playAfterSeekRef,
+    playIntentRef, mediaHintsRef, baseVideoSrc, renderPlaybackTime,
+    syncMediaState,
+  }), [baseVideoSrc, clearAutoNext, renderPlaybackTime, syncMediaState]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoSrc) return;
-    const hlsSession = ++hlsSessionRef.current;
-    tracksSourceRef.current = videoSrc;
-    const sourceContext = sourceContextKey;
-    sessionStartedAtRef.current = performance.now();
-    firstSegmentRecordedRef.current = false;
-    firstFrameRecordedRef.current = false;
-    rebufferStartedAtRef.current = null;
-    rebufferCountRef.current = 0;
-    totalRebufferDurationMsRef.current = 0;
-    recordStreamDiagnostic("playback_start", {
-      episode: episodeNumber,
-      language,
-    });
-    manifestDurationRef.current = null;
-    syncMediaState({
-      error: null,
-      buffering: true,
-      sourceReady: false,
-      bufferingReason: "waiting",
-      durationHint: null,
-      logicalOffset: 0,
-    });
-    setQualityOptions([]);
-    setSelectedQuality(-1);
-    setActiveQuality(-1);
-    setAutoQuality(-1);
-    setAudioTracksReady(false);
-    setEmbeddedSubtitles([]);
-    if (playIntentRef.current) {
-      playAfterSeekRef.current = true;
-    }
-    const trackCallbacks = {
-      onSubtitles: setEmbeddedSubtitles,
-      onAudio: (tracks: AudioTrack[]) => {
-        setAudioTracks(tracks);
-        setAudioTracksReady(true);
-      },
-      onAudioLoading: () => {
-        setAudioTracksReady(false);
-        setOpenSelector((current) => (current === "audio" ? null : current));
-      },
-      onActiveAudio: setActiveAudioTrack,
-      selectAudio: (tracks: AudioTrack[]) =>
-        selectTrack(
-          tracks,
-          audioPreferenceRef.current,
-          "audio",
-          language,
-          audioChoiceRef.current.source === videoSrc
-            ? audioChoiceRef.current.id
-            : undefined,
-        ),
-    };
-    if (Hls.isSupported()) {
-      let networkRecoveries = 0;
-      let mediaRecoveries = 0;
-      let recoveryTimer: number | null = null;
-      const hls = new Hls({
-        enableWorker: true,
-        startFragPrefetch: true,
-        backBufferLength: 30,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: (prefer4k || request4k || start4k ? 64 : 24) * 1024 * 1024,
-        ...PLAYER_SIZE_ABR_CONFIG,
-        manifestLoadPolicy: hlsLoadPolicy(23_000, 25_000, 1, 1),
-        playlistLoadPolicy: hlsLoadPolicy(8_000, 15_000, 2, 2),
-        fragLoadPolicy: hlsLoadPolicy(10_000, 45_000, 2, 3),
-        keyLoadPolicy: hlsLoadPolicy(8_000, 20_000, 2, 2),
-      });
-      hlsRef.current = hls;
-      const isCurrentHls = () =>
-        hlsSession === hlsSessionRef.current &&
-        hlsRef.current === hls &&
-        sourceContext === sourceContextRef.current;
-      const sourceRecovery = createSourceRecovery(
-        () => {
-          if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
-          recoveryTimer = null;
-          pendingSeekRef.current ??= video.currentTime;
-          hls.stopLoad();
-        },
-        () => {
-          if (!isCurrentHls()) return;
-          fallbackPendingRef.current = false;
-          hls.loadSource(videoSrc);
-          setInfoRevision((revision) => revision + 1);
-        },
-      );
-      const onPlaybackProgress = () => sourceRecovery.progress(video.currentTime);
-      video.addEventListener("timeupdate", onPlaybackProgress);
-      const detachTracks = attachPlaybackTracks({
-        video,
-        hls,
-        isCurrent: isCurrentHls,
-        ...trackCallbacks,
-      });
-      hls.subtitleDisplay = false;
-      hls.subtitleTrack = -1;
-      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        if (isCurrentHls()) hls.loadSource(videoSrc);
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event, manifest) => {
-        if (!isCurrentHls()) return;
-        networkRecoveries = 0;
-        syncMediaState({ sourceReady: true, error: null });
-        const levels = manifest.levels
-          .map((level, index) => {
-            const width = Number(level.width || 0);
-            const height = Number(level.height || 0);
-            const bitrate = Number(level.bitrate || 0);
-            return {
-              index,
-              width,
-              height,
-              bitrate,
-              label: qualityLabel(height, bitrate),
-            } satisfies StreamQualityOption;
-          })
-          .sort(
-            (left, right) =>
-              right.height - left.height || right.bitrate - left.bitrate,
-          );
-        setQualityOptions(levels);
-        const preferredLevel = preferredQualityLevel(
-          request4k ? "2160p" : readAnimeQuality(),
-          levels,
-        );
-        applyQualitySelection(
-          hls,
-          preferredLevel,
-          levels.map((level) => level.index),
-        );
-        setSelectedQuality(preferredLevel);
-        setActiveQuality(-1);
-        if (preferredLevel < 0) {
-          const nextAutoLevel = Number(hls.nextAutoLevel);
-          setAutoQuality(
-            levels.some((level) => level.index === nextAutoLevel)
-              ? nextAutoLevel
-              : -1,
-          );
-        } else {
-          setAutoQuality(-1);
-        }
-        recordStreamDiagnostic("manifest_ready", {
-          elapsedMs: Math.round(
-            performance.now() - sessionStartedAtRef.current,
-          ),
-          levels: manifest.levels.length,
-        });
-      });
-      hls.on(Hls.Events.LEVEL_LOADED, (_event, levelInfo) => {
-        if (!isCurrentHls()) return;
-        const nextDuration = Number(levelInfo.details.totalduration || 0);
-        if (
-          levelInfo.details.live === false &&
-          Number.isFinite(nextDuration) &&
-          nextDuration > 0 &&
-          manifestDurationRef.current === null
-        ) {
-          manifestDurationRef.current = nextDuration;
-          syncMediaState({ durationHint: nextDuration, sourceReady: true });
-        }
-      });
-      hls.on(Hls.Events.LEVEL_SWITCHING, (_event, levelInfo) => {
-        if (!isCurrentHls() || !hls.autoLevelEnabled) return;
-        const level = Number(levelInfo.level);
-        setAutoQuality(Number.isInteger(level) && level >= 0 ? level : -1);
-      });
-      hls.on(Hls.Events.LEVEL_SWITCHED, (_event, levelInfo) => {
-        if (!isCurrentHls()) return;
-        const level = Number(levelInfo.level);
-        setActiveQuality(Number.isInteger(level) && level >= 0 ? level : -1);
-        syncMediaState({ sourceReady: true });
-      });
-      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_event, trackInfo) => {
-        if (!isCurrentHls()) return;
-        const track = Number(trackInfo.id);
-        setActiveAudioTrack(Number.isInteger(track) && track >= 0 ? track : -1);
-        syncMediaState({ sourceReady: true });
-      });
-      hls.on(Hls.Events.FRAG_LOADED, (_event, fragmentInfo) => {
-        if (!isCurrentHls()) return;
-        networkRecoveries = 0;
-        if (firstSegmentRecordedRef.current) return;
-        firstSegmentRecordedRef.current = true;
-        const stats = fragmentInfo.frag.stats;
-        const loading = stats.loading;
-        recordStreamDiagnostic("first_segment", {
-          elapsedMs: Math.round(
-            performance.now() - sessionStartedAtRef.current,
-          ),
-          bytes: stats.loaded,
-          ttfbMs: Math.round(loading.first - loading.start),
-          downloadMs: Math.round(loading.end - loading.first),
-          retries: stats.retry,
-        });
-      });
-      hls.on(Hls.Events.ERROR, (_event, hlsError) => {
-        if (!isCurrentHls()) return;
-        recordStreamDiagnostic("hls_error", {
-          type: hlsError.type,
-          detail: hlsError.details,
-          status: hlsError.response?.code ?? null,
-          fatal: hlsError.fatal,
-        });
-        if (sourceRecovery.recover(hlsError)) return;
-        if (!hlsError.fatal) return;
-        if (
-          hlsError.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
-          hlsError.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT
-        ) {
-          if (fallbackFrom4k()) return;
-          syncMediaState({
-            error: unavailableMessage(hlsError.response?.code),
-            buffering: false,
-          });
-          return;
-        }
-        if (hlsError.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          if (networkRecoveries < 1 && recoveryTimer === null) {
-            const delay = 500 * 2 ** networkRecoveries;
-            networkRecoveries += 1;
-            recoveryTimer = window.setTimeout(() => {
-              recoveryTimer = null;
-              if (isCurrentHls()) hls.startLoad(video.currentTime);
-            }, delay);
-            return;
-          }
-        }
-        if (
-          hlsError.type === Hls.ErrorTypes.MEDIA_ERROR &&
-          mediaRecoveries < 1
-        ) {
-          mediaRecoveries += 1;
-          hls.recoverMediaError();
-          return;
-        }
-        if (fallbackFrom4k()) return;
-        syncMediaState({
-          error: negativeMessage("playback was interrupted; please try again"),
-          buffering: false,
-        });
-      });
-      hls.attachMedia(video);
-      return () => {
-        sourceRecovery.dispose();
-        video.removeEventListener("timeupdate", onPlaybackProgress);
-        if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
-        if (hlsSessionRef.current === hlsSession) hlsSessionRef.current += 1;
-        detachTracks();
-        hls.destroy();
-        if (hlsRef.current === hls) hlsRef.current = null;
-      };
-    }
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      const detachTracks = attachPlaybackTracks({
-        video,
-        isCurrent: () =>
-          hlsSession === hlsSessionRef.current &&
-          sourceContext === sourceContextRef.current,
-        ...trackCallbacks,
-      });
-      video.src = videoSrc;
-      video.load();
-      return () => {
-        if (hlsSessionRef.current === hlsSession) hlsSessionRef.current += 1;
-        detachTracks();
-        video.removeAttribute("src");
-        video.load();
-      };
-    }
-    syncMediaState({
-      error: negativeMessage("hls playback is not supported in this browser"),
-      buffering: false,
-    });
-  }, [episodeNumber, language, videoSrc, syncMediaState, prefer4k, request4k, start4k, fallbackFrom4k, unavailableMessage]);
+  useEffect(() => attachPlayerSource({
+    videoRef, videoSrc, hlsSessionRef, tracksSourceRef, sourceContextKey,
+    sessionStartedAtRef, firstSegmentRecordedRef, firstFrameRecordedRef,
+    rebufferStartedAtRef, rebufferCountRef, totalRebufferDurationMsRef,
+    episodeNumber, language, manifestDurationRef, syncMediaState,
+    setQualityOptions, setSelectedQuality, setActiveQuality, setAutoQuality,
+    setAudioTracksReady, setEmbeddedSubtitles, playIntentRef, playAfterSeekRef,
+    setAudioTracks, setOpenSelector, setActiveAudioTrack, audioPreferenceRef,
+    audioChoiceRef, prefer4k, request4k, start4k, hlsRef, sourceContextRef,
+    pendingSeekRef, fallbackPendingRef, setInfoRevision, fallbackFrom4k,
+    unavailableMessage,
+  }), [episodeNumber, language, videoSrc, syncMediaState, prefer4k, request4k, start4k, fallbackFrom4k, unavailableMessage]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoSrc || request4k || hasLocal4k) return;
-    const controller = new AbortController();
-    let started = false;
-    const discover = () => {
-      if (started || video.paused || video.readyState < 3) return;
-      started = true;
-      const query = new URLSearchParams(videoSrc.split("?", 2)[1]);
-      query.set("discover_quality", "2160p");
-      void fetchStreamInfo(query, controller.signal).then((info) => {
-        if (!controller.signal.aborted && info.available_4k === true) {
-          setAvailable4kSource(videoSrc);
-        }
-      }).catch(() => {});
-    };
-    video.addEventListener("playing", discover);
-    discover();
-    return () => {
-      controller.abort();
-      video.removeEventListener("playing", discover);
-    };
-  }, [videoSrc, request4k, hasLocal4k]);
+  useEffect(() => probeRemote4k({
+    videoRef, videoSrc, request4k, hasLocal4k, setAvailable4kSource,
+  }), [videoSrc, request4k, hasLocal4k]);
 
-  useEffect(() => {
-    if (
-      preloadSource !== videoSrc ||
-      episodeNumber < 1 ||
-      episodeCount <= episodeNumber ||
-      isAnimeMovieFormat(format)
-    ) {
-      return;
-    }
-    const nextVideoSrc = buildNextEpisodeStreamUrl(
-      episodeNumber + 1,
-      episodeParts,
-      identityIds,
-      language,
-      streamSessionRef.current,
-      auto4k ? "auto" : "",
-    );
-    if (!nextVideoSrc) return;
-
-    const preloadVideo = document.createElement("video");
-    preloadVideo.preload = "auto";
-    preloadVideo.crossOrigin = "anonymous";
-    preloadVideo.muted = true;
-    preloadVideo.playsInline = true;
-    let hls: Hls | null = null;
-
-    if (Hls.isSupported()) {
-      hls = new Hls({
-        enableWorker: true,
-        backBufferLength: 0,
-        maxBufferLength: 12,
-        maxMaxBufferLength: 12,
-      });
-      hls.attachMedia(preloadVideo);
-      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-        hls?.loadSource(nextVideoSrc);
-      });
-    } else if (preloadVideo.canPlayType("application/vnd.apple.mpegurl")) {
-      preloadVideo.src = nextVideoSrc;
-      preloadVideo.load();
-    }
-
-    return () => {
-      hls?.destroy();
-      preloadVideo.pause();
-      preloadVideo.removeAttribute("src");
-      preloadVideo.load();
-    };
-  }, [
+  useEffect(() => preloadNextEpisode({
+    preloadSource, videoSrc, episodeNumber, episodeCount, format, episodeParts,
+    identityIds, language, streamSessionRef, auto4k,
+  }), [
     preloadSource,
     videoSrc,
     episodeCount,
@@ -1744,25 +941,10 @@ export default function Player() {
   }, [qualityOptions]);
 
   const chooseQuality = useCallback(
-    (index: number) => {
-      const hls = hlsRef.current;
-      if (!hls) return;
-      const changed = hls.manualLevel !== index;
-      if (
-        !applyQualitySelection(
-          hls,
-          index,
-          qualityOptions.map((option) => option.index),
-        )
-      )
-        return;
-      setSelectedQuality(index);
-      if (index < 0) refreshAutoQuality();
-      setOpenSelector(null);
-      if (changed && videoRef.current?.paused) {
-        showToast("success", "please unpause for quality change to apply");
-      }
-    },
+    (index: number) => pickQuality({
+    hlsRef, qualityOptions, setSelectedQuality, refreshAutoQuality,
+    setOpenSelector, videoRef,
+  }, index),
     [qualityOptions, refreshAutoQuality],
   );
 
@@ -1776,57 +958,10 @@ export default function Player() {
     setOpenSelector(null);
   }, [hasRemote4k, playbackContext]);
 
-  useEffect(() => {
-    if (qualityOptions.length === 0) return;
-
-    const checkPreference = () => {
-      const preference = readAnimeQuality();
-      if (
-        preference !== "auto" &&
-        preference !== "2160p" &&
-        !qualityOptions.some(
-          (level) => level.height === Number.parseInt(preference, 10),
-        )
-      ) {
-        notifyPreference(`quality:${preference}`, "unavailable");
-      }
-    };
-    const applyPreference = () => {
-      const hls = hlsRef.current;
-      if (!hls) return;
-      const level = preferredQualityLevel(readAnimeQuality(), qualityOptions);
-      if (
-        !applyQualitySelection(
-          hls,
-          level,
-          qualityOptions.map((option) => option.index),
-        )
-      )
-        return;
-      setSelectedQuality(level);
-      if (level < 0) refreshAutoQuality();
-      setOpenSelector(null);
-      checkPreference();
-    };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === ANIME_QUALITY_KEY) applyPreference();
-    };
-    const onAnimeSettingUpdated = (event: Event) => {
-      if ((event as CustomEvent).detail?.key === ANIME_QUALITY_KEY) {
-        applyPreference();
-      }
-    };
-    checkPreference();
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("animeSettingUpdated", onAnimeSettingUpdated);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener(
-        "animeSettingUpdated",
-        onAnimeSettingUpdated,
-      );
-    };
-  }, [qualityOptions, refreshAutoQuality, notifyPreference]);
+  useEffect(() => applyQualityPreference({
+    qualityOptions, notifyPreference, hlsRef, setSelectedQuality,
+    refreshAutoQuality, setOpenSelector,
+  }), [qualityOptions, refreshAutoQuality, notifyPreference]);
 
   useEffect(() => {
     const apply = () => {
@@ -1847,31 +982,10 @@ export default function Player() {
     };
   }, []);
 
-  useEffect(() => {
-    const preference = readAnimeSubtitles();
-    if (
-      loadingStreamInfo ||
-      mediaState.readyState < 2 ||
-      (preference !== "english" && preference !== "english (forced)") ||
-      subtitlePreference !== ANIME_SUBTITLE_PREFERENCES[preference]
-    )
-      return;
-    const available = subtitleTracks.some(
-      (track) =>
-        trackLanguage(track.language, track.label).split("-")[0] === "en" &&
-        (preference === "english (forced)"
-          ? trackRole(track) === "forced"
-          : ["main", "sdh"].includes(trackRole(track))),
-    );
-    if (available) return;
-    const timer = window.setTimeout(() => {
-      notifyPreference(
-        `subtitles:${preference}`,
-        "selected subs are unavailable",
-      );
-    }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [
+  useEffect(() => checkSubtitlePreference({
+    loadingStreamInfo, mediaState, subtitlePreference, subtitleTracks,
+    notifyPreference,
+  }), [
     subtitleTracks,
     subtitlePreference,
     loadingStreamInfo,
@@ -1881,138 +995,23 @@ export default function Player() {
   ]);
 
   const chooseAudioTrack = useCallback(
-    (index: number) => {
-      const track = audioTracks[index];
-      if (!track || !audioTracksReady || tracksSourceRef.current !== videoSrc)
-        return;
-      const hls = hlsRef.current;
-      if (track.hlsIndex !== undefined) {
-        if (!hls || !hls.audioTracks[track.hlsIndex]) return;
-        hls.audioTrack = track.hlsIndex;
-      } else if (track.nativeTrack) {
-        for (const candidate of audioTracks) {
-          if (candidate.nativeTrack)
-            candidate.nativeTrack.enabled = candidate === track;
-        }
-        setActiveAudioTrack(index);
-      } else {
-        return;
-      }
-      audioChoiceRef.current = { source: videoSrc, id: track.id };
-      const preference = trackPreference(track);
-      audioPreferenceRef.current = preference;
-      const code = trackLanguage(track.language, track.label).split("-")[0];
-      const version = code === "ja" ? "sub" : code === "en" ? "dub" : null;
-      if (version) {
-        nextAudioLanguageRef.current = version;
-        audioPreferencesRef.current[version] = preference;
-      }
-      try {
-        localStorage.setItem("lyra-anime-audio", preference);
-        if (version) localStorage.setItem(`lyra-anime-audio-${version}`, preference);
-      } catch {}
-      setOpenSelector(null);
-    },
+    (index: number) => pickAudioTrack({
+    audioTracks, audioTracksReady, tracksSourceRef, videoSrc, hlsRef,
+    setActiveAudioTrack, audioChoiceRef, audioPreferenceRef,
+    nextAudioLanguageRef, audioPreferencesRef, setOpenSelector,
+  }, index),
     [audioTracks, audioTracksReady, videoSrc],
   );
 
-  useEffect(() => {
-    if (
-      !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
-      !hasMegaPlayIdentifier(playbackIds)
-    ) {
-      setLoadingStreamInfo(false);
-      return;
-    }
-    const controller = new AbortController();
-    const requestGeneration = ++sourceGenerationRef.current;
-    const requestContext = sourceContextRef.current;
-    setLoadingStreamInfo(true);
-    const startedAt = performance.now();
-    manifestDurationRef.current = null;
-    setIntroMarker(null);
-    setOutroMarker(null);
-    const params = new URLSearchParams({
-      episode: String(sourceEpisodeNumber),
-      language,
-      session: streamSessionRef.current,
-    });
-    if (qualityRequest) params.set("preferred_quality", qualityRequest);
-    appendMegaPlayParams(params, playbackIds);
-
-    const confirmed = languageStreamInfoRef.current;
-    languageStreamInfoRef.current = null;
-    const streamInfo =
-      confirmed?.params === params.toString()
-        ? Promise.resolve(confirmed.info)
-        : fetchStreamInfo(params, controller.signal);
-    streamInfo
-      .then((info) => {
-        if (
-          controller.signal.aborted ||
-          requestGeneration !== sourceGenerationRef.current ||
-          requestContext !== sourceContextRef.current
-        ) {
-          return;
-        }
-        recordStreamDiagnostic("stream_info_ready", {
-          elapsedMs: Math.round(performance.now() - startedAt),
-          tracks: Array.isArray(info?.tracks) ? info.tracks.length : 0,
-        });
-        const nextDuration = Number(info?.duration || 0);
-        if (Number.isFinite(nextDuration) && nextDuration > 0) {
-          manifestDurationRef.current = nextDuration;
-          syncMediaState({ durationHint: nextDuration });
-        }
-        setIntroMarker(info?.intro || null);
-        setOutroMarker(info?.outro || null);
-        setStreamProvider(info.source?.provider || "");
-        fallbackPendingRef.current = requested4kContext === playbackContext &&
-          (info.quality_fallback === true || (!request4k &&
-            !info.qualities?.some((quality) => Number(quality.height) >= 2160)));
-        notify4kFallback();
-        const tracks = externalSubtitleTracks(info?.tracks);
-        setSubtitleTracks(tracks);
-        if (
-          readPlayerStorage(ANIME_LANGUAGE_KEY) &&
-          language === readAnimeLanguage() &&
-          info.source?.language !== language
-        ) {
-          notifyPreference("audio", "selected audio is unconfirmed");
-        }
-      })
-      .catch((err) => {
-        if (
-          controller.signal.aborted ||
-          requestGeneration !== sourceGenerationRef.current ||
-          requestContext !== sourceContextRef.current
-        ) {
-          return;
-        }
-        recordStreamDiagnostic("stream_info_error", {
-          elapsedMs: Math.round(performance.now() - startedAt),
-          code: err instanceof RequestError ? err.code : "STREAM_INFO_UNKNOWN",
-          status: err instanceof RequestError ? err.status : undefined,
-          message: negativeMessage("stream information request failed"),
-        });
-        if (!mediaStateRef.current.sourceReady && err instanceof RequestError && err.status === 404) {
-          syncMediaState({ error: unavailableMessage(404), buffering: false });
-        }
-      })
-      .finally(() => {
-        if (
-          !controller.signal.aborted &&
-          requestGeneration === sourceGenerationRef.current &&
-          requestContext === sourceContextRef.current
-        ) {
-          setLoadingStreamInfo(false);
-        }
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, [
+  useEffect(() => loadStreamDetails({
+    episodeNumber, playbackIds, setLoadingStreamInfo, sourceGenerationRef,
+    sourceContextRef, manifestDurationRef, setIntroMarker, setOutroMarker,
+    sourceEpisodeNumber, language, streamSessionRef, qualityRequest,
+    languageStreamInfoRef, syncMediaState, setStreamProvider,
+    fallbackPendingRef, requested4kContext, playbackContext, request4k,
+    notify4kFallback, setSubtitleTracks, notifyPreference, mediaStateRef,
+    unavailableMessage,
+  }), [
     sourceEpisodeNumber,
     playbackIds.anilist,
     playbackIds.mal,
@@ -2071,47 +1070,11 @@ export default function Player() {
     [sourceContextKey, videoSrc],
   );
 
-  useEffect(() => {
-    if (
-      !selectedSidecar?.src ||
-      (loadedSubtitle?.source === videoSrc &&
-        loadedSubtitle.id === selectedSidecar.id)
-    )
-      return;
-    const track = selectedSidecar;
-    const controller = new AbortController();
-    let cancelled = false;
-    const timeout = window.setTimeout(() => controller.abort(), 20_000);
-    void (async () => {
-      try {
-        const response = await fetch(track.src!, { signal: controller.signal });
-        if (cancelled || sourceContextKey !== sourceContextRef.current) return;
-        if (response.status === 409 && !subtitleRetryRef.current) {
-          subtitleRetryRef.current = true;
-          failSubtitle(track.id, false, 409);
-          setInfoRevision((revision) => revision + 1);
-          return;
-        }
-        if (!response.ok) {
-          failSubtitle(track.id, true, response.status);
-          return;
-        }
-        const body = await response.blob();
-        if (cancelled || sourceContextKey !== sourceContextRef.current) return;
-        const objectUrl = URL.createObjectURL(body);
-        setLoadedSubtitle({ source: videoSrc, id: track.id, url: objectUrl });
-      } catch {
-        if (!cancelled) failSubtitle(track.id);
-      } finally {
-        window.clearTimeout(timeout);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [
+  useEffect(() => loadSidecarSubtitle({
+    selectedSidecar, loadedSubtitle, videoSrc, sourceContextKey,
+    sourceContextRef, subtitleRetryRef, failSubtitle, setInfoRevision,
+    setLoadedSubtitle,
+  }), [
     selectedSidecar,
     loadedSubtitle,
     videoSrc,
@@ -2126,24 +1089,10 @@ export default function Player() {
   }, [loadedSubtitle]);
 
   const chooseSubtitle = useCallback(
-    (index: number) => {
-      if (index < -1 || index >= subtitleTracks.length) return;
-      const selected = subtitleTracks[index];
-      const preference = selected ? trackPreference(selected) : "off";
-      if (selected) {
-        lastSubtitlePreferenceRef.current = preference;
-      } else if (subtitleTracks[selectedSubtitle]) {
-        lastSubtitlePreferenceRef.current = trackPreference(
-          subtitleTracks[selectedSubtitle],
-        );
-      }
-      setSubtitlePreference(preference);
-      setSubtitleChoice({ source: videoSrc, id: selected?.id || "" });
-      try {
-        localStorage.setItem(SUBTITLE_PREFERENCE_KEY, preference);
-      } catch {}
-      setOpenSelector(null);
-    },
+    (index: number) => pickSubtitle({
+    subtitleTracks, lastSubtitlePreferenceRef, selectedSubtitle,
+    setSubtitlePreference, setSubtitleChoice, videoSrc, setOpenSelector,
+  }, index),
     [subtitleTracks, selectedSubtitle, videoSrc],
   );
 
@@ -2162,105 +1111,14 @@ export default function Player() {
   }, [subtitleTracks, selectedSubtitle, chooseSubtitle, language]);
 
   const changeLanguage = useCallback(
-    async (nextLanguage: "sub" | "dub") => {
-      setOpenSelector(null);
-      if (
-        nextLanguage === language ||
-        changingLanguage ||
-        !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
-        !hasMegaPlayIdentifier(playbackIds)
-      ) {
-        return;
-      }
-      const controller = new AbortController();
-      languageRequestRef.current?.abort();
-      languageRequestRef.current = controller;
-      setChangingLanguage(true);
-      const video = videoRef.current;
-      const params = new URLSearchParams({
-        episode: String(sourceEpisodeNumber),
-        language: nextLanguage,
-        session: streamSessionRef.current,
-      });
-      if (auto4k) params.set("preferred_quality", "auto");
-      appendMegaPlayParams(params, playbackIds);
-      const requestContext = sourceContextRef.current;
-      const requestGeneration = sourceContextGenerationRef.current;
-      try {
-        const info = await fetchStreamInfo(params, controller.signal);
-        if (
-          controller.signal.aborted ||
-          requestContext !== sourceContextRef.current ||
-          requestGeneration !== sourceContextGenerationRef.current
-        ) {
-          return;
-        }
-        if (info.source?.language !== nextLanguage) {
-          throw new RequestError("selected audio is unconfirmed", {
-            code: "AUDIO_LANGUAGE_UNCONFIRMED",
-          });
-        }
-        sourceSwitchTimeRef.current = Math.max(
-          0,
-          pendingSeekRef.current ?? video?.currentTime ?? 0,
-        );
-        playAfterSeekRef.current = playIntentRef.current;
-        if (video && video.currentTime > 0) {
-          persistProgress(
-            video.currentTime,
-            mediaStateRef.current.duration || 0,
-            video.ended,
-          );
-        }
-        const currentUrl = new URL(window.location.href);
-        currentUrl.searchParams.set("language", nextLanguage);
-        currentUrl.searchParams.delete("mochi_url");
-        window.history.replaceState(null, "", currentUrl);
-        languageStreamInfoRef.current = { params: params.toString(), info };
-        nextAudioLanguageRef.current = nextLanguage;
-        audioPreferenceRef.current =
-          audioPreferencesRef.current[nextLanguage] ||
-          trackPreference({
-            id: "",
-            label: "",
-            language: nextLanguage === "sub" ? "ja" : "en",
-          });
-        try {
-          localStorage.setItem("lyra-anime-audio", audioPreferenceRef.current);
-        } catch {}
-        setLanguage(nextLanguage);
-      } catch (error) {
-        if (
-          controller.signal.aborted ||
-          requestContext !== sourceContextRef.current ||
-          requestGeneration !== sourceContextGenerationRef.current
-        ) {
-          return;
-        }
-        const code =
-          error instanceof RequestError
-            ? error.code
-            : "AUDIO_LANGUAGE_UNAVAILABLE";
-        recordStreamDiagnostic("audio_language_error", {
-          language: nextLanguage,
-          code,
-          status: error instanceof RequestError ? error.status : undefined,
-        });
-        showToast(
-          "error",
-          code === "AUDIO_LANGUAGE_UNCONFIRMED"
-            ? "selected audio is unconfirmed"
-            : "selected audio is unavailable",
-          undefined,
-          4000,
-        );
-      } finally {
-        if (languageRequestRef.current === controller) {
-          languageRequestRef.current = null;
-          setChangingLanguage(false);
-        }
-      }
-    },
+    (nextLanguage: "sub" | "dub") => switchPlayerLanguage({
+    setOpenSelector, language, changingLanguage, episodeNumber, playbackIds,
+    languageRequestRef, setChangingLanguage, videoRef, sourceEpisodeNumber,
+    streamSessionRef, auto4k, sourceContextRef, sourceContextGenerationRef,
+    sourceSwitchTimeRef, pendingSeekRef, playAfterSeekRef, playIntentRef,
+    persistProgress, mediaStateRef, languageStreamInfoRef, nextAudioLanguageRef,
+    audioPreferenceRef, audioPreferencesRef, setLanguage,
+  }, nextLanguage),
     [
       language,
       changingLanguage,
@@ -2271,393 +1129,17 @@ export default function Player() {
     ],
   );
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const mediaSession = ++mediaSessionRef.current;
-    const context = sourceContextKey;
-    let lastKnownTime = 0;
-    let lastKnownDuration = 0;
-    let completed = false;
-    let lastSavedAt = 0;
-    const isCurrentMedia = () =>
-      mediaSession === mediaSessionRef.current &&
-      videoRef.current === video &&
-      context === sourceContextRef.current;
-
-    const boundedTime = (seconds: number) => {
-      const durationLimit =
-        mediaStateRef.current.duration ||
-        manifestDurationRef.current ||
-        cleanDuration(video.duration);
-      return durationLimit > 0
-        ? Math.max(0, Math.min(durationLimit, seconds))
-        : Math.max(0, seconds);
-    };
-    const effectiveTime = () => video.currentTime;
-    const restorePendingSeek = () => {
-      const pending = pendingSeekRef.current;
-      if (pending === null || video.readyState === 0) return;
-      const target = boundedTime(pending);
-      if (Math.abs(video.currentTime - target) > 0.01) {
-        try {
-          video.currentTime = target;
-        } catch {}
-        renderPlaybackTime(effectiveTime());
-      }
-    };
-    const clearSettledPendingSeek = () => {
-      const pending = pendingSeekRef.current;
-      if (
-        pending !== null &&
-        !video.seeking &&
-        Math.abs(effectiveTime() - pending) < 0.25
-      ) {
-        pendingSeekRef.current = null;
-      }
-    };
-    const resumePlaybackIfWanted = () => {
-      if (!playIntentRef.current && !playAfterSeekRef.current) return;
-      hlsRef.current?.resumeBuffering();
-      const requestId = ++playRequestRef.current;
-      video
-        .play()
-        .then(() => {
-          if (requestId !== playRequestRef.current || !isCurrentMedia()) return;
-          playAfterSeekRef.current = false;
-        })
-        .catch((error) => {
-          if (requestId !== playRequestRef.current || !isCurrentMedia()) return;
-          playIntentRef.current = false;
-          playAfterSeekRef.current = false;
-          hlsRef.current?.pauseBuffering();
-          recordStreamDiagnostic(
-            error instanceof DOMException && error.name === "NotAllowedError"
-              ? "autoplay_blocked"
-              : "playback_rejected",
-          );
-        });
-    };
-
-    const syncPlaybackState = () => {
-      if (isCurrentMedia()) syncMediaState();
-    };
-    const finishRebuffer = () => {
-      if (rebufferStartedAtRef.current === null) return;
-      const durationMs = Math.round(
-        performance.now() - rebufferStartedAtRef.current,
-      );
-      totalRebufferDurationMsRef.current += durationMs;
-      recordStreamDiagnostic("buffering_end", {
-        durationMs,
-        rebufferCount: rebufferCountRef.current,
-        totalRebufferDurationMs: totalRebufferDurationMsRef.current,
-      });
-      rebufferStartedAtRef.current = null;
-    };
-
-    const handlePlay = () => {
-      if (!isCurrentMedia()) return;
-      playIntentRef.current = true;
-      syncPlaybackState();
-    };
-    const handlePlaying = () => {
-      if (!isCurrentMedia()) return;
-      playIntentRef.current = true;
-      syncMediaState({
-        sourceReady: true,
-        buffering: false,
-        bufferingReason: null,
-        error: null,
-      });
-      setPlaybackStarted(true);
-      if (!firstFrameRecordedRef.current) {
-        firstFrameRecordedRef.current = true;
-        resetTimer();
-        recordStreamDiagnostic("first_playable_frame", {
-          elapsedMs: Math.round(
-            performance.now() - sessionStartedAtRef.current,
-          ),
-        });
-      }
-      finishRebuffer();
-      notify4kFallback();
-    };
-    const handlePause = () => {
-      if (!isCurrentMedia()) return;
-      if (video.readyState > 0 && !video.ended) {
-        playRequestRef.current += 1;
-        playIntentRef.current = false;
-        playAfterSeekRef.current = false;
-      }
-      syncMediaState({ buffering: false, bufferingReason: null });
-      finishRebuffer();
-      if (!playIntentRef.current) hlsRef.current?.pauseBuffering();
-      saveResume();
-    };
-    const handleEnded = () => {
-      if (!isCurrentMedia()) return;
-      playIntentRef.current = false;
-      playAfterSeekRef.current = false;
-      renderPlaybackTime(effectiveTime());
-      syncMediaState({
-        sourceReady: true,
-        buffering: false,
-        bufferingReason: null,
-      });
-      finishRebuffer();
-      saveResume();
-      if (autoNextTimerRef.current === null) startAutoNextRef.current();
-    };
-    const handleTimeUpdate = () => {
-      if (!isCurrentMedia()) return;
-      lastKnownTime = effectiveTime();
-      renderPlaybackTime(lastKnownTime);
-      clearSettledPendingSeek();
-      syncMediaState(
-        !video.paused && !video.seeking
-          ? { buffering: false, bufferingReason: null }
-          : {},
-      );
-      if (Date.now() - lastSavedAt >= 15_000) saveResume();
-      const remaining = video.duration - video.currentTime;
-      if (remaining > 60 || remaining <= 0) setPreloadSource("");
-      if (!video.paused && !video.seeking && remaining > 0 && remaining <= 60) {
-        for (let index = 0; index < video.buffered.length; index += 1) {
-          if (video.buffered.start(index) <= video.currentTime &&
-              video.buffered.end(index) - video.currentTime >= Math.min(10, remaining)) {
-            setPreloadSource(videoSrc);
-            break;
-          }
-        }
-      }
-    };
-    const handleMetadata = () => {
-      if (!isCurrentMedia()) return;
-      setConfirmedEpisodeNumber(episodeNumber > 0 ? episodeNumber : null);
-      syncMediaState({ sourceReady: true });
-      renderPlaybackTime(effectiveTime());
-    };
-    const handleDurationChange = () => {
-      if (isCurrentMedia()) syncMediaState();
-    };
-    const handleBuffering = (reason: "waiting" | "stalled") => {
-      if (!isCurrentMedia()) return;
-      if (
-        reason === "stalled" &&
-        video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
-      )
-        return;
-      syncMediaState({ buffering: true, bufferingReason: reason });
-      if (
-        firstFrameRecordedRef.current &&
-        rebufferStartedAtRef.current === null
-      ) {
-        rebufferStartedAtRef.current = performance.now();
-        rebufferCountRef.current += 1;
-        recordStreamDiagnostic("buffering_start", {
-          playbackTime: Math.round(effectiveTime() * 1000) / 1000,
-          reason,
-          rebufferCount: rebufferCountRef.current,
-        });
-      }
-    };
-    const handleWaiting = () => handleBuffering("waiting");
-    const handleStalled = () => handleBuffering("stalled");
-    const handlePlayable = () => {
-      if (!isCurrentMedia()) return;
-      const hasFutureData =
-        !video.paused &&
-        !video.seeking &&
-        video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
-      syncMediaState({
-        sourceReady: true,
-        ...(hasFutureData ? { buffering: false, bufferingReason: null } : {}),
-      });
-      restorePendingSeek();
-      resumePlaybackIfWanted();
-      syncPlaybackState();
-    };
-    const handleError = () => {
-      if (!isCurrentMedia()) return;
-      const mediaError = video.error;
-      const code = mediaError ? mediaError.code : 0;
-      recordStreamDiagnostic("media_error", { code });
-      if (hlsRef.current) return;
-      if (
-        (code === 2 || code === 3 || code === 4) &&
-        !Hls.isSupported() &&
-        retryCountRef.current < 1 &&
-        videoSrc
-      ) {
-        syncMediaState({ error: null, buffering: true });
-        const retryTime = boundedTime(
-          pendingSeekRef.current ?? effectiveTime(),
-        );
-        if (retryTime > 0) pendingSeekRef.current = retryTime;
-        retryCountRef.current++;
-        nativeRetryTimerRef.current = setTimeout(() => {
-          nativeRetryTimerRef.current = null;
-          if (!isCurrentMedia()) return;
-          syncMediaState({ error: null, buffering: true });
-          if (video) {
-            video.load();
-            if (playIntentRef.current || playAfterSeekRef.current) {
-              video.play().catch(() => {});
-            }
-          }
-        }, 2000);
-        return;
-      }
-      if (fallbackFrom4k()) return;
-      syncMediaState({
-        error: negativeMessage("playback was interrupted; please try again"),
-        buffering: false,
-        bufferingReason: null,
-      });
-    };
-
-    const handleProgress = () => {
-      if (isCurrentMedia()) syncMediaState();
-    };
-    const handleVolumeChange = () => {
-      if (isCurrentMedia()) syncMediaState();
-    };
-    const restoreResumePosition = () => {
-      if (!isCurrentMedia()) return;
-      if (pendingSeekRef.current !== null) {
-        restorePendingSeek();
-        return;
-      }
-      if (resumeAppliedRef.current) return;
-      resumeAppliedRef.current = true;
-      const savedResume = readPlayerStorage(resumeKey);
-      const requestedTime =
-        episodeNumber === initialEpisode && language === initialLanguage
-          ? Number(params.get("resume"))
-          : 0;
-      if (savedResume || requestedTime > 0) {
-        try {
-          const savedTime =
-            requestedTime > 0
-              ? requestedTime
-              : Number(JSON.parse(savedResume || "null")?.currentTime);
-          const durationLimit =
-            mediaStateRef.current.duration ||
-            manifestDurationRef.current ||
-            cleanDuration(video.duration) ||
-            Infinity;
-          if (
-            Number.isFinite(savedTime) &&
-            savedTime > 0 &&
-            savedTime < durationLimit * (requestedTime > 0 ? 1 : 0.9)
-          ) {
-            try {
-              video.currentTime = savedTime;
-              if (requestedTime > 0) {
-                params.delete("resume");
-                const currentUrl = new URL(window.location.href);
-                currentUrl.searchParams.delete("resume");
-                window.history.replaceState(null, "", currentUrl);
-              }
-            } catch {}
-          }
-        } catch {}
-      }
-    };
-
-    const events: [string, EventListener][] = [
-      ["play", handlePlay],
-      ["playing", handlePlaying],
-      ["pause", handlePause],
-      ["ended", handleEnded],
-      ["timeupdate", handleTimeUpdate],
-      ["loadedmetadata", handleMetadata],
-      ["loadedmetadata", restoreResumePosition],
-      ["durationchange", handleDurationChange],
-      ["waiting", handleWaiting],
-      ["loadeddata", handlePlayable],
-      ["canplay", handlePlayable],
-      ["canplaythrough", handlePlayable],
-      ["error", handleError],
-      ["stalled", handleStalled],
-      ["progress", handleProgress],
-      ["volumechange", handleVolumeChange],
-      [
-        "seeking",
-        () => {
-          if (!isCurrentMedia()) return;
-          renderPlaybackTime(effectiveTime());
-          syncPlaybackState();
-        },
-      ],
-      [
-        "seeked",
-        () => {
-          if (!isCurrentMedia()) return;
-          clearSettledPendingSeek();
-          if (video.paused && !playIntentRef.current)
-            hlsRef.current?.pauseBuffering();
-          const needsBuffering =
-            !video.paused &&
-            !video.ended &&
-            video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
-          syncMediaState({
-            buffering: needsBuffering,
-            bufferingReason: needsBuffering ? "seeking" : null,
-          });
-          saveResume();
-        },
-      ],
-      ["ratechange", syncPlaybackState],
-      ["resize", syncPlaybackState],
-    ];
-    for (const [eventName, listener] of events) {
-      video.addEventListener(eventName, listener);
-    }
-    const saveResume = () => {
-      if (!isCurrentMedia() || video.currentTime <= 0) return;
-      lastKnownTime = video.currentTime;
-      lastKnownDuration =
-        mediaStateRef.current.duration || cleanDuration(video.duration);
-      completed = video.ended;
-      lastSavedAt = Date.now();
-      persistProgress(lastKnownTime, lastKnownDuration, completed);
-    };
-    const syncOnVisibility = () => {
-      syncPlaybackState();
-      if (document.hidden) saveResume();
-    };
-    window.addEventListener("pagehide", saveResume);
-    document.addEventListener("visibilitychange", syncOnVisibility);
-    window.addEventListener("focus", syncOnVisibility);
-
-    syncPlaybackState();
-
-    return () => {
-      if (mediaSessionRef.current === mediaSession)
-        mediaSessionRef.current += 1;
-      finishRebuffer();
-      recordStreamDiagnostic("playback_qoe", {
-        rebufferCount: rebufferCountRef.current,
-        totalRebufferDurationMs: totalRebufferDurationMsRef.current,
-      });
-      const currentTime = lastKnownTime;
-      if (currentTime > 0) {
-        persistProgress(currentTime, lastKnownDuration, completed);
-      }
-      for (const [eventName, listener] of events) {
-        video.removeEventListener(eventName, listener);
-      }
-      document.removeEventListener("visibilitychange", syncOnVisibility);
-      window.removeEventListener("focus", syncOnVisibility);
-      window.removeEventListener("pagehide", saveResume);
-      if (nativeRetryTimerRef.current) {
-        clearTimeout(nativeRetryTimerRef.current);
-        nativeRetryTimerRef.current = null;
-      }
-    };
-  }, [
+  useEffect(() => attachMediaEvents({
+    videoRef, mediaSessionRef, sourceContextKey, sourceContextRef,
+    mediaStateRef, manifestDurationRef, pendingSeekRef, renderPlaybackTime,
+    playIntentRef, playAfterSeekRef, hlsRef, playRequestRef, syncMediaState,
+    rebufferStartedAtRef, totalRebufferDurationMsRef, rebufferCountRef,
+    setPlaybackStarted, firstFrameRecordedRef, resetTimer, sessionStartedAtRef,
+    notify4kFallback, autoNextTimerRef, startAutoNextRef, setPreloadSource,
+    videoSrc, setConfirmedEpisodeNumber, episodeNumber, retryCountRef,
+    nativeRetryTimerRef, fallbackFrom4k, resumeAppliedRef, resumeKey,
+    initialEpisode, language, initialLanguage, params, persistProgress,
+  }), [
     episodeNumber,
     resumeKey,
     videoSrc,
@@ -2669,113 +1151,11 @@ export default function Player() {
     resetTimer,
   ]);
 
-  useEffect(() => {
-    const handleKeydown = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey
-      )
-        return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (event.key === "Escape" && selectorOpenRef.current) {
-        event.preventDefault();
-        containerRef.current
-          ?.querySelector<HTMLElement>('[aria-expanded="true"]')
-          ?.focus();
-        setOpenSelector(null);
-        resetTimer();
-        return;
-      }
-      if (
-        target?.closest(
-          'input, textarea, select, button, a, [role="slider"], [contenteditable]:not([contenteditable="false"])',
-        )
-      )
-        return;
-      const video = videoRef.current;
-      if (!video) return;
-      if (
-        !event.metaKey &&
-        !event.ctrlKey &&
-        !event.altKey &&
-        /^[0-9]$/.test(event.key)
-      ) {
-        const duration = displayDurationRef.current;
-        if (!duration) return;
-        event.preventDefault();
-        seekTo(duration * (Number(event.key) / 10));
-        return;
-      }
-      resetTimer();
-      switch (event.key.toLowerCase()) {
-        case " ":
-          event.preventDefault();
-          togglePlay();
-          break;
-        case "k":
-          togglePlay();
-          break;
-        case "arrowleft":
-          event.preventDefault();
-          seekTo((pendingSeekRef.current ?? video.currentTime) - 5);
-          break;
-        case "arrowright":
-          event.preventDefault();
-          seekTo((pendingSeekRef.current ?? video.currentTime) + 5);
-          break;
-        case "j":
-          seekTo((pendingSeekRef.current ?? video.currentTime) - 10);
-          break;
-        case "l":
-          seekTo((pendingSeekRef.current ?? video.currentTime) + 10);
-          break;
-        case "arrowup":
-          event.preventDefault();
-          video.volume = Math.min(1, video.volume + 0.05);
-          video.muted = false;
-          try {
-            localStorage.setItem(
-              "lyra-anime-volume",
-              String(video.volume * 100),
-            );
-          } catch {}
-          syncMediaState();
-          break;
-        case "arrowdown":
-          event.preventDefault();
-          video.volume = Math.max(0, video.volume - 0.05);
-          video.muted = false;
-          try {
-            localStorage.setItem(
-              "lyra-anime-volume",
-              String(video.volume * 100),
-            );
-          } catch {}
-          syncMediaState();
-          break;
-        case "m":
-          toggleMute();
-          break;
-        case "f":
-          toggleFullscreen();
-          break;
-        case "c":
-          event.preventDefault();
-          toggleCaptions();
-          break;
-        case ">":
-          setSpeed(Math.min(2, video.playbackRate + 0.25));
-          break;
-        case "<":
-          setSpeed(Math.max(0.5, video.playbackRate - 0.25));
-          break;
-      }
-    };
-    document.addEventListener("keydown", handleKeydown);
-    return () => document.removeEventListener("keydown", handleKeydown);
-  }, [
+  useEffect(() => attachPlayerShortcuts({
+    selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
+    displayDurationRef, seekTo, togglePlay, pendingSeekRef, syncMediaState,
+    toggleMute, toggleFullscreen, toggleCaptions, setSpeed,
+  }), [
     togglePlay,
     toggleMute,
     toggleFullscreen,
@@ -2796,59 +1176,10 @@ export default function Player() {
       document.removeEventListener("fullscreenchange", updateFullscreenState);
   }, [resetTimer]);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const handleMouseMove = () => {
-      if (controlsFrameRef.current !== null) return;
-      controlsFrameRef.current = requestAnimationFrame(() => {
-        controlsFrameRef.current = null;
-        resetTimer();
-      });
-    };
-    const handleMouseLeave = () => {
-      if (controlsFrameRef.current !== null) {
-        cancelAnimationFrame(controlsFrameRef.current);
-        controlsFrameRef.current = null;
-      }
-      clearHideTimer();
-      if (
-        !selectorOpenRef.current &&
-        !scrubbingRef.current &&
-        !volumeDraggingRef.current &&
-        !container.querySelector(":focus-visible")
-      )
-        setShowControls(false);
-    };
-    const finishVolumeDrag = () => {
-      if (!volumeDraggingRef.current) return;
-      volumeDraggingRef.current = false;
-      resetTimer();
-    };
-    window.addEventListener("pointerup", finishVolumeDrag);
-    window.addEventListener("pointercancel", finishVolumeDrag);
-    window.addEventListener("blur", finishVolumeDrag);
-    container.addEventListener("pointermove", handleMouseMove);
-    container.addEventListener("pointerdown", handleMouseMove);
-    container.addEventListener("pointerleave", handleMouseLeave);
-    container.addEventListener("focusin", resetTimer);
-    container.addEventListener("focusout", resetTimer);
-    resetTimer();
-    return () => {
-      window.removeEventListener("pointerup", finishVolumeDrag);
-      window.removeEventListener("pointercancel", finishVolumeDrag);
-      window.removeEventListener("blur", finishVolumeDrag);
-      container.removeEventListener("pointermove", handleMouseMove);
-      container.removeEventListener("pointerdown", handleMouseMove);
-      container.removeEventListener("pointerleave", handleMouseLeave);
-      container.removeEventListener("focusin", resetTimer);
-      container.removeEventListener("focusout", resetTimer);
-      if (controlsFrameRef.current !== null) {
-        cancelAnimationFrame(controlsFrameRef.current);
-        controlsFrameRef.current = null;
-      }
-    };
-  }, [resetTimer, clearHideTimer]);
+  useEffect(() => attachControlsActivity({
+    containerRef, controlsFrameRef, resetTimer, clearHideTimer, selectorOpenRef,
+    scrubbingRef, volumeDraggingRef, setShowControls,
+  }), [resetTimer, clearHideTimer]);
 
   useEffect(() => {
     const status = resolvePlayerStatus(
@@ -3032,39 +1363,9 @@ export default function Player() {
             {activeSkip.label}
           </button>
         )}
-        {autoNext && (
-          <div
-            class="player-next-episode-card"
-            role="status"
-            aria-live="polite"
-          >
-            <div class="player-next-episode-copy">
-              <span>up next</span>
-              <strong>episode {autoNext.episode}</strong>
-              <small>playing in {autoNext.seconds}s</small>
-            </div>
-            <div class="player-next-episode-actions">
-              <button
-                type="button"
-                class="player-action-button player-action-button-secondary"
-                onClick={clearAutoNext}
-              >
-                cancel
-              </button>
-              <button
-                type="button"
-                class="player-action-button"
-                onClick={() => {
-                  const nextEpisode = autoNext.episode;
-                  clearAutoNext();
-                  changeEpisode(nextEpisode, true);
-                }}
-              >
-                play now
-              </button>
-            </div>
-          </div>
-        )}
+        {renderAutoNextNotice({
+          autoNext, clearAutoNext, changeEpisode,
+        })}
 
         <div class={`player-controls${controlsVisible ? "" : " is-hidden"}`}>
           <div
@@ -3109,256 +1410,38 @@ export default function Player() {
             >
               <IconForwards10s size={24} />
             </button>
-            <div class="volume-wrapper">
-              <button
-                class="player-btn"
-                aria-label={muted || volume === 0 ? "unmute" : "mute"}
-                onClick={toggleMute}
-              >
-                {muted || volume === 0 ? (
-                  <IconVolumeOff size={24} />
-                ) : volume <= 33 ? (
-                  <IconVolumeMinimum size={24} />
-                ) : volume <= 66 ? (
-                  <IconVolumeHalf size={24} />
-                ) : (
-                  <IconVolumeFull size={24} />
-                )}
-              </button>
-              <div
-                class="volume-slider-wrap"
-                style={{ "--vol-pct": `${muted ? 0 : volume}%` } as any}
-              >
-                <input
-                  type="range"
-                  class="volume-slider"
-                  min="0"
-                  max="100"
-                  value={muted ? 0 : volume}
-                  ref={volumeSliderRef}
-                  onInput={handleVolume}
-                  onPointerDown={() => {
-                    volumeDraggingRef.current = true;
-                    resetTimer();
-                  }}
-                  onPointerUp={() => {
-                    volumeDraggingRef.current = false;
-                    resetTimer();
-                  }}
-                  onPointerCancel={() => {
-                    volumeDraggingRef.current = false;
-                    resetTimer();
-                  }}
-                  onLostPointerCapture={() => {
-                    volumeDraggingRef.current = false;
-                    resetTimer();
-                  }}
-                  aria-label="volume"
-                />
-              </div>
-            </div>
+            {renderVolumeControl({
+              muted, volume, toggleMute, volumeSliderRef, handleVolume,
+              volumeDraggingRef, resetTimer,
+            })}
             <div ref={timeDisplayRef} class="time-display">
               --:-- / {durationLabel}
             </div>
             <div class="spacer" />
-            {!isAnimeMovieFormat(format) && (
-              <div class="player-control-popover player-episode-control">
-                <button
-                  type="button"
-                  class={`player-selector-selected player-episode-trigger${episodeSelectorOpen ? " is-open" : ""}`}
-                  aria-haspopup="dialog"
-                  aria-expanded={episodeSelectorOpen}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setOpenSelector((current) =>
-                      current === "episodes" ? null : "episodes",
-                    );
-                  }}
-                >
-                  <span>ep {confirmedEpisodeNumber ?? "?"}</span>
-                  <IconChevronBottom size={12} class="selector-chevron" />
-                </button>
-                <div
-                  class={`player-selector-options player-episode-panel${episodeSelectorOpen ? " is-open" : ""}`}
-                  role="dialog"
-                  aria-label="choose a season and episode"
-                  aria-hidden={!episodeSelectorOpen}
-                  onTransitionEnd={(event) => {
-                    if (
-                      episodeSelectorOpen ||
-                      event.target !== event.currentTarget ||
-                      event.propertyName !== "opacity"
-                    ) {
-                      return;
-                    }
-                    setEpisodeSelectorMounted(false);
-                  }}
-                >
-                  <div class="player-episode-heading">
-                    <div>
-                      <strong>{title}</strong>
-                    </div>
-                  </div>
-                  {episodeSelectorRendered && (
-                    <EpisodePickerModal
-                      embedded
-                      visible={episodeSelectorRendered}
-                      title={title}
-                      type="anime"
-                      ids={identityIds}
-                      posterUrl={poster}
-                      format={format}
-                      year={currentSeason.year}
-                      episodeCount={pickerSeasons[0]!.episodeCount}
-                      seasons={pickerSeasons}
-                      initialSeasonId={currentSeason.id}
-                      currentEpisode={confirmedEpisodeNumber ?? undefined}
-                      initialLanguage={language}
-                      onClose={closeSelector}
-                      onPlay={playPickedEpisode}
-                    />
-                  )}
-                </div>
-              </div>
-            )}
-            {streamProvider !== null && streamProvider !== "framex" && (
-              <PlayerMenu
-                className="player-language-selector"
-                open={openSelector === "language"}
-                onToggle={() =>
-                  setOpenSelector((current) =>
-                    current === "language" ? null : "language",
-                  )
-                }
-                disabled={changingLanguage || loadingStreamInfo}
-                panelClassName="player-audio-options"
-                label={language}
-              >
-                {(["sub", "dub"] as const).map((option) => (
-                  <PlayerOption
-                    key={option}
-                    open={openSelector === "language"}
-                    selected={option === language}
-                    solid
-                    onSelect={() => void changeLanguage(option)}
-                  >
-                    {option}
-                  </PlayerOption>
-                ))}
-              </PlayerMenu>
-            )}
-            {(streamProvider === null ||
-              (streamProvider === "framex" && (!audioTracksReady || audioTracks.length > 0)) ||
-              audioTracks.length > 1) && (
-              <PlayerMenu
-                className="player-audio-selector"
-                open={openSelector === "audio"}
-                onToggle={() =>
-                  setOpenSelector((current) =>
-                    current === "audio" ? null : "audio",
-                  )
-                }
-                label={activeAudioLabel.toLowerCase()}
-                panelClassName="player-audio-options"
-                ariaLabel="audio language"
-                disabled={
-                  !audioTracksReady ||
-                  loadingStreamInfo ||
-                  audioTracks.length <= 1 ||
-                  streamProvider === null
-                }
-              >
-                {audioTracks.map((track, index) => (
-                  <PlayerOption
-                    key={track.id}
-                    open={openSelector === "audio"}
-                    selected={selectedAudioTrack === index}
-                    solid
-                    onSelect={() => chooseAudioTrack(index)}
-                  >
-                    {audioMenuLabels[index]?.toLowerCase()}
-                  </PlayerOption>
-                ))}
-              </PlayerMenu>
-            )}
-            <PlayerMenu
-              className="player-subtitle-control"
-              open={openSelector === "subtitles"}
-              onToggle={() =>
-                setOpenSelector((current) =>
-                  current === "subtitles" ? null : "subtitles",
-                )
-              }
-              triggerClassName={`player-btn player-btn-cc${activeSubtitle >= 0 ? " is-active" : " is-off"}`}
-              panelClassName="player-subtitle-options"
-              ariaLabel="subtitles"
-              disabled={subtitleTracks.length === 0}
-              label={<IconBubbleText size={24} />}
-            >
-              <PlayerOption
-                open={openSelector === "subtitles"}
-                selected={selectedSubtitle < 0}
-                solid
-                onSelect={() => chooseSubtitle(-1)}
-              >
-                off
-              </PlayerOption>
-              {subtitleTracks.map((track, index) => (
-                <PlayerOption
-                  key={track.id}
-                  open={openSelector === "subtitles"}
-                  selected={selectedSubtitle === index}
-                  solid
-                  onSelect={() => chooseSubtitle(index)}
-                >
-                  {subtitleMenuLabels[index]?.toLowerCase()}
-                </PlayerOption>
-              ))}
-            </PlayerMenu>
-            {(qualityOptions.length > 1 || hasRemote4k) && (
-              <PlayerMenu
-                className="player-quality-selector"
-                open={openSelector === "quality"}
-                onToggle={() => {
-                  if (openSelector !== "quality") refreshAutoQuality();
-                  setOpenSelector((current) =>
-                    current === "quality" ? null : "quality",
-                  );
-                }}
-                panelClassName="player-quality-options"
-                label={selectedQualityLabel}
-              >
-                <PlayerOption
-                  open={openSelector === "quality"}
-                  selected={selectedQuality < 0}
-                  solid
-                  onSelect={() => chooseQuality(-1)}
-                >
-                  {qualityMenuLabel(null, autoQualityName)}
-                </PlayerOption>
-                {hasRemote4k && (
-                  <PlayerOption
-                    open={openSelector === "quality"}
-                    selected={false}
-                    solid
-                    onSelect={chooseRemote4k}
-                  >
-                    4k
-                  </PlayerOption>
-                )}
-                {qualityOptions.map((option) => (
-                  <PlayerOption
-                    key={`${option.index}-${option.label}`}
-                    open={openSelector === "quality"}
-                    selected={selectedQuality === option.index}
-                    solid
-                    onSelect={() => chooseQuality(option.index)}
-                  >
-                    {option.label}
-                  </PlayerOption>
-                ))}
-              </PlayerMenu>
-            )}
+            {renderEpisodeMenu({
+              format, episodeSelectorOpen, setOpenSelector,
+              confirmedEpisodeNumber, setEpisodeSelectorMounted, title,
+              episodeSelectorRendered, identityIds, poster, currentSeason,
+              pickerSeasons, language, closeSelector, playPickedEpisode,
+            })}
+            {renderLanguageMenu({
+              streamProvider, openSelector, setOpenSelector, changingLanguage,
+              loadingStreamInfo, language, changeLanguage,
+            })}
+            {renderAudioMenu({
+              streamProvider, audioTracksReady, audioTracks, openSelector,
+              setOpenSelector, activeAudioLabel, loadingStreamInfo,
+              selectedAudioTrack, chooseAudioTrack, audioMenuLabels,
+            })}
+            {renderSubtitleMenu({
+              openSelector, setOpenSelector, activeSubtitle, subtitleTracks,
+              selectedSubtitle, chooseSubtitle, subtitleMenuLabels,
+            })}
+            {renderQualityMenu({
+              qualityOptions, hasRemote4k, openSelector, refreshAutoQuality,
+              setOpenSelector, selectedQualityLabel, selectedQuality,
+              chooseQuality, autoQualityName, chooseRemote4k,
+            })}
             <button
               class="player-btn"
               aria-label={isFullscreen ? "exit fullscreen" : "fullscreen"}

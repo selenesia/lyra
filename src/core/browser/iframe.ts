@@ -1,28 +1,43 @@
-import { store, showLoading, hideLoading } from "../../state/store.ts";
+import { showLoading, hideLoading } from "../../state/store.ts";
 import {
   decodeUrl,
   getProxyUrl,
-  normalizeGameHistoryUrl,
 } from "../runtime/utils";
-import { currentUrlSignal } from "../ui/uiSignals";
 import {
   getLoadedGameCover,
-  getLoadedGameDisplayLabel,
 } from "../media/gameMetadata.ts";
-import { getAnimeDisplayLabel } from "../media/animeMetadata.ts";
-import {
-  getStoredGameSource,
-  type GameSourceKey,
-} from "../config/settingsOptions.ts";
-import { ensureProxyRuntime } from "../proxy/proxyRuntime.ts";
 import { getRivet } from "../proxy/rivetBridge.ts";
 import { folioPageStateDocuments } from "../proxy/folioPageState.ts";
-import { hostFromUrl, recordGameMetric } from "../media/gameDiagnostics.ts";
 import { NEGATIVE } from "../runtime/messages.ts";
 import { appPath } from "../runtime/hosting.ts";
 import type { HistoryManager } from "./history.ts";
+import {
+  isCurrentNavigation,
+  beginNavigation,
+  navigationVersions,
+} from "./navigationVersion.ts";
+import {
+  clearGameLoadState,
+  armGameLoadTimeout,
+  syncGlobalLoadingState,
+  failGameNavigation,
+  isKnownGameErrorDocument,
+  finishGameLoadMetric,
+} from "./gameLoad.ts";
+import {
+  getBestKnownUrl,
+  getTabIdFromIframe,
+  pageStateUrl,
+  navigationUrl,
+} from "./iframeUrls.ts";
+import { updateHistoryUI } from "./historyUI.ts";
+import {
+  shouldRouteThroughFolio,
+  navigateExternalThroughFolio,
+  waitForNavigationTransport,
+} from "./folioNavigation.ts";
 
-interface LyraTab {
+export interface LyraTab {
   id: number;
   iframe: HTMLIFrameElement;
   title: string;
@@ -51,18 +66,6 @@ interface LyraTab {
   [key: string]: unknown;
 }
 
-interface HistoryUIState {
-  currentUrl: string | null;
-  canGoBack: boolean;
-  canGoForward: boolean;
-}
-
-interface UrlTrackedTab {
-  extensionPage?: { url: string };
-  pageState?: { url: string | null };
-  historyManager?: { getCurrentUrl(): string | null };
-}
-
 type IframeHistoryManager = NonNullable<LyraTab["historyManager"]>;
 type IframeInternalHandlers = {
   onError: EventListener;
@@ -84,9 +87,6 @@ declare global {
   }
 }
 
-const GAME_LOAD_TIMEOUT_MS = 45_000;
-const navigationVersions = new WeakMap<HTMLIFrameElement, number>();
-
 type ContentWindowListeners = {
   historyCleanup?: () => void;
   beforeUnload?: EventListener;
@@ -95,152 +95,6 @@ type ContentWindowListeners = {
 };
 
 const contentWindowListeners = new WeakMap<Window, ContentWindowListeners>();
-
-function syncGlobalLoadingState(): void {
-  window.Lyra.isLoading = Boolean(
-    window.Lyra.tabs?.some((tab: LyraTab) => tab.isLoading),
-  );
-}
-
-function beginNavigation(iframe: HTMLIFrameElement): number {
-  const version = (navigationVersions.get(iframe) ?? 0) + 1;
-  navigationVersions.set(iframe, version);
-  return version;
-}
-
-function isCurrentNavigation(
-  iframe: HTMLIFrameElement,
-  version: number,
-): boolean {
-  return navigationVersions.get(iframe) === version;
-}
-
-function clearGameLoadState(
-  iframe: HTMLIFrameElement,
-  resetTerminal = false,
-): number | null {
-  const iframeExt = iframe as HTMLIFrameElement & Record<string, unknown>;
-  if (resetTerminal) delete iframeExt.__gameLoadTerminal;
-  const timeout = iframeExt.__gameLoadTimeout;
-  if (timeout) clearTimeout(timeout as ReturnType<typeof setTimeout>);
-  iframeExt.__gameLoadTimeout = null;
-  const startedAt = iframeExt.__gameLoadStartedAt;
-  delete iframeExt.__gameLoadStartedAt;
-  return typeof startedAt === "number" ? startedAt : null;
-}
-
-function finishGameLoadMetric(
-  iframe: HTMLIFrameElement,
-  status: "success" | "error",
-  stage: "iframe-load" | "iframe-timeout" = "iframe-load",
-): void {
-  const startedAt = clearGameLoadState(iframe);
-  if (startedAt === null) return;
-  const tab = window.Lyra?.tabs?.find(
-    (candidate) => candidate.iframe === iframe,
-  );
-  if (!tab?.isGame) return;
-  const realUrl = decodeUrl(iframe.dataset.manualUrl || iframe.src || "");
-  const gameHost = hostFromUrl(realUrl);
-  const source: GameSourceKey = getStoredGameSource();
-  const metric = {
-    stage,
-    source,
-    status,
-    durationMs:
-      (typeof performance === "undefined" ? Date.now() : performance.now()) -
-      startedAt,
-  } as const;
-  if (gameHost) recordGameMetric({ ...metric, urlHost: gameHost });
-  else recordGameMetric(metric);
-}
-
-function armGameLoadTimeout(
-  iframe: HTMLIFrameElement,
-  version: number,
-  tabId: number | null,
-): void {
-  const tab = window.Lyra?.tabs?.find(
-    (candidate) => candidate.iframe === iframe,
-  );
-  if (!tab?.isGame) return;
-  const iframeExt = iframe as HTMLIFrameElement & Record<string, unknown>;
-  const startedAt =
-    typeof performance === "undefined" ? Date.now() : performance.now();
-  iframeExt.__gameLoadStartedAt = startedAt;
-  iframeExt.__gameLoadTimeout = setTimeout(() => {
-    if (!isCurrentNavigation(iframe, version)) return;
-    failGameNavigation(iframe, tabId, "iframe-timeout");
-  }, GAME_LOAD_TIMEOUT_MS);
-}
-
-function isKnownGameErrorDocument(iframe: HTMLIFrameElement): boolean {
-  try {
-    const title = iframe.contentDocument?.title?.trim();
-    return title === "404!!" || title === "Folio" || title === "Error";
-  } catch {
-    return false;
-  }
-}
-
-function failGameNavigation(
-  iframe: HTMLIFrameElement,
-  tabId: number | null,
-  stage: "iframe-load" | "iframe-timeout" = "iframe-load",
-): void {
-  const iframeExt = iframe as HTMLIFrameElement & Record<string, unknown>;
-  iframeExt.__gameLoadTerminal = "error";
-  finishGameLoadMetric(iframe, "error", stage);
-  hideLoading(tabId ?? undefined);
-  syncGlobalLoadingState();
-  const tab = window.Lyra?.tabs?.find(
-    (candidate) => candidate.iframe === iframe,
-  );
-  if (tab?.isGame) window.Lyra.setPlayerStatus?.(tab.id, "error");
-  iframe.parentElement?.classList.add("loaded");
-}
-
-function getTabIdFromIframe(iframe: HTMLIFrameElement): number | null {
-  if (!iframe) return null;
-  const tabId = iframe.dataset?.tabId;
-  if (!tabId) return null;
-  const parsedTabId = parseInt(tabId, 10);
-  return Number.isNaN(parsedTabId) ? null : parsedTabId;
-}
-
-function pageStateUrl(tab: UrlTrackedTab | null | undefined): string | null {
-  const url = tab?.pageState?.url;
-  return typeof url === "string" && url && url !== "about:blank" ? url : null;
-}
-
-function getBestKnownUrl(
-  iframe: HTMLIFrameElement,
-  tab?: UrlTrackedTab | null,
-): string | null {
-  if (tab?.extensionPage?.url) return tab.extensionPage.url;
-  if (tab?.historyManager?.getCurrentUrl?.())
-    return tab.historyManager.getCurrentUrl();
-  const trackedUrl = pageStateUrl(tab);
-  if (trackedUrl) return trackedUrl;
-  if (iframe.dataset.manualUrl) return iframe.dataset.manualUrl;
-  try {
-    const frameUrl = iframe.contentWindow?.location?.href;
-    if (frameUrl && frameUrl !== "about:blank") return frameUrl;
-  } catch (e) {}
-  return iframe.src && iframe.src !== "about:blank" ? iframe.src : null;
-}
-
-function navigationUrl(url: string): string {
-  try {
-    const parsed = new URL(url, window.location.origin);
-    if (
-      parsed.origin === window.location.origin &&
-      (parsed.pathname === appPath("/f") || parsed.pathname.startsWith(appPath("/!!/")))
-    )
-      return decodeUrl(url);
-  } catch {}
-  return url;
-}
 
 export function historyEntry(iframe: HTMLIFrameElement) {
   try {
@@ -316,69 +170,6 @@ function applyPageStateToTab(tab: LyraTab): boolean {
     applied = true;
   }
   return applied;
-}
-
-function shouldRouteThroughFolio(url: string): boolean {
-  try {
-    const parsed = new URL(url, window.location.origin);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-      return false;
-    if (parsed.origin === window.location.origin) return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForNavigationTransport(strict: boolean): Promise<void> {
-  if (!window.Lyra?.waitForTransport) return;
-  try {
-    await window.Lyra.waitForTransport(8000);
-  } catch (e: unknown) {
-    console.warn(
-      "iframe navigation: transport not ready; attempting recovery:",
-      (e as Error).message,
-      NEGATIVE,
-    );
-    const conn = (window as unknown as Record<string, unknown>)[
-      "lyraConnection"
-    ] as { recoverOnWake?: () => Promise<void> } | undefined;
-    if (!conn?.recoverOnWake) {
-      if (strict) throw e;
-      return;
-    }
-    try {
-      await conn.recoverOnWake();
-      await window.Lyra.waitForTransport?.(6000);
-    } catch (recoveryError) {
-      if (!strict) {
-        console.warn(
-          "iframe navigation: recovery failed; continuing without recovery",
-          NEGATIVE,
-        );
-        return;
-      }
-      console.warn(
-        "iframe navigation: recovery failed before folio navigation",
-        NEGATIVE,
-      );
-      throw recoveryError;
-    }
-  }
-}
-
-async function navigateExternalThroughFolio(
-  iframe: HTMLIFrameElement,
-  url: string,
-  version: number,
-): Promise<void> {
-  await ensureProxyRuntime();
-  await waitForNavigationTransport(true);
-  if (!isCurrentNavigation(iframe, version)) return;
-  const folio = await import("../proxy/folio");
-  await folio.navigateFolioIframe(iframe, url, () =>
-    isCurrentNavigation(iframe, version),
-  );
 }
 
 function detachContentWindowListeners(iframe: HTMLIFrameElement): void {
@@ -823,110 +614,6 @@ function setupIframeContentListeners(
   }
 }
 
-let _searchInputNav: HTMLElement | null = null;
-let _backIcon: HTMLElement | null = null;
-let _forwardIcon: HTMLElement | null = null;
-
-function getNavEls() {
-  if (!_searchInputNav?.isConnected)
-    _searchInputNav = document.getElementById(
-      "searchInputt",
-    );
-  if (!_backIcon?.isConnected) _backIcon = document.getElementById("backIcon");
-  if (!_forwardIcon?.isConnected)
-    _forwardIcon = document.getElementById("forwardIcon");
-}
-
-export function updateHistoryUI(
-  activeTab: LyraTab,
-  { currentUrl, canGoBack, canGoForward }: HistoryUIState,
-): void {
-  if (activeTab?.id !== store.activeTabId) return;
-  getNavEls();
-  const stillExists =
-    activeTab && window.Lyra?.tabs?.some((tab) => tab.id === activeTab.id);
-
-  if (!activeTab || !activeTab.iframe || !stillExists) {
-    if (_searchInputNav) _searchInputNav.textContent = "";
-    if (_backIcon) _backIcon.classList.add("disabled");
-    if (_forwardIcon) _forwardIcon.classList.add("disabled");
-    currentUrlSignal.value = "";
-    return;
-  }
-
-  const { iframe } = activeTab;
-
-  for (const [element, enabled] of [
-    [_backIcon, canGoBack],
-    [_forwardIcon, canGoForward],
-  ] as const) {
-    if (!element) continue;
-    element.classList.toggle("disabled", !enabled);
-    element.setAttribute("aria-disabled", String(!enabled));
-    element.tabIndex = enabled ? 0 : -1;
-  }
-
-  if (_searchInputNav) {
-    const trackedPageUrl = pageStateUrl(activeTab);
-    let displayUrl: string | null | undefined =
-      currentUrl ?? trackedPageUrl ?? activeTab.extensionPage?.url;
-    if (displayUrl === undefined || displayUrl === null) {
-      displayUrl = getBestKnownUrl(iframe, activeTab);
-    }
-
-    const decoded = navigationUrl(displayUrl ?? "");
-    let displayText: string = decoded;
-
-    if (activeTab.extensionPage && !trackedPageUrl) {
-      const title = activeTab.title.trim().toLowerCase() || "extension";
-      displayText = `extension: ${title} / ${activeTab.extensionPage.page}`;
-    }
-
-    try {
-      const custom = getLoadedGameDisplayLabel(decoded);
-      if (!activeTab.extensionPage && custom) displayText = custom as string;
-    } catch (e) {}
-
-    if (!activeTab.extensionPage && displayText === decoded) {
-      const animeLabel = getAnimeDisplayLabel(decoded);
-      if (animeLabel) displayText = animeLabel;
-    }
-
-    if (
-      displayText === decoded &&
-      activeTab.gameDisplayByUrl &&
-      typeof activeTab.gameDisplayByUrl === "object"
-    ) {
-      const normalized = normalizeGameHistoryUrl(decoded);
-      const remembered = normalized
-        ? (activeTab.gameDisplayByUrl as Record<string, string>)[normalized]
-        : null;
-      if (remembered) displayText = remembered;
-    }
-
-    if (displayText === decoded && activeTab.fixedTitle && activeTab.isGame) {
-      const rawTitle =
-        typeof activeTab.title === "string" ? activeTab.title.trim() : "";
-      const safeTitle = rawTitle.toLowerCase();
-      if (
-        safeTitle &&
-        safeTitle !== "fetching data..." &&
-        safeTitle !== "new tab"
-      ) {
-        const source = getStoredGameSource();
-        displayText = `game: ${safeTitle} / source: ${source}`;
-      }
-    }
-
-    if (document.activeElement !== _searchInputNav) {
-      _searchInputNav.textContent =
-        displayText === "about:blank" || !displayText ? "" : displayText;
-    }
-
-    currentUrlSignal.value = decoded || "";
-  }
-}
-
 function installIframeLoadHandlers(
   iframe: HTMLIFrameElement,
   historyManager: IframeHistoryManager,
@@ -943,15 +630,7 @@ function installIframeLoadHandlers(
 
   const onError = (): void => {
     if (!isCurrentNavigation(iframe, navigationVersion)) return;
-    iframeExt.__gameLoadTerminal = "error";
-    finishGameLoadMetric(iframe, "error");
-    hideLoading(tabId ?? undefined);
-    syncGlobalLoadingState();
-    const tab = window.Lyra?.tabs?.find(
-      (candidate) => candidate.iframe === iframe,
-    );
-    if (tab?.isGame) window.Lyra.setPlayerStatus?.(tab.id, "error");
-    iframe.parentElement?.classList.add("loaded");
+    const tab = failGameNavigation(iframe, tabId);
     if (tab) getRivet()?.notifyTabUpdated(tab.id, { status: "complete" });
   };
 

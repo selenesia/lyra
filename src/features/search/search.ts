@@ -5,10 +5,10 @@ import { showBrowserView, store } from "../../state/store.ts";
 import {
   clearExtensionPageForNavigation,
   navigateIframeTo,
-  updateHistoryUI,
 } from "../../core/browser/iframe.ts";
+import { updateHistoryUI } from "../../core/browser/historyUI.ts";
 import { getProxyUrl } from "../../core/runtime/utils.ts";
-import { warmProxyRuntime } from "../../core/proxy/proxyRuntime.ts";
+import { warmExtensionRuntime } from "../../core/proxy/proxyRuntime.ts";
 import { appPath } from "../../core/runtime/hosting.ts";
 
 interface TabLike {
@@ -173,6 +173,7 @@ export function useSearchInputBindings({
     };
 
     const onFocus = () => {
+      warmExtensionRuntime();
       if (!syncHistory) return;
       const activeTab = store.getActiveTab();
       if (!activeTab?.historyManager) return;
@@ -184,7 +185,7 @@ export function useSearchInputBindings({
     };
 
     const onMouseEnter = () => {
-      warmProxyRuntime();
+      warmExtensionRuntime();
     };
 
     const onBlur = () => {

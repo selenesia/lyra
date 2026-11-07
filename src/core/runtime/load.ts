@@ -108,7 +108,7 @@ export function initializeLoad(): void {
         } catch {}
         const tab = (window as any).Lyra?.getActiveTab?.();
         if (tab?.iframe) {
-          const { updateHistoryUI } = await import("../browser/iframe.ts");
+          const { updateHistoryUI } = await import("../browser/historyUI.ts");
           const { decodeUrl } = await import("./utils.ts");
           const decoded = decodeUrl(
             tab.iframe.dataset.manualUrl || tab.iframe.src,

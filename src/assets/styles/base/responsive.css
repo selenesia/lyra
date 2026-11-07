@@ -1,0 +1,71 @@
+@media (max-width: 760px) {
+  .main-nav {
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .nav-controls,
+  .window-controls {
+    gap: 4px;
+  }
+
+  .nav-controls a,
+  .window-controls a,
+  #toggle-sidebar-btn {
+    height: 17px;
+    width: 17px;
+    padding: 6px;
+  }
+
+  .nav-controls a > svg,
+  .window-controls a > svg {
+    height: 17px;
+    width: 17px;
+  }
+
+  .omnibox {
+    margin: 0 6px;
+  }
+}
+
+@media (max-width: 560px) {
+  #top-left-stuff,
+  #top-right-stuff {
+    gap: 6px;
+    top: 12px;
+  }
+
+  #top-left-stuff {
+    left: 10px;
+  }
+
+  #top-right-stuff {
+    right: 10px;
+  }
+
+  .icon-btn,
+  .text-icon-btn {
+    padding: 8px;
+  }
+
+  .text-icon-btn {
+    width: 22px;
+  }
+
+  .text-icon-btn > span {
+    display: none;
+  }
+
+  .main-container {
+    margin-top: 20vh;
+    width: calc(100% - 24px);
+  }
+
+  .search-bar .editable-field {
+    width: calc(100% - 44px);
+  }
+
+  .footer {
+    padding: 0 16px 18px;
+  }
+}

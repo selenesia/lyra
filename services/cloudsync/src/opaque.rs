@@ -207,6 +207,31 @@ pub(crate) fn too_many_attempts(retry_after: u64) -> Response {
     (status, [(RETRY_AFTER, retry_after.to_string())], body).into_response()
 }
 
+fn registration_request(request: &str) -> Option<RegistrationRequest<Suite>> {
+    decode(request).and_then(|bytes| RegistrationRequest::<Suite>::deserialize(&bytes).ok())
+}
+
+fn registration_start_response(state: &AppState, request: RegistrationRequest<Suite>) -> Response {
+    let credential_id = random_id();
+    match ServerRegistration::<Suite>::start(&state.opaque_setup, request, credential_id.as_bytes())
+    {
+        Ok(start) => Json(serde_json::json!({
+            "response": encode(&start.message.serialize()),
+            "credential_id": credential_id,
+        }))
+        .into_response(),
+        Err(_) => rejected(StatusCode::INTERNAL_SERVER_ERROR, AuthFailure::Internal),
+    }
+}
+
+fn registration_upload(record: &str, wrapped_key: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let record = decode(record)
+        .and_then(|bytes| RegistrationUpload::<Suite>::deserialize(&bytes).ok())
+        .map(|upload| ServerRegistration::finish(upload).serialize().to_vec());
+    let wrapped_key = decode(wrapped_key).filter(|bytes| bytes.len() == WRAPPED_KEY_BYTES);
+    (record, wrapped_key)
+}
+
 pub async fn register_start(
     State(state): State<Arc<AppState>>,
     payload: Result<Json<RegisterStartRequest>, JsonRejection>,
@@ -215,8 +240,7 @@ pub async fn register_start(
         Ok(payload) => payload,
         Err(rejection) => return rejected(rejection.status(), AuthFailure::InvalidRequest),
     };
-    let request =
-        decode(&request).and_then(|bytes| RegistrationRequest::<Suite>::deserialize(&bytes).ok());
+    let request = registration_request(&request);
     let (true, Some(request)) = (valid_username(&username), request) else {
         return rejected(StatusCode::BAD_REQUEST, AuthFailure::InvalidRequest);
     };
@@ -242,16 +266,7 @@ pub async fn register_start(
         Err(failure) => return rejected(StatusCode::INTERNAL_SERVER_ERROR, failure),
     }
 
-    let credential_id = random_id();
-    match ServerRegistration::<Suite>::start(&state.opaque_setup, request, credential_id.as_bytes())
-    {
-        Ok(start) => Json(serde_json::json!({
-            "response": encode(&start.message.serialize()),
-            "credential_id": credential_id,
-        }))
-        .into_response(),
-        Err(_) => rejected(StatusCode::INTERNAL_SERVER_ERROR, AuthFailure::Internal),
-    }
+    registration_start_response(&state, request)
 }
 
 pub async fn register_finish(
@@ -268,10 +283,7 @@ pub async fn register_finish(
         Ok(payload) => payload,
         Err(rejection) => return rejected(rejection.status(), AuthFailure::InvalidRequest),
     };
-    let record = decode(&record)
-        .and_then(|bytes| RegistrationUpload::<Suite>::deserialize(&bytes).ok())
-        .map(|upload| ServerRegistration::finish(upload).serialize().to_vec());
-    let wrapped_key = decode(&wrapped_key).filter(|bytes| bytes.len() == WRAPPED_KEY_BYTES);
+    let (record, wrapped_key) = registration_upload(&record, &wrapped_key);
     let (true, true, Some(record), Some(wrapped_key)) = (
         valid_username(&username),
         valid_credential_id(&credential_id),
@@ -338,9 +350,7 @@ pub async fn upgrade_start(
         Ok(payload) => payload,
         Err(rejection) => return rejected(rejection.status(), AuthFailure::InvalidRequest),
     };
-    let Some(request) =
-        decode(&request).and_then(|bytes| RegistrationRequest::<Suite>::deserialize(&bytes).ok())
-    else {
+    let Some(request) = registration_request(&request) else {
         return rejected(StatusCode::BAD_REQUEST, AuthFailure::InvalidRequest);
     };
 
@@ -363,16 +373,7 @@ pub async fn upgrade_start(
         Err(failure) => return rejected(StatusCode::INTERNAL_SERVER_ERROR, failure),
     }
 
-    let credential_id = random_id();
-    match ServerRegistration::<Suite>::start(&state.opaque_setup, request, credential_id.as_bytes())
-    {
-        Ok(start) => Json(serde_json::json!({
-            "response": encode(&start.message.serialize()),
-            "credential_id": credential_id,
-        }))
-        .into_response(),
-        Err(_) => rejected(StatusCode::INTERNAL_SERVER_ERROR, AuthFailure::Internal),
-    }
+    registration_start_response(&state, request)
 }
 
 pub async fn upgrade_finish(
@@ -391,10 +392,7 @@ pub async fn upgrade_finish(
         Ok(payload) => payload,
         Err(rejection) => return rejected(rejection.status(), AuthFailure::InvalidRequest),
     };
-    let record = decode(&record)
-        .and_then(|bytes| RegistrationUpload::<Suite>::deserialize(&bytes).ok())
-        .map(|upload| ServerRegistration::finish(upload).serialize().to_vec());
-    let wrapped_key = decode(&wrapped_key).filter(|bytes| bytes.len() == WRAPPED_KEY_BYTES);
+    let (record, wrapped_key) = registration_upload(&record, &wrapped_key);
     let (true, Some(record), Some(wrapped_key)) =
         (valid_credential_id(&credential_id), record, wrapped_key)
     else {
@@ -592,4 +590,5 @@ pub async fn login_finish(
         Err(failure) => rejected(StatusCode::INTERNAL_SERVER_ERROR, failure),
     }
 }
+
 

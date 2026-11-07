@@ -31,9 +31,20 @@ function extensionSocketUrl(
   return `${gateway.origin}${RIVET_APP_BASE}!!/${encodeMochiTarget(url.href)}/`;
 }
 
+function abortWithoutResponse(xhr: XMLHttpRequest, timeoutMs: number): void {
+  if (xhr.readyState >= xhr.HEADERS_RECEIVED) return;
+  const timer = setTimeout(() => {
+    if (xhr.readyState < xhr.HEADERS_RECEIVED) xhr.abort();
+  }, timeoutMs);
+  xhr.addEventListener("readystatechange", () => {
+    if (xhr.readyState >= xhr.HEADERS_RECEIVED) clearTimeout(timer);
+  });
+}
+
 export function installExtensionNetwork(
   win: Window,
   documentUrl?: string,
+  responseTimeoutMs?: () => number | undefined,
 ): void {
   if (installedFetch.get(win) === win.fetch) return;
   const realm = win as Window &
@@ -81,7 +92,16 @@ export function installExtensionNetwork(
       keepalive: request.keepalive,
       duplex: "half",
     };
-    return nativeFetch(new Request(target, forwarded));
+    const timeoutMs = responseTimeoutMs?.();
+    if (!timeoutMs) return nativeFetch(new Request(target, forwarded));
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    forwarded.signal = AbortSignal.any([request.signal, timeout.signal]);
+    try {
+      return await nativeFetch(new Request(target, forwarded));
+    } finally {
+      clearTimeout(timer);
+    }
   };
   installedFetch.set(win, realm.fetch);
 
@@ -89,17 +109,24 @@ export function installExtensionNetwork(
     construct(Target, args) {
       const xhr = Reflect.construct(Target, args) as XMLHttpRequest;
       const open = xhr.open;
+      let routed = false;
       xhr.open = function (
         method: string,
         url: string | URL,
         ...args: unknown[]
       ) {
-        return Reflect.apply(open, this, [
-          method,
-          requestUrl(String(url)),
-          ...args,
-        ]);
+        const target = requestUrl(String(url));
+        routed = target !== new URL(String(url), base()).href;
+        return Reflect.apply(open, this, [method, target, ...args]);
       };
+      if (responseTimeoutMs) {
+        const send = xhr.send;
+        xhr.send = function (...sendArgs: unknown[]) {
+          Reflect.apply(send, this, sendArgs);
+          const timeoutMs = routed ? responseTimeoutMs() : undefined;
+          if (timeoutMs) abortWithoutResponse(this, timeoutMs);
+        };
+      }
       return xhr;
     },
   });

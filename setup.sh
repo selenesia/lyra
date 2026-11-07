@@ -799,7 +799,7 @@ if [ -d "$ROOT/services/nuru" ]; then
   (
     cd "$ROOT/services/nuru"
     RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
-    sudo cp target/release/nuru /usr/local/bin/nuru
+    sudo cp "$ROOT/target/release/nuru" /usr/local/bin/nuru
     sudo setcap cap_net_bind_service=+ep /usr/local/bin/nuru || true
   )
 else
@@ -1083,7 +1083,7 @@ else
   "$BUN_BIN" install
 fi
 
-log "preparing chat image models and database"
+log "preparing chat models and database"
 if ! retry 3 "$BUN_BIN" run setup:chat; then
   fail "chat setup failed"
   exit 1
@@ -1110,7 +1110,7 @@ if [ -d "$ROOT/services/isao" ]; then
   )
 fi
 
-sudo cp "$ROOT/services/mochi/target/release/mochi" /usr/local/bin/mochi
+sudo cp "$ROOT/target/release/mochi" /usr/local/bin/mochi
 sudo chmod 755 /usr/local/bin/mochi
 sudo mkdir -p /var/cache/lyra-mochi
 sudo chown -R mochi:mochi /var/cache/lyra-mochi
@@ -1728,7 +1728,7 @@ module.exports = {
     },
     {
       name: "cloudsync",
-      script: "./target/release/cloudsync",
+      script: "$ROOT/target/release/cloudsync",
       cwd: "$ROOT/services/cloudsync",
       interpreter: "none",
       exec_mode: "fork",

@@ -1,11 +1,8 @@
-import fs from "fs";
-import path from "path";
-import { createHash } from "crypto";
-import { negativeMessage } from "../src/core/runtime/messages.ts";
+import { ensureModelFile, ensureModelFiles, modelPath } from "./chat-model-files.mjs";
 
 const CLIP = { repository: "Xenova/mobileclip_s0", revision: "757d59c9c6870a76a4b0306f05f5061bca15c39f", dir: "mobileclip-s0" };
 
-export const IMAGE_MODEL_FILES = {
+const IMAGE_MODEL_FILES = {
   vision: { ...CLIP, source: "onnx/vision_model.onnx", name: "vision_model.onnx", sha256: "17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0" },
   text: { ...CLIP, source: "onnx/text_model_quantized.onnx", name: "text_model_quantized.onnx", sha256: "b8557b10e5c23a0126c6d2e6eba48d240484979007917d128953b31618a04211" },
   tokenizer: { ...CLIP, source: "tokenizer.json", name: "tokenizer.json", sha256: "72ed5c96db5729294468543e4bc75fce14ca63f58e37300290189ba1c1e52b85" },
@@ -39,38 +36,13 @@ export const IMAGE_CHECK_MODELS = ["vision", ...Object.keys(IMAGE_CLASSIFIERS)];
 export const IMAGE_MODEL_ID = `${CLIP.repository}@${CLIP.revision.slice(0, 7)}`;
 
 export function imageModelPath(root, key) {
-  const file = IMAGE_MODEL_FILES[key];
-  return path.join(root, "cache", "models", file.dir, file.name);
+  return modelPath(root, IMAGE_MODEL_FILES[key]);
 }
 
-async function sha256(file) {
-  const hash = createHash("sha256");
-  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
-  return hash.digest("hex");
+export function ensureImageModelFile(root, key) {
+  return ensureModelFile(root, IMAGE_MODEL_FILES[key]);
 }
 
-export async function ensureImageModelFile(root, key) {
-  const file = IMAGE_MODEL_FILES[key];
-  const target = imageModelPath(root, key);
-  if (fs.existsSync(target)) {
-    if ((await sha256(target)) === file.sha256) return target;
-    fs.rmSync(target, { force: true });
-  }
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const response = await fetch(`https://huggingface.co/${file.repository}/resolve/${file.revision}/${file.source}`, { redirect: "follow" });
-  if (!response.ok || !response.body) throw new Error(negativeMessage(`model download returned ${response.status}`));
-  const partial = `${target}.${process.pid}.part`;
-  try {
-    await Bun.write(partial, response);
-    if ((await sha256(partial)) !== file.sha256) throw new Error(negativeMessage(`model checksum mismatch for ${file.name}`));
-    fs.renameSync(partial, target);
-  } finally {
-    fs.rmSync(partial, { force: true });
-  }
-  return target;
-}
-
-export async function ensureImageCheckModels(root) {
-  const paths = await Promise.all(IMAGE_CHECK_MODELS.map((key) => ensureImageModelFile(root, key)));
-  return Object.fromEntries(IMAGE_CHECK_MODELS.map((key, index) => [key, paths[index]]));
+export function ensureImageCheckModels(root) {
+  return ensureModelFiles(root, IMAGE_MODEL_FILES, IMAGE_CHECK_MODELS);
 }

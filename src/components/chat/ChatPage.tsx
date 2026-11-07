@@ -24,7 +24,7 @@ import {
   type ChatEntry,
   type ChatResult,
 } from "../../features/chat/chatRoom.ts";
-import { IconBubbleText, IconChevronBottom, IconCrossMedium } from "../icons";
+import { IconChat, IconChevronBottom, IconCrossMedium } from "../icons";
 import IconBase from "../icons/IconBase.tsx";
 import { ICON_PATHS, type CanonicalIconName } from "../icons/paths.ts";
 import EditableField from "../EditableField.tsx";
@@ -33,7 +33,7 @@ import ChatProfile, { RoleBadge } from "./ChatProfile.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
 import "../../assets/styles/chat/chat.css";
 
-const SVG_CHAT = svgIcon("IconBubbleText", { solid: true });
+const SVG_CHAT = svgIcon("IconChat", { solid: true });
 const SVG_SEARCH = svgIcon("IconMagnifyingGlass2");
 const CHANNEL_ICONS: Partial<Record<ChatChannel, CanonicalIconName>> = {
   rules: "IconBook",
@@ -117,7 +117,7 @@ function AccessGate({ access, onRetry }: { access: ChatAccess; onRetry: () => vo
   }
   return (
     <div class="chat-gate">
-      <IconBubbleText size={28} />
+      <IconChat size={28} />
       <p class="chat-gate-title">{title}</p>
       {detail && <p class="chat-gate-detail">{detail}</p>}
       {action && (
@@ -143,6 +143,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [profile, setProfile] = useState<ChatMember | null>(null);
   const [now, setNow] = useState(Date.now);
   const listRef = useRef<HTMLDivElement>(null);
+  const channelsRef = useRef<HTMLElement>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
@@ -226,6 +227,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     button?.classList.toggle("has-unread", !visible && waiting.length > 0);
     button?.classList.toggle("has-mention", !visible && waiting.some((entry) => entry?.mention));
   }, [unread, visible]);
+
+  useLayoutEffect(() => {
+    if (!visible || !ready) return;
+    channelsRef.current?.querySelector<HTMLElement>(".chat-channel.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [channel, ready, visible]);
 
   useLayoutEffect(() => {
     if (!caretToEndRef.current) return;
@@ -472,7 +478,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         : `message #${channel} (˶>⩊<˶)`;
   const typingNames = typing
     .filter((entry) => entry.channel === channel && !blockedAuthors.has(entry.author))
-    .map((entry) => entry.name);
+    .map((entry) => displayName(mentionMembers.get(entry.name.toLowerCase()) ?? entry));
   const emptyText =
     status === "offline"
       ? negativeMessage("chat is unavailable right now")
@@ -503,8 +509,18 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       rows.push(
         <div class="chat-message chat-blocked" key={entry.id}>
           message from someone you blocked ·{" "}
-          <span class="link" role="button" tabIndex={0} onClick={() => room.toggleBlocked(entry)}>
-            unblock {entry.name}
+          <span
+            class="link"
+            role="button"
+            tabIndex={0}
+            onClick={() => room.toggleBlocked(entry)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              room.toggleBlocked(entry);
+            }}
+          >
+            unblock {displayName(entry)}
           </span>
         </div>,
       );
@@ -543,7 +559,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         <AccessGate access={access} onRetry={room.recheck} />
       ) : (
         <>
-          <nav class="chat-channels" aria-label="channels">
+          <nav class="chat-channels" aria-label="channels" ref={channelsRef}>
             {CHAT_CATEGORIES.map((category) => {
               const folded = collapsed.has(category.name);
               return (
@@ -608,7 +624,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                       onClick={() => insertMention(member.name)}
                     >
                       <ChatAvatar member={member} size={20} />
-                      {member.display && <span>{member.display}</span>}
+                      {member.display && <span class="chat-suggestion-name">{member.display}</span>}
                       <span class={member.display ? "chat-suggestion-handle" : undefined}>@{member.name}</span>
                       <RoleBadge role={member.role} />
                     </button>
@@ -620,7 +636,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   <span>
                     {mode.kind === "reply" ? (
                       <>
-                        replying to <strong>{mode.entry.name}</strong>
+                        replying to <strong>{displayName(mode.entry)}</strong>
                       </>
                     ) : (
                       "editing message · esc to cancel"

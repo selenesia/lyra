@@ -1,0 +1,211 @@
+.chat-page.is-gated {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-gate {
+  align-items: center;
+  align-self: center;
+  color: var(--color-icon-dim);
+  display: flex;
+  flex-direction: column;
+  justify-self: center;
+  max-width: 360px;
+  text-align: center;
+}
+
+.chat-gate-title {
+  color: var(--text-primary);
+  font-size: 20px;
+  margin: 20px 0 0;
+  text-wrap: balance;
+}
+
+.chat-gate-detail {
+  color: var(--color-sublabel);
+  font-size: 14px;
+  font-weight: 300;
+  margin: 8px 0 0;
+}
+
+.chat-gate-actions {
+  margin-top: 20px;
+  width: 100%;
+}
+
+.chat-gate-actions button {
+  background-color: var(--btn-primary-bg);
+  border: none;
+  border-radius: var(--radius-control);
+  color: var(--btn-primary-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 16px;
+  padding: 10px;
+  transition:
+    background-color var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease);
+  width: 60%;
+}
+
+.chat-gate-actions button:hover {
+  background-color: var(--btn-primary-bg-hover);
+  transform: scale(var(--motion-hover-scale, 1.05));
+}
+
+.chat-gate-actions button:active {
+  transform: scale(1);
+}
+
+.chat-role {
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  line-height: 16px;
+  margin-left: 6px;
+  padding: 0 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.chat-role-owner {
+  background-color: color-mix(in srgb, var(--status-error-text) 18%, transparent);
+  color: var(--status-error-text);
+}
+
+.chat-role-admin {
+  background-color: color-mix(in srgb, var(--accent-color) 18%, transparent);
+  color: var(--accent-color);
+}
+
+.chat-role-mod {
+  background-color: color-mix(in srgb, var(--status-success-text) 18%, transparent);
+  color: var(--status-success-text);
+}
+
+.popup > h2 .chat-role {
+  font-size: 12px;
+  line-height: 20px;
+  margin-left: 10px;
+}
+
+.chat-member-owner .chat-member-name {
+  color: var(--status-error-text);
+}
+
+.chat-member-admin .chat-member-name {
+  color: var(--accent-color);
+}
+
+.chat-member-mod .chat-member-name {
+  color: var(--status-success-text);
+}
+
+.chat-member-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-member-group + .chat-member-group {
+  margin-top: 20px;
+}
+
+.chat-history-edge {
+  color: var(--color-sublabel);
+  font-size: 12px;
+  margin: 8px 10px 0;
+  text-align: center;
+}
+
+.chat-avatar {
+  align-items: center;
+  background-color: hsl(var(--avatar-hue) 36% 40%);
+  border-radius: 50%;
+  color: var(--text-white);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: calc(var(--avatar-size) * 0.42);
+  height: var(--avatar-size);
+  justify-content: center;
+  line-height: 1;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  width: var(--avatar-size);
+}
+
+.chat-avatar img {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}
+
+.chat-message-meta {
+  position: relative;
+}
+
+.chat-message-avatar {
+  background: none;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  left: -52px;
+  padding: 0;
+  position: absolute;
+  top: 0;
+}
+
+.chat-member {
+  padding: 6px 10px;
+}
+
+.chat-member-face {
+  display: inline-flex;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.chat-member-face .chat-member-dot {
+  border: 2px solid var(--bg-body);
+  bottom: -2px;
+  box-sizing: content-box;
+  position: absolute;
+  right: -2px;
+}
+
+.chat-member-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-member-text .chat-member-name {
+  flex: none;
+}
+
+.chat-member-status,
+.chat-suggestion-handle {
+  color: var(--color-sublabel);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-suggestion-handle {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.chat-suggestion-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-suggestion .chat-role {
+  flex-shrink: 0;
+}

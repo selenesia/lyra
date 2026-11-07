@@ -1,6 +1,6 @@
 import { chunkId, manifestSeal, type SyncBytes, type SyncKeys } from "./syncCrypto.ts";
 import { hashText, snapshotIndex, type SnapshotIndex } from "./syncMerge.ts";
-import type { SyncSnapshot } from "./syncSnapshot.ts";
+import type { SyncSnapshot } from "./snapshotSchema.ts";
 
 const SEALED_CHUNK_LIMIT = 1024 * 1024 - 4096;
 const MIN_CHUNK = 256 * 1024;

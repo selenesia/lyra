@@ -103,6 +103,7 @@ interface ContentScriptDocumentContext {
 }
 
 const nextFrameIds = new Map<number, number>();
+const frameWindows = new Map<number, Map<number, WeakRef<Window>>>();
 
 function getDocumentContext(
   tabId: number,
@@ -113,6 +114,24 @@ function getDocumentContext(
   else nextFrameIds.set(tabId, frameId + 1);
 
   return { frameId, documentId: generateDocumentId() };
+}
+
+function rememberFrameWindow(tabId: number, frameId: number, win: Window): void {
+  let frames = frameWindows.get(tabId);
+  if (!frames || frameId === 0) {
+    frames = new Map();
+    frameWindows.set(tabId, frames);
+  }
+  frames.set(frameId, new WeakRef(win));
+}
+
+export function tabFrameWindows(tabId: number): Map<number, Window> {
+  const live = new Map<number, Window>();
+  for (const [frameId, ref] of frameWindows.get(tabId) ?? []) {
+    const win = ref.deref();
+    if (win && !win.closed) live.set(frameId, win);
+  }
+  return live;
 }
 
 export async function injectContentScripts(
@@ -137,6 +156,7 @@ export async function injectContentScripts(
   if (!matching.length) return;
 
   const { documentId, frameId } = getDocumentContext(tabId, isTopLevel);
+  rememberFrameWindow(tabId, frameId, win);
 
   const scopes = new Map<string, object>();
   const contentScope = (extId: string): object => {

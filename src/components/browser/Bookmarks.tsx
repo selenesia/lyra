@@ -5,7 +5,9 @@ import { canonicalize, encodeMochiUrl } from "../../core/runtime/utils.ts";
 import { useManagedModal } from "../../core/ui/modal.ts";
 import { toast } from "../../core/ui/toast.ts";
 import { useImageLoad } from "../../hooks/useImageLoad.ts";
-import { warmProxyRuntime } from "../../core/proxy/proxyRuntime.ts";
+import { warmExtensionRuntime } from "../../core/proxy/proxyRuntime.ts";
+import { isStatic } from "../../core/runtime/hosting.ts";
+import { invokeWindowAction } from "../../core/browser/windowActions.ts";
 import {
   IconCrossMedium,
   IconPencil,
@@ -14,6 +16,7 @@ import {
   IconAudio,
   IconGamecontroller,
   IconSushi,
+  IconChat,
 } from "../icons";
 import type { IconProps } from "../icons/IconBase";
 import "../../assets/styles/browser/bookmarks.css";
@@ -24,6 +27,7 @@ function getBookmarks(): Bookmark[] {
     if (!raw) {
       const defaults = DEFAULT_BOOKMARKS.slice();
       localStorage.setItem("lyra-bookmarks", JSON.stringify(defaults));
+      if (!isStatic) localStorage.setItem("lyra-bookmarks-chat-added", "1");
       return defaults;
     }
     const bookmarks: Bookmark[] = JSON.parse(raw);
@@ -48,14 +52,30 @@ function getBookmarks(): Bookmark[] {
       }
       saveBookmarks(bookmarks);
     }
-    return bookmarks;
+    if (!isStatic && !localStorage.getItem("lyra-bookmarks-chat-added")) {
+      if (
+        bookmarks.length < 5 &&
+        !bookmarks.some((bookmark) => isInternalBookmark(bookmark.url, "chat"))
+      ) {
+        const animeIndex = bookmarks.findIndex((bookmark) =>
+          isInternalBookmark(bookmark.url, "anime"),
+        );
+        bookmarks.splice(animeIndex === -1 ? bookmarks.length : animeIndex + 1, 0, {
+          name: "chat",
+          url: "lyra://chat",
+        });
+        saveBookmarks(bookmarks);
+      }
+      localStorage.setItem("lyra-bookmarks-chat-added", "1");
+    }
+    return bookmarks.slice(0, 5);
   } catch {
     return [];
   }
 }
 
-function isInternalBookmark(url: string, page?: "anime" | "games"): boolean {
-  const match = url.match(/^lyra:\/\/(anime|games)\/?$/i);
+function isInternalBookmark(url: string, page?: "anime" | "games" | "chat"): boolean {
+  const match = url.match(/^lyra:\/\/(anime|games|chat)\/?$/i);
   return !!match && (!page || match[1]!.toLowerCase() === page);
 }
 
@@ -130,6 +150,14 @@ const BookmarkIcon = memo(function BookmarkIcon({
     return (
       <div class="bookmark-icon">
         <IconGamecontroller solid />
+      </div>
+    );
+  }
+
+  if (isInternalBookmark(bookmark.url, "chat")) {
+    return (
+      <div class="bookmark-icon">
+        <IconChat solid />
       </div>
     );
   }
@@ -253,7 +281,7 @@ export default function Bookmarks() {
     <div
       id="bookmarks-container"
       class={isEditMode ? "bookmarks-edit-mode" : ""}
-      onMouseEnter={warmProxyRuntime}
+      onMouseEnter={warmExtensionRuntime}
     >
       <div class="bookmarks-header">
         <h3 id="bookmarks-title">bookmarks</h3>
@@ -266,7 +294,7 @@ export default function Bookmarks() {
       </div>
       <div class="bookmarks-wrapper">
         <ul id="bookmarks-list">
-          {bookmarks.map((bookmark, index) => (
+          {bookmarks.map((bookmark, index) => isStatic && isInternalBookmark(bookmark.url, "chat") ? null : (
             <li key={bookmark.url + index} class="bookmark-item">
               <a
                 href="#"
@@ -277,6 +305,8 @@ export default function Bookmarks() {
                     window.showAnimeMenu?.();
                   } else if (isInternalBookmark(bookmark.url, "games")) {
                     window.showGameMenu?.();
+                  } else if (isInternalBookmark(bookmark.url, "chat")) {
+                    invokeWindowAction("showChatPage");
                   } else {
                     (window.Lyra as any)?.handleSearch(bookmark.url);
                   }

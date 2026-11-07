@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+  "packages/adaptive-capacity",
+  "services/cloudsync",
+  "services/mochi",
+  "services/nuru",
+]
+exclude = ["services/isao"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+strip = true
+overflow-checks = false
+debug = false

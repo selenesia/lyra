@@ -15,6 +15,7 @@ const SENSITIVE_STRING_PATTERN =
   "[Gg]ames?|[Aa]nime|[Pp]roxy|[Rr]ivet|[Ff]olio|[Ll]yra";
 const ZERO_MATCH_TERM = /games?|proxy/gi;
 const WASM_PAYLOAD_PATTERN = "(?:data:[\\w/+.-]+;base64,)?AGFzbQ";
+const ICON_MARKUP_PATTERN = `^(?![\\s\\S]*(?:${SENSITIVE_STRING_PATTERN}))<(?:svg|path|circle|rect|line|polyline|polygon|ellipse)\\b`;
 const WASM_PAYLOAD_LITERAL = new RegExp(
   `(["'])${WASM_PAYLOAD_PATTERN}[\\w+/=]*\\1`,
   "g",
@@ -89,7 +90,7 @@ const OBFUSCATION_OPTIONS = {
   log: false,
   renameGlobals: true,
   renameVariables: true,
-  reservedStrings: [`^${WASM_PAYLOAD_PATTERN}`],
+  reservedStrings: [`^${WASM_PAYLOAD_PATTERN}`, ICON_MARKUP_PATTERN],
   selfDefending: false,
   stringArray: true,
   stringArrayCallsTransform: false,
@@ -104,13 +105,6 @@ export const RUNTIME_OBFUSCATION_OPTIONS = {
   ...OBFUSCATION_OPTIONS,
   renameGlobals: false,
   renameVariables: false,
-};
-
-const BASIC_OBFUSCATION_OPTIONS = {
-  ...OBFUSCATION_OPTIONS,
-  forceTransformStrings: [],
-  stringArray: false,
-  stringArrayEncoding: [],
 };
 
 const RUNTIME_ASSETS = [
@@ -190,11 +184,20 @@ function encodeWasmPayloadLexemes(source) {
   );
 }
 
+function compatibleRegexSource(source) {
+  return source.replaceAll("(?i:url)", "[uU][rR][lL]");
+}
+
+function encodeLibrarySource(source) {
+  return encodeBuildLexemes(
+    encodeWasmPayloadLexemes(compatibleRegexSource(source)),
+  );
+}
+
 export function obfuscateSource(source, options, identifiersPrefix) {
-  const compatibleSource = source.replaceAll("(?i:url)", "[uU][rR][lL]");
   return encodeBuildLexemes(
     encodeWasmPayloadLexemes(
-      obfuscate(compatibleSource, {
+      obfuscate(compatibleRegexSource(source), {
         ...options,
         seed: identifiersPrefix || "lyra-build",
         ...(identifiersPrefix ? { identifiersPrefix } : {}),
@@ -575,13 +578,13 @@ export default function lyraPlugin(
         }
 
         sourceCode = rewriteBuildTokens(sourceCode, cssTokenMap, pageAliases);
-        sourceCode = obfuscateSource(
-          sourceCode,
-          containsAppCode(chunk, projectRoot)
-            ? OBFUSCATION_OPTIONS
-            : BASIC_OBFUSCATION_OPTIONS,
-          obfuscationPrefix(buildId, fileName),
-        );
+        sourceCode = containsAppCode(chunk, projectRoot)
+          ? obfuscateSource(
+              sourceCode,
+              OBFUSCATION_OPTIONS,
+              obfuscationPrefix(buildId, fileName),
+            )
+          : encodeLibrarySource(sourceCode);
 
         await writeFile(filePath, sourceCode);
       }

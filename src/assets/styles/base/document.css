@@ -1,0 +1,93 @@
+body,
+button,
+input,
+textarea,
+select {
+  font-family: Lexend, sans-serif;
+}
+
+.editable-field {
+  display: block;
+  font-family: inherit;
+  line-height: normal;
+  min-height: 1em;
+  overflow: hidden;
+  white-space: pre;
+  text-transform: none;
+  cursor: text;
+  user-select: text;
+}
+
+.editable-field:empty::before {
+  content: attr(data-placeholder);
+  font-weight: 300;
+  color: var(--input-placeholder-search);
+  pointer-events: none;
+}
+
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: var(--bg-body);
+  color: var(--text-primary);
+  display: flex;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+  text-transform: lowercase;
+}
+
+@media (min-width: 1600px) {
+  body {
+    zoom: 1.1;
+  }
+}
+@media (min-width: 1920px) {
+  body {
+    zoom: 1.15;
+  }
+}
+
+body.is-resizing,
+body.is-resizing .iframe {
+  cursor: ew-resize !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  user-select: none !important;
+}
+
+body.is-resizing .iframe {
+  pointer-events: none !important;
+}
+
+::-moz-selection {
+  background-color: var(--selection-bg);
+  color: var(--selection-text);
+}
+
+::selection {
+  background-color: var(--selection-bg);
+  color: var(--selection-text);
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-frame);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}

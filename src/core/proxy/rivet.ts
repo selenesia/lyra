@@ -16,12 +16,18 @@ import type {
   WebRequestEventName,
   WebRequestHeader,
 } from "../../../packages/rivet/src/registry";
-import { navigateIframeTo, updateHistoryUI } from "../browser/iframe";
+import { navigateIframeTo } from "../browser/iframe";
+import { updateHistoryUI } from "../browser/historyUI";
 import { store } from "../../state/store";
 import { toast } from "../ui/toast";
 import { registerRivetBridge } from "./rivetBridge.ts";
 import { applyRivetAppearance } from "./rivetAppearance.ts";
-import { ensureUblockOrigin, hasCurrentUblock } from "./rivetUblock.ts";
+import {
+  ensureUblockOrigin,
+  hasCurrentUblock,
+  isStartingUblock,
+  UBLOCK_FILTERING_READY_EVENT,
+} from "./rivetUblock.ts";
 import { resolveRivetDns } from "./rivetDns.ts";
 import { NEGATIVE } from "../runtime/messages.ts";
 import { scheduleIdleTask } from "../runtime/scheduler.ts";
@@ -34,8 +40,8 @@ let instance: RivetFacade | null = null;
 let ready: Promise<RivetFacade> | null = null;
 let ublockFiltering: Promise<void> | null = null;
 const UBLOCK_FILTERING_TIMEOUT_MS = 10_000;
-const UBLOCK_REQUEST_HOLD_MS = 2_000;
 const UBLOCK_INSTALL_IDLE_TIMEOUT_MS = 2_000;
+const UBLOCK_STARTUP_RESPONSE_TIMEOUT_MS = 1_500;
 let commandListenerInstalled = false;
 let contextMenuElement: HTMLDivElement | null = null;
 const extensionPageMountVersions = new WeakMap<HTMLIFrameElement, number>();
@@ -324,6 +330,10 @@ function openExtensionPage(
 function createHostBindings(): RivetHostBindings {
   return {
     resolveDns: resolveRivetDns,
+    extensionResponseTimeoutMs: (extId) =>
+      instance && isStartingUblock(instance, extId)
+        ? UBLOCK_STARTUP_RESPONSE_TIMEOUT_MS
+        : undefined,
     getTabId: (win) => tabForWindow(win)?.id ?? null,
     getTab: (tabId) => {
       const tab = store.tabs.find((candidate) => candidate.id === tabId);
@@ -483,12 +493,12 @@ function waitForUblockFiltering(rivet: Rivet): Promise<void> | null {
       });
     return null;
   }
-  const filtering = (async () => {
+  return (async () => {
     try {
       const extId = await ensureUblockOrigin(rivet);
       const listening = await rivet.registry.waitForWebRequestListener(
         extId,
-        "onHeadersReceived",
+        UBLOCK_FILTERING_READY_EVENT,
         UBLOCK_FILTERING_TIMEOUT_MS,
       );
       if (!listening)
@@ -504,12 +514,6 @@ function waitForUblockFiltering(rivet: Rivet): Promise<void> | null {
       );
     }
   })();
-  return Promise.race([
-    filtering,
-    new Promise<void>((resolve) =>
-      setTimeout(resolve, UBLOCK_REQUEST_HOLD_MS),
-    ),
-  ]);
 }
 
 export async function initializeRivet(): Promise<RivetFacade> {
@@ -675,13 +679,64 @@ function createDnrPlugin(
       new Response(null, { status: 204 }),
     );
 
+  const redirectResponse = (url: string) =>
+    folio?.BareResponse?.fromNativeResponse(
+      new Response(null, { status: 302, headers: { Location: url } }),
+    );
+
+  let filteringSettled = !filteringReady;
+  void filteringReady?.then(() => {
+    filteringSettled = true;
+  });
+  const deferredDocuments = new WeakMap<object, WebRequestHeader[]>();
+
+  const deferredDocumentResponse = async (
+    context: any,
+    requestUrl: string,
+    requestHeaders: WebRequestHeader[],
+  ): Promise<unknown> => {
+    const details = detailsFor(context, requestUrl, requestHeaders);
+    for (const event of ["onBeforeRequest", "onBeforeSendHeaders"] as const) {
+      if (!rivet.registry.hasWebRequestListeners(event)) continue;
+      const result = await dispatch(event, details);
+      if (result?.cancel) return blockedResponse();
+      if (event === "onBeforeRequest" && result?.redirectUrl)
+        return redirectResponse(new URL(result.redirectUrl, requestUrl).href);
+    }
+    if (rivet.registry.hasWebRequestListeners("onSendHeaders"))
+      void dispatch("onSendHeaders", details).catch((error) => {
+        console.error("[rivet] send-headers dispatch failed:", error, NEGATIVE);
+      });
+    const decision = rivet.checkDeclarativeNetRequest(
+      requestUrl,
+      details.initiator,
+      details.type,
+    );
+    if (decision?.action === "block") return blockedResponse();
+    if (decision?.action === "redirect")
+      return redirectResponse(new URL(decision.url, requestUrl).href);
+    return undefined;
+  };
+
   return new (class RivetDeclarativeNetRequestPlugin extends ManagedPlugin {
     override install(frame: any): void {
       super.install(frame);
       this.tap(frame.hooks.fetch.request, async (context: any, props: any) => {
         let requestUrl = props.url?.href;
         if (!requestUrl) return;
-        if (filteringReady) await filteringReady;
+        if (filteringReady && !filteringSettled) {
+          if (
+            context.request &&
+            webRequestType(context.parsed) === "main_frame"
+          ) {
+            deferredDocuments.set(
+              context.request,
+              toWebRequestHeaders(props.init?.headers),
+            );
+            return;
+          }
+          await filteringReady;
+        }
         const beforeRequestListeners =
           rivet.registry.hasWebRequestListeners("onBeforeRequest");
         const beforeHeadersListeners = rivet.registry.hasWebRequestListeners(
@@ -764,6 +819,22 @@ function createDnrPlugin(
         async (context: any, props: any) => {
           const requestUrl = context.parsed?.url?.href;
           if (!requestUrl) return;
+          const deferredHeaders = context.request
+            ? deferredDocuments.get(context.request)
+            : undefined;
+          if (deferredHeaders) {
+            deferredDocuments.delete(context.request);
+            await filteringReady;
+            const replacement = await deferredDocumentResponse(
+              context,
+              requestUrl,
+              deferredHeaders,
+            );
+            if (replacement) {
+              props.response = replacement;
+              return;
+            }
+          }
           const receivedListeners =
             rivet.registry.hasWebRequestListeners("onHeadersReceived");
           const completedListeners =
@@ -802,12 +873,7 @@ function createDnrPlugin(
             details.responseHeaders = responseHeaders;
           }
           if (received?.redirectUrl) {
-            const redirected = folio?.BareResponse?.fromNativeResponse(
-              new Response(null, {
-                status: 302,
-                headers: { Location: received.redirectUrl },
-              }),
-            );
+            const redirected = redirectResponse(received.redirectUrl);
             if (redirected) props.response = redirected;
             details.redirectUrl = received.redirectUrl;
             if (rivet.registry.hasWebRequestListeners("onBeforeRedirect"))

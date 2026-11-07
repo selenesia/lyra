@@ -579,7 +579,7 @@ const EpisodePickerModal = memo(function EpisodePickerModal({
               ? "fetching episodes..."
               : "choose an episode"}
         </span>
-        <div class="episode-selector-grid episode-picker-grid" ref={gridRef}>
+        <div class="episode-selector-options episode-picker-options" ref={gridRef}>
           {episodeRange.topSpacer > 0 && (
             <div
               class="episode-picker-virtual-spacer"

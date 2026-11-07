@@ -194,4 +194,5 @@ export interface RivetHostBindings {
   closeExtensionPopup?: (extId: string) => void;
   showNotification?: (title: string, message: string) => void;
   showContextMenu?: (request: RivetContextMenuRequest) => void;
+  extensionResponseTimeoutMs?: (extId: string) => number | undefined;
 }

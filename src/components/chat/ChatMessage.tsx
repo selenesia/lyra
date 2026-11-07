@@ -2,7 +2,7 @@ import { memo } from "preact/compat";
 import { useEffect, useState } from "preact/hooks";
 import { CHAT_REACTIONS, displayName, type ChatMember } from "../../features/chat/chatProtocol.ts";
 import type { ChatEntry } from "../../features/chat/chatRoom.ts";
-import { IconArrowCornerUpLeft, IconCrossMedium, IconGhost, IconHeart, IconPencil } from "../icons";
+import { IconArrowCornerUpLeft, IconCrossMedium, IconFaceSmilePlus, IconGhost, IconPencil } from "../icons";
 import MessageText from "./MessageText.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
 import { RoleBadge } from "./ChatProfile.tsx";
@@ -84,7 +84,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           class={`chat-reply-preview${!mine && entry.reply.author === author ? " self" : ""}`}
           onClick={() => actions.jumpTo(entry.reply!.id)}
         >
-          <span class="chat-reply-name">{entry.reply.name}</span>
+          <span class="chat-reply-name">{displayName(mentionMembers.get(entry.reply.name.toLowerCase()) ?? entry.reply)}</span>
           <span class="chat-reply-text">{plainPreview(entry.reply.text)}</span>
         </button>
       )}
@@ -107,7 +107,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
             {displayName(entry)}
           </button>
           <RoleBadge role={entry.role} />
-          <span class="chat-message-time">{timeFormat.format(entry.at)}</span>
+          <span class="chat-message-time">{timeFormat.format(entry.at).toLowerCase()}</span>
         </div>
       )}
       <div class="chat-message-text">
@@ -157,7 +157,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           ) : (
             <>
               <button type="button" class="chat-tool" data-tooltip="react" aria-label="react" onClick={() => setPicking(true)}>
-                <IconHeart size={16} />
+                <IconFaceSmilePlus size={16} />
               </button>
               {canPost && (
                 <button type="button" class="chat-tool" data-tooltip="reply" aria-label="reply" onClick={() => actions.reply(entry)}>

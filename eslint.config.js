@@ -58,6 +58,7 @@ export default [
       "**/dist/**",
       "**/.types/**",
       "public/b/**",
+      "target/**",
       "services/**/target/**",
       "src/b/**",
       "vendor/**",

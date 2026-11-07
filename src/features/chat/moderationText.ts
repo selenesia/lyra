@@ -41,7 +41,7 @@ export function squeeze(word: string): string {
   return word.replace(/([a-z])\1+/g, "$1");
 }
 
-export function foldText(text: string): string {
+function foldText(text: string): string {
   return text
     .normalize("NFKD")
     .replace(HIDDEN, "")
@@ -130,30 +130,4 @@ export function readModerationText(text: string): ModerationText {
     compact: squeezed.join(""),
     wordEdges,
   };
-}
-
-function fnv1a(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-export function featureBuckets(tokens: string[], buckets: number): number[] {
-  const words = tokens.map(squeeze);
-  const seen = new Set<number>();
-  const add = (feature: string) => seen.add(fnv1a(feature) % buckets);
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index]!;
-    add(`u:${word}`);
-    if (index > 0) add(`b:${words[index - 1]} ${word}`);
-    if (index > 1) add(`s:${words[index - 2]} ${word}`);
-    const padded = ` ${word} `;
-    for (let start = 0; start + 3 <= padded.length; start += 1) {
-      add(`c:${padded.slice(start, start + 3)}`);
-    }
-  }
-  return [...seen];
 }

@@ -1,15 +1,9 @@
 import { create } from "zustand";
 import { HistoryManager } from "../core/browser/history.ts";
+import { initializeIframe, cleanupIframe } from "../core/browser/iframe.ts";
+import { updateHistoryUI } from "../core/browser/historyUI.ts";
+import { handleSearch as performSearch } from "../features/search/search.ts";
 import {
-  initializeIframe,
-  historyEntry,
-  updateHistoryUI,
-  cleanupIframe,
-  clearExtensionPageForNavigation,
-} from "../core/browser/iframe.ts";
-import { handleSearch as performSearch, getInternalRouteUrl } from "../features/search/search.ts";
-import {
-  getProxyUrl,
   encodeMochiUrl,
   normalizeGameHistoryUrl,
 } from "../core/runtime/utils.ts";
@@ -19,7 +13,7 @@ import {
 } from "../core/proxy/rivetBridge.ts";
 import { getStoredGameSource } from "../core/config/settingsOptions.ts";
 
-function proxyGameFavicon(icon: string): string {
+export function proxyGameFavicon(icon: string): string {
   if (!icon || icon.startsWith("/")) return icon;
   return `/!cover!/${encodeMochiUrl(icon)}/`;
 }
@@ -38,11 +32,11 @@ const PLAYER_STATUSES = [
 
 export type PlayerStatus = (typeof PLAYER_STATUSES)[number];
 
-function isPlayerStatus(value: string): value is PlayerStatus {
+export function isPlayerStatus(value: string): value is PlayerStatus {
   return (PLAYER_STATUSES as readonly string[]).includes(value);
 }
 
-interface Tab {
+export interface Tab {
   id: number;
   title: string;
   favicon: string | null;
@@ -83,8 +77,8 @@ interface AddTabOptions {
 
 type TabPageState = NonNullable<Tab["pageState"]>;
 
-const clientTabMap = new Map<string, number>();
-const tabMemory = new Map<number, unknown>();
+export const clientTabMap = new Map<string, number>();
+export const tabMemory = new Map<number, unknown>();
 let lastTabId = 0;
 
 export const useStore = create<{
@@ -157,30 +151,13 @@ const buildGameDisplayLabel = (title: unknown) => {
   return `game: ${safeTitle} / source: ${source}`;
 };
 
-const rememberTabGameLabel = (tab: Tab, url: string | null, title: unknown) => {
+export const rememberTabGameLabel = (tab: Tab, url: string | null, title: unknown) => {
   if (!tab || !url) return;
   const normalized = normalizeGameHistoryUrl(url);
   const label = buildGameDisplayLabel(title);
   if (!normalized || !label) return;
   if (!tab.gameDisplayByUrl) tab.gameDisplayByUrl = {};
   tab.gameDisplayByUrl[normalized] = label;
-};
-
-const decodePageMetadata = (encoded: string) => {
-  if (!encoded) return null;
-  const key = "wb!";
-  try {
-    const bytes = atob(encoded);
-    let decoded = "";
-    for (let index = 0; index < bytes.length; index++) {
-      decoded += String.fromCharCode(
-        bytes.charCodeAt(index) ^ key.charCodeAt(index % key.length),
-      );
-    }
-    return decodeURIComponent(decoded);
-  } catch {
-    return encoded;
-  }
 };
 
 function disposeTabFrame(tab: Tab) {
@@ -666,341 +643,6 @@ export const store = {
       applyNewTabOverride: false,
     });
     this.notify();
-  },
-
-  handleServiceWorkerMessage(event: MessageEvent) {
-    const { data } = event;
-    if (data && data.type === "open-new-tab") {
-      const targetUrl = data.decodedUrl || data.url || null;
-      if (!targetUrl) return;
-      const openerTabId = Number(data.tabId) || null;
-      if (
-        openerTabId !== null &&
-        !this.tabs.some((tab) => tab.id === openerTabId)
-      )
-        return;
-      const title =
-        typeof data.title === "string" ? data.title : "fetching data...";
-      store.addTab(targetUrl, title, false, null, {
-        openerTabId,
-        active: data.active !== false,
-      });
-      return;
-    }
-    if (data && data.type === "page-meta") {
-      const isEncoded = !!data.encoded;
-      const incomingUrl = isEncoded
-        ? decodePageMetadata(data.decodedUrl || data.url)
-        : data.decodedUrl || data.url || data.href || null;
-      const incomingDecodedUrl = isEncoded
-        ? decodePageMetadata(data.decodedUrl)
-        : data.decodedUrl || data.url || data.href || null;
-      const incomingTitle = isEncoded
-        ? decodePageMetadata(data.title)
-        : typeof data.title === "string"
-          ? data.title
-          : "";
-      const incomingFavicon = isEncoded
-        ? decodePageMetadata(data.favicon)
-        : data.favicon || data.rawFavicon || null;
-      const incomingRawFavicon = isEncoded
-        ? decodePageMetadata(data.rawFavicon)
-        : data.rawFavicon || data.favicon || null;
-      const incomingHistory =
-        data.history && typeof data.history === "object" ? data.history : null;
-      const incomingHistoryLength =
-        typeof data.historyLength === "number"
-          ? data.historyLength
-          : typeof incomingHistory?.length === "number"
-            ? incomingHistory.length
-            : null;
-      const incomingHistoryState =
-        "historyState" in data
-          ? data.historyState
-          : incomingHistory && "state" in incomingHistory
-            ? incomingHistory.state
-            : null;
-      const incomingNavigationType =
-        typeof data.navigationType === "string" ? data.navigationType : null;
-
-      const tabs = store.tabs;
-      const targetTabId = data.tabId
-        ? parseInt(data.tabId as string, 10)
-        : null;
-      let targetTab: Tab | null = null;
-      const sourceTab = event.source
-        ? tabs.find((tab) => tab.iframe?.contentWindow === event.source) || null
-        : null;
-
-      if (targetTabId) {
-        targetTab = tabs.find((tab) => tab.id === targetTabId) || null;
-        if (sourceTab && targetTab && sourceTab.id !== targetTab.id) return;
-        if (targetTab && data.clientId)
-          clientTabMap.set(data.clientId as string, targetTab.id);
-      }
-      if (!targetTab && sourceTab) {
-        targetTab = sourceTab;
-        if (data.clientId)
-          clientTabMap.set(data.clientId as string, sourceTab.id);
-      }
-      if (
-        !targetTab &&
-        data.clientId &&
-        clientTabMap.has(data.clientId as string)
-      ) {
-        const mappedId = clientTabMap.get(data.clientId as string);
-        targetTab = tabs.find((tab) => tab.id === mappedId) || null;
-      }
-      if (!targetTab) return;
-      if (
-        targetTab.extensionPage &&
-        typeof incomingDecodedUrl === "string" &&
-        /^https?:\/\//i.test(incomingDecodedUrl)
-      ) {
-        clearExtensionPageForNavigation(targetTab.iframe, targetTab);
-      }
-      if (data.isTopFrame === false) return;
-      if (
-        data.navigationVersion !== undefined &&
-        data.navigationVersion !== targetTab.iframe.dataset.navigationVersion
-      )
-        return;
-      if (
-        incomingUrl &&
-        targetTab.historyManager &&
-        (data.source === "folio" || !historyEntry(targetTab.iframe))
-      ) {
-        targetTab.historyManager.observe(
-          incomingUrl,
-          incomingNavigationType ?? "metadata",
-          data.historyKey,
-        );
-      }
-      if (incomingUrl && !targetTab.isUrlLoaded) {
-        targetTab.isUrlLoaded = true;
-        if (targetTab.id === store.activeTabId) {
-          document.body.classList.add("browser-view");
-        }
-      }
-
-      if (typeof incomingTitle === "string" && !targetTab.fixedTitle) {
-        if (incomingTitle.trim() !== "") targetTab.title = incomingTitle;
-      }
-      if (data.memory && typeof data.memory.usedJSHeapSize === "number") {
-        tabMemory.set(targetTab.id, data.memory);
-      }
-
-      const faviconUrl = incomingFavicon ?? incomingRawFavicon ?? null;
-      if (faviconUrl && !targetTab.fixedFavicon) {
-        targetTab.favicon = faviconUrl.startsWith("/!!/")
-          ? faviconUrl
-          : getProxyUrl(faviconUrl);
-      }
-      targetTab.pageState = {
-        url: incomingUrl || incomingDecodedUrl || null,
-        title: targetTab.title,
-        favicon: targetTab.favicon,
-        historyLength: incomingHistoryLength,
-        historyState: incomingHistoryState,
-        navigationType: incomingNavigationType,
-        updatedAt: Date.now(),
-      };
-      if (
-        typeof targetTab.pageState.url === "string" &&
-        /^https?:\/\//i.test(targetTab.pageState.url)
-      ) {
-        targetTab.iframe.dataset.manualUrl = targetTab.pageState.url;
-      }
-
-      store.notify();
-      getRivet()?.notifyTabUpdated(targetTab.id, {
-        ...(targetTab.pageState.url ? { url: targetTab.pageState.url } : {}),
-        title: targetTab.title,
-        favIconUrl: targetTab.favicon ?? "",
-      });
-
-      if (targetTab.historyManager) {
-        updateHistoryUI(targetTab as never, {
-          currentUrl:
-            targetTab.pageState.url || targetTab.historyManager.getCurrentUrl(),
-          canGoBack: targetTab.historyManager.canGoBack(),
-          canGoForward: targetTab.historyManager.canGoForward(),
-        });
-      }
-      return;
-    }
-    if (data && data.type === "url-update" && data.url) {
-      const target = this.tabs.find(
-        (tab) =>
-          event.source === tab.iframe.contentWindow ||
-          (data.tabId && tab.id === Number(data.tabId)),
-      );
-      if (target)
-        this.handleServiceWorkerMessage({
-          data: { ...data, type: "page-meta", tabId: target.id },
-          source: event.source,
-        } as MessageEvent);
-    }
-  },
-
-  initSplitResize() {
-    const container = document.getElementById("iframe-container");
-    if (!container) return;
-    const handleWidth = 10;
-    let cachedContainerRect: DOMRect | null = null;
-    let cachedGap = 0;
-    let cachedLeftIframe: Element | null = null;
-    let resizeRaf: number | null = null;
-    let pendingLeftPercent: number | null = null;
-
-    const getLeftIframe = () => {
-      if (cachedLeftIframe && cachedLeftIframe.isConnected) {
-        return cachedLeftIframe;
-      }
-      cachedLeftIframe = document.querySelector(".iframe.active-split-left");
-      return cachedLeftIframe;
-    };
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!cachedContainerRect) {
-        cachedContainerRect = container.getBoundingClientRect();
-        const containerStyle = window.getComputedStyle(container);
-        cachedGap = parseFloat(containerStyle.gap) || 0;
-      }
-      const containerRect = cachedContainerRect;
-      if (!containerRect) return;
-      const newLeftWidth = e.clientX - containerRect.left;
-      const totalWidthWithoutGap = containerRect.width - cachedGap;
-      let percent = (newLeftWidth / totalWidthWithoutGap) * 100;
-      percent = Math.max(20, Math.min(80, percent));
-      pendingLeftPercent = percent;
-      if (resizeRaf) return;
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = null;
-        if (pendingLeftPercent === null) return;
-        const leftIframe = getLeftIframe();
-        if (leftIframe) {
-          (leftIframe as HTMLElement).style.flexBasis =
-            `${pendingLeftPercent}%`;
-        }
-        pendingLeftPercent = null;
-      });
-    };
-
-    const onMouseUp = () => {
-      cachedContainerRect = null;
-      cachedGap = 0;
-      pendingLeftPercent = null;
-      if (resizeRaf) {
-        cancelAnimationFrame(resizeRaf);
-        resizeRaf = null;
-      }
-      document.body.classList.remove("is-resizing");
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    };
-
-    let cursorRaf: number | null = null;
-    container.addEventListener("mousemove", (e: MouseEvent) => {
-      if (document.body.classList.contains("is-resizing")) return;
-      if (!document.body.classList.contains("split-view")) {
-        container.style.cursor = "default";
-        cachedLeftIframe = null;
-        return;
-      }
-      if (cursorRaf) return;
-      const clientX = e.clientX;
-      cursorRaf = requestAnimationFrame(() => {
-        cursorRaf = null;
-        const leftIframe = getLeftIframe();
-        if (!leftIframe) {
-          container.style.cursor = "default";
-          return;
-        }
-        const leftIframeRect = leftIframe.getBoundingClientRect();
-        const handleGripLeft = leftIframeRect.right - handleWidth / 2;
-        const handleGripRight = leftIframeRect.right + handleWidth / 2;
-        container.style.cursor =
-          clientX >= handleGripLeft && clientX <= handleGripRight
-            ? "col-resize"
-            : "default";
-      });
-    });
-
-    container.addEventListener("mousedown", (e: MouseEvent) => {
-      if (!document.body.classList.contains("split-view")) return;
-      const leftIframe = getLeftIframe();
-      if (!leftIframe) return;
-      const leftIframeRect = leftIframe.getBoundingClientRect();
-      const handleGripLeft = leftIframeRect.right - handleWidth / 2;
-      const handleGripRight = leftIframeRect.right + handleWidth / 2;
-      if (e.clientX >= handleGripLeft && e.clientX <= handleGripRight) {
-        e.preventDefault();
-        document.body.classList.add("is-resizing");
-        document.addEventListener("mousemove", onMouseMove);
-        document.addEventListener("mouseup", onMouseUp);
-      }
-    });
-  },
-
-  setupWindowLyra() {
-    window.Lyra = window.Lyra || {};
-    window.Lyra.tabs = this.tabs as any;
-    window.Lyra.splitPair = this.splitPair;
-    window.Lyra.isLoading = false;
-    window.Lyra.allGames ??= [];
-    window.Lyra.getActiveTab = () => this.getActiveTab();
-    window.Lyra.getActivePageState = () => this.getActivePageState();
-    window.Lyra.getTabPageState = (tabId: number) =>
-      this.getTabPageState(tabId);
-    window.Lyra.setPlayerStatus = (tabId: number, status: string) => {
-      if (isPlayerStatus(status)) this.setPlayerStatus(tabId, status);
-    };
-    window.Lyra.renderTabs = () => this.notify();
-    window.Lyra.resetSession = () => this.resetSession();
-    window.Lyra.openNewTabFromServiceWorker = (
-      url: string | null,
-      options: { title?: string; openerTabId?: number } = {},
-    ) => {
-      if (!url) return null;
-      const tab = this.addTab(url, options.title || "fetching data...");
-      if (tab && options.openerTabId) tab.openerTabId = options.openerTabId;
-      return tab;
-    };
-    window.Lyra.handleSearch = async (
-      query: string,
-      gameName?: string,
-      gameIcon?: string | null,
-    ) => {
-      const activeTab = this.getActiveTab();
-      if (activeTab) {
-        const isStreamingUrl = Boolean(getInternalRouteUrl(query));
-        if (gameName && !isStreamingUrl) {
-          activeTab.isGame = true;
-          activeTab.fixedTitle = true;
-          activeTab.title = gameName;
-          if (gameIcon) {
-            activeTab.fixedFavicon = true;
-            activeTab.favicon = proxyGameFavicon(gameIcon);
-          } else {
-            activeTab.fixedFavicon = false;
-          }
-          rememberTabGameLabel(activeTab, query, gameName);
-          this.notify();
-        } else {
-          activeTab.isGame = false;
-          activeTab.fixedTitle = false;
-          if (isStreamingUrl && gameIcon) {
-            activeTab.fixedFavicon = true;
-            activeTab.favicon = proxyGameFavicon(gameIcon);
-          } else {
-            activeTab.fixedFavicon = false;
-          }
-          this.notify();
-        }
-        await performSearch(query, activeTab as never, gameName);
-      }
-    };
   },
 };
 

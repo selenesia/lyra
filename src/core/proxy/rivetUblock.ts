@@ -3,6 +3,7 @@ import { negativeMessage } from "../runtime/messages.ts";
 declare const __LYRA_UBLOCK_VERSION__: string;
 
 const UBLOCK_ORIGIN_EXTENSION_URL = "/b/rivet/ublock.crx";
+export const UBLOCK_FILTERING_READY_EVENT = "onSendHeaders";
 const BUNDLED_UBLOCK_VERSION =
   typeof __LYRA_UBLOCK_VERSION__ === "string" ? __LYRA_UBLOCK_VERSION__ : "";
 
@@ -36,14 +37,35 @@ export function compareExtensionVersions(
   return 0;
 }
 
+function isUblock(extension: InstalledExtension): boolean {
+  return extension.name.trim().toLowerCase() === "ublock origin";
+}
+
+export function isStartingUblock(
+  rivet: Pick<RivetExtensionInstaller, "getInstalledExtensions"> & {
+    registry: {
+      hasWebRequestListener(
+        extId: string,
+        event: typeof UBLOCK_FILTERING_READY_EVENT,
+      ): boolean;
+    };
+  },
+  extId: string,
+): boolean {
+  return (
+    rivet
+      .getInstalledExtensions()
+      .some((extension) => extension.id === extId && isUblock(extension)) &&
+    !rivet.registry.hasWebRequestListener(extId, UBLOCK_FILTERING_READY_EVENT)
+  );
+}
+
 function newestInstalledUblock(
   rivet: Pick<RivetExtensionInstaller, "getInstalledExtensions">,
 ): InstalledExtension | undefined {
   return rivet
     .getInstalledExtensions()
-    .filter(
-      (extension) => extension.name.trim().toLowerCase() === "ublock origin",
-    )
+    .filter(isUblock)
     .reduce<InstalledExtension | undefined>(
       (newest, extension) =>
         !newest || compareExtensionVersions(extension.version, newest.version) > 0

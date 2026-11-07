@@ -79,12 +79,10 @@ function validEncodedBytes(value: string): boolean {
   let carry = new Uint8Array();
   try {
     for (let offset = 0; offset < value.length; offset += chunkSize) {
-      const binary = atob(value.slice(offset, offset + chunkSize));
-      const scanned = new Uint8Array(carry.length + binary.length);
+      const bytes = base64ToBytes(value.slice(offset, offset + chunkSize));
+      const scanned = new Uint8Array(carry.length + bytes.length);
       scanned.set(carry);
-      for (let index = 0; index < binary.length; index++) {
-        scanned[carry.length + index] = binary.charCodeAt(index);
-      }
+      scanned.set(bytes, carry.length);
       if (bytesContainSensitiveText(scanned)) return false;
       carry = scanned.slice(Math.max(0, scanned.length - overlap));
     }
@@ -95,6 +93,7 @@ function validEncodedBytes(value: string): boolean {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof bytes.toBase64 === "function") return bytes.toBase64();
   const chunks: string[] = [];
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
@@ -105,6 +104,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 function base64ToBytes(value: string): Uint8Array {
+  if (typeof Uint8Array.fromBase64 === "function") {
+    return Uint8Array.fromBase64(value);
+  }
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index++) {

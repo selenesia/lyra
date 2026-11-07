@@ -1,31 +1,3 @@
-.popup .input-container input[type="password"],
-.popup .input-container input[type="text"] {
-  background-color: var(--input-bg);
-  border: 2px solid var(--border-transparent);
-  box-sizing: border-box;
-  color: var(--input-text);
-  font-size: 14px;
-  outline: none;
-  padding: 10px;
-  transition: background-color var(--motion-control) var(--motion-ease);
-  width: 100%;
-}
-
-.popup .input-container input::-moz-placeholder {
-  font-weight: 300;
-  color: var(--input-placeholder-search);
-}
-
-.popup .input-container input::placeholder {
-  font-weight: 300;
-  color: var(--input-placeholder-search);
-}
-
-.popup .input-container input:focus,
-.popup .input-container input:hover {
-  background-color: var(--bg-surface-10);
-}
-
 .auth-action-btn {
   background-color: var(--btn-primary-bg);
   border: none;
@@ -62,6 +34,15 @@
 
 .auth-secondary-btn:active {
   transform: scale(1);
+}
+
+.auth-danger-btn {
+  background: color-mix(in srgb, var(--status-error-text) 20%, transparent);
+  color: var(--status-error-text);
+}
+
+.auth-danger-btn:hover {
+  background: color-mix(in srgb, var(--status-error-text) 30%, transparent);
 }
 
 #auth-forms label,

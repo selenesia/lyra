@@ -1,0 +1,138 @@
+:root {
+  --radius-detail: 4px;
+  --radius-frame: 6px;
+  --radius-tooltip: 8px;
+  --radius-item: 10px;
+  --radius-control: 15px;
+  --radius-panel: var(--radius-control);
+  --radius-dialog: 20px;
+  --radius-bar: 25px;
+  --radius-pill: 999px;
+  --shadow-dialog: 0 8px 60px 24px color-mix(in srgb, var(--overlay-bg) 80%, transparent);
+}
+
+:root,
+[data-theme="default"] {
+  --bg-body: #050505;
+  --bg-body-grid: #1b1b1b;
+  --text-primary: #ebebeb;
+  --text-secondary: #cccccc;
+  --text-muted: #8c8c8c;
+  --text-dimmed: #a6a6a6;
+  --text-white: #fafafa;
+  --text-black: #000;
+
+  --bg-surface-0: #060606;
+  --bg-surface-1: #0b0b0b;
+  --bg-surface-2: #0e0e0e;
+  --bg-surface-3: #111111;
+  --bg-surface-5: #171717;
+  --bg-surface-7: #1d1d1d;
+  --bg-surface-10: #262626;
+  --bg-surface-active: #333;
+
+  --border-transparent: #ffffff00;
+  --border-faint: #ffffff33;
+  --border-medium: #2b2b2b;
+  --border-dashed: #ffffff28;
+  --border-dashed-hover: #ffffff46;
+  --border-focus: #fff;
+  --accent-color: #fff;
+
+  --hover-bg: #ffffff14;
+  --hover-bg-light: #ffffff10;
+  --hover-bg-toast: #ffffff1a;
+  --active-bg: #ffffff1f;
+  --active-bg-subtle: #ffffff05;
+
+  --color-icon: #c4c4c4;
+  --color-icon-muted: #9b9b9b;
+  --color-icon-dim: #888888;
+  --color-disabled: #4a4a4a;
+  --color-tab: #adadad;
+  --color-tab-active: #ffffff;
+  --color-link: #b3b3b3;
+  --color-link-hover: #fff;
+  --color-label: #a5a5a5;
+  --color-sublabel: #707070;
+  --color-info: #727272;
+  --color-footer: #777;
+  --color-version: #636363;
+  --color-result: #b1b1b1;
+  --color-result-icon: #afafaf;
+  --color-close-btn: #c2c2c2;
+  --color-loading-text: #ffffff;
+  --status-error-text: var(--toast-danger-text);
+  --status-success-text: #4ade80;
+
+  --btn-primary-bg: #c4c4c4;
+  --btn-primary-bg-hover: #fff;
+  --btn-primary-text: #000;
+  --btn-secondary-bg: #1a1a1a;
+  --btn-secondary-bg-hover: #2f2f2f;
+  --btn-secondary-text: #d8d8d8;
+
+  --input-bg: #181818;
+  --input-text: #e0e0e0;
+  --input-placeholder: #6d6d6d;
+  --input-placeholder-light: #818181;
+  --input-placeholder-search: #ffffff43;
+  --input-focus-search: #ffffff7f;
+  --input-border: transparent;
+
+  --checkbox-bg: #2e2e2e;
+  --checkbox-bg-checked: #808080;
+  --checkbox-knob: #dddddd;
+  --checkbox-knob-hover: #ffffff;
+
+  --scrollbar-track: #000;
+  --scrollbar-thumb: #4e4e4e;
+  --scrollbar-thumb-hover: #6b6b6b;
+
+  --selection-bg: #fff;
+  --selection-text: #000;
+
+  --overlay-bg: #000000de;
+
+  --skeleton-from: #0c0c0c;
+  --skeleton-via: #2a2a2a;
+  --skeleton-to: #0c0c0c;
+  --skeleton-alt-from: #0d0d0d;
+  --skeleton-alt-via: #161616;
+
+  --search-glow-border: hsla(0, 0%, 83%, 0.8);
+  --search-glow-bg: hsla(0, 0%, 83%, 0.144);
+  --search-inset-bg: #0d0d0d;
+  --search-inset-bg-focus: #111;
+
+  --split-divider-bg: #0a0a0a;
+  --split-border: #2b2b2b;
+  --split-focus-border: #fff;
+  --split-indicator: #ffffffe5;
+
+  --notif-dot-feature: #4ade80;
+  --notif-dot-update: #fbbf24;
+  --notif-badge-bg: #dc2626;
+  --notif-badge-text: #ffffff;
+
+  --toast-bg: #000000a9;
+  --toast-text: white;
+  --toast-border: #ffffff1e;
+  --toast-btn-bg: rgba(255, 255, 255, 0.1);
+  --toast-btn-border: rgba(255, 255, 255, 0.2);
+  --toast-btn-hover-bg: rgba(255, 255, 255, 0.2);
+  --toast-danger-bg: rgba(255, 85, 85, 0.2);
+  --toast-danger-border: rgba(255, 85, 85, 0.4);
+  --toast-danger-text: #ff5555;
+  --toast-danger-hover-bg: rgba(255, 85, 85, 0.3);
+
+  --game-card-bg: #0c0c0c;
+  --game-card-overlay: #000000bd;
+  --game-info-text: #f3f3f3;
+  --game-cover-brightness: 0.8;
+  --game-no-cover-line: #444444;
+  --game-search-icon: #ffffff43;
+  --game-search-icon-focus: #ffffff7f;
+
+  --brand-color: #fff;
+}

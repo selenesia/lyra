@@ -3,7 +3,8 @@ import { httpError } from "./errors.mjs";
 import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
 import { readChatImage } from "./chat-media.mjs";
-import { blockedNotice, moderate } from "../src/features/chat/moderation.ts";
+import { textVerdict } from "./chat-text-policy.mjs";
+import { blockedNotice, moderate, readModeration } from "../src/features/chat/moderation.ts";
 import {
   CHAT_CHANNELS,
   CHAT_LIMITS,
@@ -85,6 +86,8 @@ export function createChatRoom({
   store,
   identify,
   checkImage = async () => ({ unavailable: true }),
+  checkText = async () => null,
+  warmText = () => {},
   historySize = CHAT_LIMITS.page,
   maxStreamsPerUser = 8,
   pingMs = 20_000,
@@ -214,8 +217,9 @@ export function createChatRoom({
     return list;
   }
 
-  function strike(row, points, time) {
+  function strike(stale, points, time) {
     if (!points) return 0;
+    const row = store.user(stale.id) ?? stale;
     const steps = Math.floor((time - row.strike_updated) / strikeDecayMs);
     let current = Math.max(0, row.strike_points - Math.max(0, steps)) + points;
     let mutes = row.mute_count;
@@ -238,12 +242,34 @@ export function createChatRoom({
     });
   }
 
-  function readText(payload, row, time) {
+  async function screenText(text) {
+    const reading = readModeration(text);
+    if (!reading.verdict.allowed || (!reading.screen && !reading.suspect)) return reading.verdict;
+    return textVerdict(reading, await checkText(text));
+  }
+
+  function silenced(row) {
+    const fresh = store.user(row.id) ?? row;
+    const time = now();
+    if (fresh.banned_until > time) {
+      return httpError(403, "CHAT_BANNED", "you are banned from chat", {
+        ...(fresh.banned_until < PERMANENT && { until: fresh.banned_until }),
+        ...(fresh.ban_reason && { reason: fresh.ban_reason }),
+      });
+    }
+    if (fresh.muted_until > time) return httpError(403, "CHAT_MUTED", "you are timed out for a bit", { until: fresh.muted_until });
+    return null;
+  }
+
+  function readText(payload) {
     const text = cleanChatText(payload.text);
-    if (!text) return { failure: httpError(400, "CHAT_TEXT_INVALID", `messages need 1 to ${CHAT_LIMITS.text} characters`) };
-    const verdict = moderate(text);
-    if (!verdict.allowed) return { failure: rejectContent(row, verdict, time) };
-    return { text };
+    return text ? { text } : { failure: httpError(400, "CHAT_TEXT_INVALID", `messages need 1 to ${CHAT_LIMITS.text} characters`) };
+  }
+
+  async function screenMessage(text, row, time) {
+    const verdict = await screenText(text);
+    if (!verdict.allowed) return rejectContent(row, verdict, time);
+    return silenced(row);
   }
 
   function findMessage(id) {
@@ -263,7 +289,7 @@ export function createChatRoom({
     return row ? { row } : { failure: httpError(404, "CHAT_USER_NOT_FOUND", "that user has not joined chat yet") };
   }
 
-  function send(payload, row, ip, time) {
+  async function send(payload, row, ip, time) {
     if (!isChatChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
     if (!canPostIn(row.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     const mine = activityOf(row.id, time);
@@ -271,7 +297,7 @@ export function createChatRoom({
     if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) {
       return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     }
-    const written = readText(payload, row, time);
+    const written = readText(payload);
     if (written.failure) return written.failure;
     const comparable = written.text.toLowerCase();
     if (mine.last?.text === comparable && time - mine.last.at < duplicateMs) {
@@ -293,6 +319,8 @@ export function createChatRoom({
     mine.sends.push(time);
     source.push(time);
     sourceSends.set(ip, source);
+    const refused = await screenMessage(written.text, row, time);
+    if (refused) return refused;
     mine.last = { text: comparable, at: time };
     mine.typedAt = 0;
     const id = store.insertMessage({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo });
@@ -302,17 +330,20 @@ export function createChatRoom({
     return ok({ message });
   }
 
-  function edit(payload, row, time) {
+  async function edit(payload, row, time) {
     const { message, numeric, failure } = findMessage(payload.id);
     if (failure) return failure;
     if (message.author !== String(row.id)) return httpError(403, "CHAT_FORBIDDEN", "you can only edit your own messages");
     if (!canPostIn(row.role, message.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     const mine = activityOf(row.id, time);
     if (mine.sends.length >= sendLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
-    const written = readText(payload, row, time);
+    const written = readText(payload);
     if (written.failure) return written.failure;
     mine.sends.push(time);
     if (written.text === message.text) return ok({ message });
+    const refused = await screenMessage(written.text, row, time);
+    if (refused) return refused;
+    if (!store.message(numeric)) return httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone");
     store.editMessage(numeric, written.text, time);
     const updated = store.message(numeric);
     broadcast(frame("update", updated));
@@ -350,6 +381,7 @@ export function createChatRoom({
   function typing(payload, row, time) {
     if (!isChatChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
     if (!canPostIn(row.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    warmText();
     const mine = activityOf(row.id, time);
     if (time - mine.typedAt >= typingGapMs) {
       mine.typedAt = time;
@@ -438,6 +470,7 @@ export function createChatRoom({
   function connect(row, signal) {
     const open = [...streams.values()].filter((stream) => stream.user.id === row.id).length;
     if (open >= maxStreamsPerUser) return reply(httpError(429, "RATE_LIMITED", "too many chat tabs are open"));
+    warmText();
     const id = randomBytes(12).toString("base64url");
     let close = () => {};
     const body = new ReadableStream({
@@ -555,7 +588,7 @@ export function createChatRoom({
     if (gate) return gate;
     for (const field of CHAT_PROFILE_TEXT) {
       if (!fields[field]) continue;
-      const verdict = moderate(fields[field]);
+      const verdict = await screenText(fields[field]);
       if (verdict.allowed) continue;
       const until = strike(row, verdict.strikes, time);
       return httpError(422, "CHAT_PROFILE_BLOCKED", blockedNotice(PROFILE_LABELS[field], verdict.category), {
@@ -564,6 +597,8 @@ export function createChatRoom({
         ...(until && { until }),
       });
     }
+    const refused = silenced(row);
+    if (refused) return refused;
     const updated = store.updateProfile(row.id, fields, time);
     announceProfile(updated);
     return ok({ profile: profileOf(updated, updated) });

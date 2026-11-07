@@ -8,7 +8,7 @@ export const CHAT_CATEGORIES = [
   { name: "support", channels: ["help", "suggestions", "bugs"] },
 ] as const;
 export const CHAT_CHANNELS = CHAT_CATEGORIES.flatMap((category) => category.channels);
-export const CHAT_STAFF_CHANNELS: readonly ChatChannel[] = ["announcements", "rules", "updates"];
+const CHAT_STAFF_CHANNELS: readonly ChatChannel[] = ["announcements", "rules", "updates"];
 export const CHAT_REACTIONS = ["👍", "❤️", "😂", "😮", "😭", "🔥", "💀", "✨"] as const;
 export const CHAT_PROFILE_LIMITS = { display: 32, pronouns: 24, status: 64, bio: 300, bioLines: 6 } as const;
 export const CHAT_MEDIA = {
@@ -22,7 +22,7 @@ export type ChatChannel = (typeof CHAT_CATEGORIES)[number]["channels"][number];
 export type ChatMediaKind = keyof typeof CHAT_MEDIA;
 export type ChatProfileText = (typeof CHAT_PROFILE_TEXT)[number];
 
-export interface ChatReply {
+interface ChatReply {
   id: string;
   author: string;
   name: string;

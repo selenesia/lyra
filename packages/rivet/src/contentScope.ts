@@ -107,8 +107,36 @@ export function runInContentScope(
   scope: object,
   body: string,
 ): unknown {
+  return injectIntoContentScope(
+    win,
+    scope,
+    (key) =>
+      `${key}.result = (function () {\n${body}\n}).call(globalThis);`,
+  );
+}
+
+export function evaluateInContentScope(
+  win: Window,
+  scope: object,
+  source: string,
+): unknown {
+  return injectIntoContentScope(
+    win,
+    scope,
+    (key) =>
+      `${key}.result = (function (eval) {\nreturn eval(${key}.source);\n}).call(globalThis, ${key}.evaluate);`,
+    { source, evaluate: (win as Window & { eval: unknown }).eval },
+  );
+}
+
+function injectIntoContentScope(
+  win: Window,
+  scope: object,
+  statement: (key: string) => string,
+  values: Record<string, unknown> = {},
+): unknown {
   const key = scopeKey();
-  const handoff = { scope, result: undefined as unknown };
+  const handoff = { ...values, scope, result: undefined as unknown };
   try {
     Object.defineProperty(win, key, {
       configurable: true,
@@ -122,7 +150,7 @@ export function runInContentScope(
     const script = doc.createElement("script");
     script.appendChild(
       doc.createTextNode(
-        `((${key}) => {\nwith (${key}.scope) {\n${key}.result = (function () {\n${body}\n}).call(globalThis);\n}\n})(this[${JSON.stringify(key)}]);`,
+        `((${key}) => {\nwith (${key}.scope) {\n${statement(key)}\n}\n})(this[${JSON.stringify(key)}]);`,
       ),
     );
     (doc.head || doc.documentElement).appendChild(script);

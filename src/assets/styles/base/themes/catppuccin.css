@@ -1,0 +1,123 @@
+[data-theme="catppuccin"] {
+  --bg-body: #1e1e2e;
+  --bg-body-grid: #313244;
+  --text-primary: #dee4f8;
+  --text-secondary: #bac2de;
+  --text-muted: #808499;
+  --text-dimmed: #9a9eb1;
+  --text-white: #f7f8fd;
+  --text-black: #1e1e2e;
+
+  --bg-surface-0: #1f1f30;
+  --bg-surface-1: #222235;
+  --bg-surface-2: #252539;
+  --bg-surface-3: #28283c;
+  --bg-surface-5: #2c2c43;
+  --bg-surface-7: #343448;
+  --bg-surface-10: #3e3e51;
+  --bg-surface-active: #585b70;
+
+  --border-transparent: #ffffff00;
+  --border-faint: #6c708680;
+  --border-medium: #45475a;
+  --border-dashed: #6c708655;
+  --border-dashed-hover: #7f849c88;
+  --border-focus: #cba6f7;
+  --accent-color: #cba6f7;
+
+  --hover-bg: #7f849c1f;
+  --hover-bg-light: #7f849c17;
+  --hover-bg-toast: #7f849c29;
+  --active-bg: #7f849c33;
+  --active-bg-subtle: #7f849c0d;
+
+  --color-icon: #bac2de;
+  --color-icon-muted: #9399b2;
+  --color-icon-dim: #7f849c;
+  --color-disabled: #585b70;
+  --color-tab: #a6adc8;
+  --color-tab-active: #cdd6f4;
+  --color-link: #bac2de;
+  --color-link-hover: #cdd6f4;
+  --color-label: #a6adc8;
+  --color-sublabel: #7f849c;
+  --color-info: #9399b2;
+  --color-footer: #7f849c;
+  --color-version: #6c7086;
+  --color-result: #bac2de;
+  --color-result-icon: #a6adc8;
+  --color-close-btn: #a6adc8;
+  --color-loading-text: #cdd6f4;
+  --status-success-text: #a6e3a1;
+
+  --btn-primary-bg: #cba6f7;
+  --btn-primary-bg-hover: #dbc1f9;
+  --btn-primary-text: #1e1e2e;
+  --btn-secondary-bg: #313244;
+  --btn-secondary-bg-hover: #45475a;
+  --btn-secondary-text: #cdd6f4;
+
+  --input-bg: #313244;
+  --input-text: #cdd6f4;
+  --input-placeholder: #7f849c;
+  --input-placeholder-light: #9399b2;
+  --input-placeholder-search: #6c708699;
+  --input-focus-search: #a6adc8bb;
+  --input-border: transparent;
+
+  --checkbox-bg: #45475a;
+  --checkbox-bg-checked: #cba6f7;
+  --checkbox-knob: #cdd6f4;
+  --checkbox-knob-hover: #ffffff;
+
+  --scrollbar-track: #181825;
+  --scrollbar-thumb: #585b70;
+  --scrollbar-thumb-hover: #7f849c;
+
+  --selection-bg: #cba6f7;
+  --selection-text: #1e1e2e;
+
+  --overlay-bg: #11111bde;
+
+  --skeleton-from: #1e1e2e;
+  --skeleton-via: #45475a;
+  --skeleton-to: #1e1e2e;
+  --skeleton-alt-from: #181825;
+  --skeleton-alt-via: #313244;
+
+  --search-glow-border: hsla(267, 84%, 81%, 0.5);
+  --search-glow-bg: hsla(267, 84%, 81%, 0.1);
+  --search-inset-bg: #232336;
+  --search-inset-bg-focus: #2a2a40;
+
+  --split-divider-bg: #181825;
+  --split-border: #45475a;
+  --split-focus-border: #cba6f7;
+  --split-indicator: #cba6f7e5;
+
+  --notif-dot-feature: #a6e3a1;
+  --notif-dot-update: #f9e2af;
+  --notif-badge-bg: #f38ba8;
+  --notif-badge-text: #1e1e2e;
+
+  --toast-bg: #181825cc;
+  --toast-text: #cdd6f4;
+  --toast-border: #45475a55;
+  --toast-btn-bg: rgba(205, 214, 244, 0.1);
+  --toast-btn-border: rgba(205, 214, 244, 0.2);
+  --toast-btn-hover-bg: rgba(205, 214, 244, 0.2);
+  --toast-danger-bg: rgba(243, 139, 168, 0.2);
+  --toast-danger-border: rgba(243, 139, 168, 0.4);
+  --toast-danger-text: #f38ba8;
+  --toast-danger-hover-bg: rgba(243, 139, 168, 0.3);
+
+  --game-card-bg: #1e1e2e;
+  --game-card-overlay: #11111bcc;
+  --game-info-text: #cdd6f4;
+  --game-cover-brightness: 0.75;
+  --game-no-cover-line: #585b70;
+  --game-search-icon: #6c708699;
+  --game-search-icon-focus: #a6adc8bb;
+
+  --brand-color: #cdd6f4;
+}
