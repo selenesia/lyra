@@ -18,7 +18,7 @@ interface CatalogViewProps<T> {
   items: readonly T[];
   getCard: (item: T) => CanvasCard;
   onSelect: (item: T) => void;
-  anime?: boolean;
+  posters?: boolean;
   emptyMessage?: string | null;
   statusMessage?: string | null;
   beforeGrid?: ComponentChildren;
@@ -37,7 +37,7 @@ export default function CatalogView<T>({
   items,
   getCard,
   onSelect,
-  anime = false,
+  posters = false,
   emptyMessage,
   statusMessage,
   beforeGrid,
@@ -81,7 +81,7 @@ export default function CatalogView<T>({
             items={items}
             getCard={getCard}
             onSelect={onSelect}
-            anime={anime}
+            posters={posters}
             loading={showSkeleton}
             active={visible && gridVisible}
           />

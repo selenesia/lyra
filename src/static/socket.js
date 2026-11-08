@@ -39,7 +39,7 @@ function staticSocketClass(NativeWebSocket) {
         if (this.state !== 0) return;
         if (!/^[\w-]{43}$/.test(ticket)) throw new Error();
         const offered = typeof protocols === "string" ? [protocols] : protocols;
-        const socket = this.socket = new NativeWebSocket(backendSocket, [...offered, "lyra-relay-v1", `lyra-ticket.${ticket}`]);
+        const socket = this.socket = new NativeWebSocket(backendSocket, [...offered, "relay-v1", `ticket.${ticket}`]);
         socket.binaryType = this.type;
         for (const name of ["open", "message", "error", "close"]) socket.addEventListener(name, (event) => {
           if (name === "open") this.opened = true;
@@ -62,7 +62,7 @@ function staticSocketClass(NativeWebSocket) {
     }
     get readyState() { return this.socket?.readyState ?? this.state; }
     get bufferedAmount() { return this.socket?.bufferedAmount ?? 0; }
-    get protocol() { return this.socket?.protocol === "lyra-relay-v1" ? "" : this.socket?.protocol ?? ""; }
+    get protocol() { return this.socket?.protocol === "relay-v1" ? "" : this.socket?.protocol ?? ""; }
     get extensions() { return this.socket?.extensions ?? ""; }
     get binaryType() { return this.type; }
     set binaryType(value) { this.type = value; if (this.socket) this.socket.binaryType = value; }

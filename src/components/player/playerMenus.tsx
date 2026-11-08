@@ -5,6 +5,7 @@ import type { PlayerSelector } from "./playerState.ts";
 import { PlayerMenu, PlayerOption } from "./PlayerMenu.tsx";
 import { IconBubbleText, IconChevronBottom } from "../icons/index.tsx";
 import EpisodePickerModal from "../anime/EpisodePickerModal.tsx";
+import TitleEpisodePicker from "../watch/TitleEpisodePicker.tsx";
 import type { AnimeProvider } from "../../features/anime/animeIdentity.ts";
 import {
   type AnimeSeason,
@@ -186,22 +187,29 @@ export function renderAudioMenu({
   );
 }
 
+export interface LanguageOption {
+  value: string;
+  label: string;
+}
+
 interface LanguageMenuContext {
-  streamProvider: string | null;
+  visible: boolean;
   openSelector: PlayerSelector | null;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   changingLanguage: boolean;
   loadingStreamInfo: boolean;
-  language: "sub" | "dub";
-  changeLanguage: (nextLanguage: "sub" | "dub") => Promise<void>;
+  value: string;
+  label: string;
+  options: LanguageOption[];
+  changeLanguage: (nextLanguage: string) => Promise<void>;
 }
 
 export function renderLanguageMenu({
-  streamProvider, openSelector, setOpenSelector, changingLanguage,
-  loadingStreamInfo, language, changeLanguage,
+  visible, openSelector, setOpenSelector, changingLanguage,
+  loadingStreamInfo, value, label, options, changeLanguage,
 }: LanguageMenuContext) {
   return (
-    streamProvider !== null && streamProvider !== "framex" && (
+    visible && (
       <PlayerMenu
         className="player-language-selector"
         open={openSelector === "language"}
@@ -212,17 +220,17 @@ export function renderLanguageMenu({
         }
         disabled={changingLanguage || loadingStreamInfo}
         panelClassName="player-audio-options"
-        label={language}
+        label={label}
       >
-        {(["sub", "dub"] as const).map((option) => (
+        {options.map((option) => (
           <PlayerOption
-            key={option}
+            key={option.value}
             open={openSelector === "language"}
-            selected={option === language}
+            selected={option.value === value}
             solid
-            onSelect={() => void changeLanguage(option)}
+            onSelect={() => void changeLanguage(option.value)}
           >
-            {option}
+            {option.label}
           </PlayerOption>
         ))}
       </PlayerMenu>
@@ -242,16 +250,17 @@ interface EpisodeMenuContext {
   poster: string;
   currentSeason: AnimeSeason;
   pickerSeasons: AnimeSeason[];
-  language: "sub" | "dub";
+  language: string;
   closeSelector: () => void;
   playPickedEpisode: (playerUrl: string) => void;
+  show: { id: string; season: number } | null;
 }
 
 export function renderEpisodeMenu({
   format, episodeSelectorOpen, setOpenSelector, confirmedEpisodeNumber,
   setEpisodeSelectorMounted, title, episodeSelectorRendered, identityIds,
   poster, currentSeason, pickerSeasons, language, closeSelector,
-  playPickedEpisode,
+  playPickedEpisode, show,
 }: EpisodeMenuContext) {
   return (
     !isAnimeMovieFormat(format) && (
@@ -268,7 +277,9 @@ export function renderEpisodeMenu({
             );
           }}
         >
-          <span>ep {confirmedEpisodeNumber ?? "?"}</span>
+          <span>
+            {show ? `s${show.season} ` : ""}ep {confirmedEpisodeNumber ?? "?"}
+          </span>
           <IconChevronBottom size={12} class="selector-chevron" />
         </button>
         <div
@@ -292,7 +303,23 @@ export function renderEpisodeMenu({
               <strong>{title}</strong>
             </div>
           </div>
-          {episodeSelectorRendered && (
+          {episodeSelectorRendered && show && (
+            <TitleEpisodePicker
+              embedded
+              visible={episodeSelectorRendered}
+              id={show.id}
+              title={title}
+              posterUrl={poster}
+              year={currentSeason.year}
+              initialSeason={show.season}
+              currentSeason={show.season}
+              currentEpisode={confirmedEpisodeNumber ?? undefined}
+              language={language}
+              onClose={closeSelector}
+              onPlay={playPickedEpisode}
+            />
+          )}
+          {episodeSelectorRendered && !show && (
             <EpisodePickerModal
               embedded
               visible={episodeSelectorRendered}
@@ -306,7 +333,7 @@ export function renderEpisodeMenu({
               seasons={pickerSeasons}
               initialSeasonId={currentSeason.id}
               currentEpisode={confirmedEpisodeNumber ?? undefined}
-              initialLanguage={language}
+              initialLanguage={language === "dub" ? "dub" : "sub"}
               onClose={closeSelector}
               onPlay={playPickedEpisode}
             />

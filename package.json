@@ -22,6 +22,7 @@
     "notice": "bun scripts/notice.mjs",
     "chat": "bun scripts/chat.mjs",
     "build:chat-image-labels": "bun scripts/build-chat-image-labels.mjs",
+    "build:ublock-state": "bun scripts/build-ublock-state.mjs",
     "check:chat-image": "bun scripts/check-chat-image.mjs",
     "check:chat-text": "bun scripts/check-chat-text.mjs",
     "setup:chat": "bun scripts/setup-chat.mjs",

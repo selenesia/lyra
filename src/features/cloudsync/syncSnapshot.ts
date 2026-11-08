@@ -52,18 +52,22 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
-export async function exportSyncSnapshot(): Promise<SyncSnapshot> {
+export async function exportSyncSnapshot(
+  progress: (message: string) => void = () => {},
+): Promise<SyncSnapshot> {
   const factory = globalThis.indexedDB;
   if (!factory) throw syncError("indexeddb is unavailable");
+  progress("reading local data...");
   const [names, cookies] = await Promise.all([
     databaseNames(factory),
     exportBrowserCookies(),
   ]);
-  const databases = await mapConcurrent(
-    names,
-    4,
-    async (name) => [name, await exportDatabase(factory, name)] as const,
-  );
+  let read = 0;
+  const databases = await mapConcurrent(names, 4, async (name) => {
+    const database = await exportDatabase(factory, name);
+    progress(`reading local data... (${++read}/${names.length})`);
+    return [name, database] as const;
+  });
   const indexedDB = Object.fromEntries(databases);
   return {
     schemaVersion: SYNC_SCHEMA_VERSION,
@@ -102,7 +106,11 @@ export async function importSyncSnapshot(
   progress("restoring cookies...");
   changes += await replaceCookies(snapshot.cookies);
   progress("restoring indexeddb...");
-  changes += await restoreIndexedDB(snapshot.indexedDB, includeSensitive);
+  changes += await restoreIndexedDB(
+    snapshot.indexedDB,
+    includeSensitive,
+    (done, total) => progress(`restoring indexeddb... (${done}/${total})`),
+  );
   return changes;
 }
 
@@ -133,7 +141,11 @@ export async function applySyncDelta(
   progress("restoring cookies...");
   changes += await applyCookieDelta(previous.cookies, target.cookies);
   progress("restoring indexeddb...");
-  changes += await applyIndexedDBDelta(previous.indexedDB, target.indexedDB);
+  changes += await applyIndexedDBDelta(
+    previous.indexedDB,
+    target.indexedDB,
+    (done, total) => progress(`restoring indexeddb... (${done}/${total})`),
+  );
   return changes;
 }
 

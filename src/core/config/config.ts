@@ -14,7 +14,7 @@ export const DEFAULT_BOOKMARKS: Bookmark[] = [
     icon: `/!cover!/${encodeMochiUrl("https://atsu.moe/favicon.ico")}/`,
   },
   { name: "games", url: "lyra://games" },
-  { name: "anime", url: "lyra://anime" },
+  { name: "watch", url: "lyra://watch" },
   ...(!isStatic ? [{ name: "chat", url: "lyra://chat" }] : []),
   { name: "youtube", url: "https://youtube.com/" },
 ];

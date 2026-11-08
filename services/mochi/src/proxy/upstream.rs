@@ -135,7 +135,7 @@ pub(super) fn classified_error_response(
         HeaderValue::from_static("text/plain; charset=utf-8"),
     );
     headers.insert("cache-control", HeaderValue::from_static("no-store"));
-    headers.insert("x-lyra-error-class", HeaderValue::from_static(class));
+    headers.insert("x-error-class", HeaderValue::from_static(class));
     (status, headers, negative_message(message)).into_response()
 }
 

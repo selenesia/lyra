@@ -61,6 +61,7 @@ export class Rivet {
     buffer: ArrayBuffer,
     filename = "extension.crx",
     replacesId?: string,
+    initialLocalStorage?: Record<string, unknown>,
   ): Promise<string> {
     return installExtensionImpl(
       buffer,
@@ -69,6 +70,7 @@ export class Rivet {
       this.host,
       this.backgroundRoot,
       replacesId,
+      initialLocalStorage,
     );
   }
 

@@ -174,7 +174,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     openedStorageKey: "lyraUserOpenedChat",
     hideOtherViews: () => {
       window.hideGameMenu?.();
-      window.hideAnimeMenu?.();
+      window.hideWatchMenu?.();
     },
     interceptEscape: cancelMode,
     onShowFrame: focusField,

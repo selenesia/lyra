@@ -1,21 +1,21 @@
-body.anime-view .games-page,
-body.anime-view footer {
+body.watch-view .games-page,
+body.watch-view footer {
   display: none !important;
 }
 
-body.anime-view .catalog-topbar {
+body.watch-view .catalog-topbar {
   flex-direction: column;
   align-items: center;
   gap: 12px;
 }
 
-.catalog-grid-container:has(.anime-resume-card) {
+.catalog-grid-container:has(.watch-resume-card) {
   display: flex;
   flex-direction: column;
   gap: var(--catalog-section-gap);
 }
 
-.anime-resume-card {
+.watch-resume-card {
   border-radius: var(--radius-item);
   background-color: var(--game-card-bg);
   width: 100%;
@@ -41,17 +41,17 @@ body.anime-view .catalog-topbar {
     transform var(--motion-control) var(--motion-ease);
 }
 
-.anime-resume-card:hover {
+.watch-resume-card:hover {
   background-color: var(--hover-bg);
   transform: none;
   z-index: 5;
 }
 
-.anime-resume-card:focus-visible {
+.watch-resume-card:focus-visible {
   outline-color: var(--border-focus);
 }
 
-.anime-resume-card .poster-cover {
+.watch-resume-card .poster-cover {
   position: relative;
   border-radius: inherit;
   overflow: hidden;
@@ -63,7 +63,7 @@ body.anime-view .catalog-topbar {
   align-self: stretch;
 }
 
-.anime-resume-card .anime-info {
+.watch-resume-card .watch-info {
   position: relative;
   padding: var(--catalog-card-inset);
   box-sizing: border-box;
@@ -75,17 +75,17 @@ body.anime-view .catalog-topbar {
   gap: var(--catalog-card-inset);
 }
 
-.anime-resume-title {
+.watch-resume-title {
   text-transform: lowercase;
   overflow-wrap: anywhere;
 }
 
-.anime-resume-caption {
+.watch-resume-caption {
   font-size: var(--catalog-meta-size);
   color: var(--text-secondary);
 }
 
-.anime-resume-play {
+.watch-resume-play {
   flex-shrink: 0;
   margin-right: var(--catalog-section-gap);
   color: var(--color-icon);
@@ -108,7 +108,7 @@ body.anime-view .catalog-topbar {
   opacity: 1;
 }
 
-.anime-resume-card:hover .poster-cover img {
+.watch-resume-card:hover .poster-cover img {
   filter: brightness(1);
   transform: scale(var(--motion-hover-scale, 1.05));
 }
@@ -139,4 +139,98 @@ body.anime-view .catalog-topbar {
 
 .no-cover-icon svg {
   display: block;
+}
+
+.watch-sections {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--catalog-section-gap);
+  position: relative;
+  isolation: isolate;
+}
+
+.catalog-grid-container:has(.watch-resume-card) .watch-sections {
+  margin-bottom: 0;
+}
+
+.watch-section-pill {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  width: var(--pill-w, 0);
+  height: var(--pill-h, 0);
+  border-radius: var(--radius-item);
+  background-color: var(--active-bg);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+  transform: translate(var(--pill-x, 0), var(--pill-y, 0));
+}
+
+.watch-sections.is-placed .watch-section-pill {
+  opacity: 1;
+  transition: transform var(--motion-slide) var(--motion-ease-slide);
+}
+
+.watch-section-tab {
+  position: relative;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-item);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--motion-control) var(--motion-ease);
+}
+
+.watch-section-chip {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-item);
+  background-color: var(--bg-surface-2);
+  transition:
+    background-color var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease);
+}
+
+.watch-section-label {
+  position: relative;
+  z-index: 2;
+  display: block;
+  transition: transform var(--motion-control) var(--motion-ease);
+}
+
+.watch-section-tab:hover {
+  color: var(--text-primary);
+}
+
+.watch-section-tab:hover .watch-section-chip {
+  background-color: var(--hover-bg);
+  transform: scale(var(--motion-hover-scale, 1.05));
+}
+
+.watch-section-tab:hover .watch-section-label {
+  transform: scale(var(--motion-hover-scale, 1.05));
+}
+
+.watch-section-tab.is-active {
+  color: var(--text-primary);
+}
+
+.watch-section-tab.is-active .watch-section-chip {
+  background-color: transparent;
+  transform: none;
+}
+
+.watch-section-tab.is-active .watch-section-label {
+  transform: none;
+}
+
+.watch-section-tab:focus-visible {
+  outline-color: var(--border-focus);
 }

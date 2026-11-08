@@ -8,6 +8,7 @@ import {
   rivetExtensionBase,
 } from "./urlScheme";
 import { NEGATIVE, negativeMessage } from "./messages";
+import { readExtFileText } from "./fileStore";
 
 const RESOURCE_ATTR_RE =
   /(<(?:script|link|img)\b[^>]*\s(?:src|href)=["'])([^"']+)(["'][^>]*>)/gi;
@@ -252,6 +253,38 @@ export function injectScriptFromUrl(
       resolve();
     }
   });
+}
+
+export async function preloadClassicWorkerImports(
+  extId: string,
+  entryPath: string,
+): Promise<Map<string, string>> {
+  const scripts = new Map<string, string>();
+  const visited = new Set<string>();
+  const visit = async (path: string): Promise<void> => {
+    if (visited.has(path)) return;
+    visited.add(path);
+    const source = await readExtFileText(extId, path);
+    if (source === null) return;
+
+    const importPattern = /\bimportScripts\s*\(\s*(["'])([^"'\\]*)\1\s*\)/g;
+    for (const match of source.matchAll(importPattern)) {
+      const specifier = match[2];
+      if (!specifier || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier))
+        continue;
+      const importedPath = resolveExtensionResourcePath(
+        specifier.startsWith("/") ? "" : extensionPathDir(path),
+        specifier,
+      );
+      const importedSource = await readExtFileText(extId, importedPath);
+      if (importedSource === null) continue;
+      scripts.set(buildExtensionUrl(extId, importedPath), importedSource);
+      await visit(importedPath);
+    }
+  };
+
+  await visit(entryPath);
+  return scripts;
 }
 
 export function installClassicWorkerGlobals(

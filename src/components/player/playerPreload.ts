@@ -1,46 +1,15 @@
 import Hls from "hls.js";
-import type { MutableRef } from "preact/hooks";
-import {
-  type PlaybackEpisodePartRange,
-  buildNextEpisodeStreamUrl,
-} from "./episodeParts.ts";
-import type { AnimeProvider } from "../../features/anime/animeIdentity.ts";
-import { isAnimeMovieFormat } from "../../features/anime/anime.ts";
 
 interface PreloadContext {
   preloadSource: string;
   videoSrc: string;
-  episodeNumber: number;
-  episodeCount: number;
-  format: string;
-  episodeParts: PlaybackEpisodePartRange[];
-  identityIds: Partial<Record<AnimeProvider, string>>;
-  language: "sub" | "dub";
-  streamSessionRef: MutableRef<string>;
-  auto4k: boolean;
+  nextVideoSrc: string;
 }
 
 export function preloadNextEpisode({
-  preloadSource, videoSrc, episodeNumber, episodeCount, format, episodeParts,
-  identityIds, language, streamSessionRef, auto4k,
+  preloadSource, videoSrc, nextVideoSrc,
 }: PreloadContext) {
-  if (
-    preloadSource !== videoSrc ||
-    episodeNumber < 1 ||
-    episodeCount <= episodeNumber ||
-    isAnimeMovieFormat(format)
-  ) {
-    return;
-  }
-  const nextVideoSrc = buildNextEpisodeStreamUrl(
-    episodeNumber + 1,
-    episodeParts,
-    identityIds,
-    language,
-    streamSessionRef.current,
-    auto4k ? "auto" : "",
-  );
-  if (!nextVideoSrc) return;
+  if (preloadSource !== videoSrc || !nextVideoSrc) return;
 
   const preloadVideo = document.createElement("video");
   preloadVideo.preload = "auto";

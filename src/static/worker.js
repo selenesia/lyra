@@ -117,7 +117,7 @@ async function staticForward(request, event) {
     }
   };
   let response = await send();
-  if (response.status === 401 && response.headers.get("x-lyra-static-auth") === "required") {
+  if (response.status === 401 && response.headers.get("x-static-auth") === "required") {
     const renewed = await staticProof(destination, method, event, true);
     if (renewed) {
       await response.body?.cancel();
@@ -195,8 +195,8 @@ self.addEventListener("fetch", (event) => {
     if (staticParents.size >= 1_000) staticParents.delete(staticParents.keys().next().value);
     staticParents.set(event.resultingClientId, staticParents.get(event.clientId) || event.clientId);
   }
-  if (request.mode === "navigate" && ["/", "/index.html", "/s", "/player.html", "/stream/anime"].includes(path)) {
-    event.respondWith(staticDocument(request, path === "/player.html" || path === "/stream/anime" ? "player.html" : "index.html"));
+  if (request.mode === "navigate" && ["/", "/index.html", "/s", "/player.html", "/stream/anime", "/stream/watch"].includes(path)) {
+    event.respondWith(staticDocument(request, ["/player.html", "/stream/anime", "/stream/watch"].includes(path) ? "player.html" : "index.html"));
     return;
   }
   if (path === "/__static/ticket" || /^\/(?:api\/|stream\/|!!raw\/|!!folio\/|!cover!\/)/.test(path) ||

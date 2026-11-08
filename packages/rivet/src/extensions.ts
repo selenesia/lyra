@@ -42,6 +42,43 @@ export interface InstalledExtensionSummary {
   hasPopup: boolean;
 }
 
+const BACKGROUND_WINDOW_ACCESS = /\bget(?:BackgroundPage|Views)\b/;
+const PAGE_SCRIPT_FILE = /\.(?:m?js|html?)$/i;
+const pageScriptDecoder = new TextDecoder();
+
+function readsBackgroundWindow(
+  path: string,
+  bytes: ArrayBuffer | undefined,
+): boolean {
+  return (
+    bytes !== undefined &&
+    PAGE_SCRIPT_FILE.test(path) &&
+    BACKGROUND_WINDOW_ACCESS.test(pageScriptDecoder.decode(bytes))
+  );
+}
+
+async function rememberBackgroundWindowAccess(
+  meta: ExtensionMeta,
+): Promise<boolean> {
+  if (meta.readsBackgroundWindow !== undefined)
+    return meta.readsBackgroundWindow;
+  const paths = meta.fileList.filter((path) => PAGE_SCRIPT_FILE.test(path));
+  let found = false;
+  for (let offset = 0; offset < paths.length && !found; offset += 16) {
+    const entries = await dbGetEntries<ArrayBuffer>(
+      EXT_FILES_STORE,
+      paths.slice(offset, offset + 16).map((path) => `${meta.id}/${path}`),
+    );
+    found = entries.some(([key, bytes]) => readsBackgroundWindow(key, bytes));
+  }
+  const stored = await dbGet<ExtensionMeta>(EXT_STORE, meta.id);
+  if (stored) {
+    stored.readsBackgroundWindow = found;
+    await dbPut(EXT_STORE, null, stored);
+  }
+  return found;
+}
+
 function keysWithPrefix(prefix: string): IDBKeyRange {
   return IDBKeyRange.bound(prefix, `${prefix.slice(0, -1)}0`, false, true);
 }
@@ -106,6 +143,19 @@ async function loadExtension(
   registerContentScripts(ext, registry);
   const defaultIconPath = getDefaultIcon(ext.manifest);
   const prepared = await Promise.allSettled([
+    rememberBackgroundWindowAccess(meta).then(
+      (reads) => {
+        ext.readsBackgroundWindow = reads;
+      },
+      (e) => {
+        console.warn(
+          "[rivet] background window access check failed for extension",
+          ext.manifest.name,
+          e,
+          NEGATIVE,
+        );
+      },
+    ),
     loadMessages(ext.id, ext.manifest).then((messages) => {
       ext.messages = messages;
       resolveManifestI18n(ext.manifest, messages);
@@ -218,6 +268,7 @@ export async function installExtension(
   host: RivetHostBindings,
   backgroundRoot: HTMLElement,
   replacesId?: string,
+  initialLocalStorage?: Record<string, unknown>,
 ): Promise<string> {
   const archive = new ExtensionArchive();
   let meta: ExtensionMeta;
@@ -236,13 +287,20 @@ export async function installExtension(
       fileList,
     };
     try {
+      let backgroundWindowAccess = false;
       for (let offset = 0; offset < fileList.length; offset += 16) {
         const paths = fileList.slice(offset, offset + 16);
         const files = await archive.readFiles(paths);
+        backgroundWindowAccess ||= paths.some((path, index) =>
+          readsBackgroundWindow(path, files[index]),
+        );
         await dbPutEntries(
           EXT_FILES_STORE,
           paths.map((path, index) => [`${extId}/${path}`, files[index]] as const),
         );
+      }
+      for (const [key, value] of Object.entries(initialLocalStorage ?? {})) {
+        await dbPutEntries(EXT_STORAGE_STORE, [[`${extId}/local/${key}`, value]]);
       }
       if (previousId) {
         const previousPrefix = `${previousId}/`;
@@ -260,6 +318,7 @@ export async function installExtension(
             ] as const),
         );
       }
+      meta.readsBackgroundWindow = backgroundWindowAccess;
       await dbPut(EXT_STORE, null, meta);
     } catch (error) {
       await Promise.all([

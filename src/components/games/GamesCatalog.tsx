@@ -38,7 +38,7 @@ export default function GamesCatalog({
     activeIcon: SVG_SEARCH,
     openedStorageKey: "lyraUserOpenedGameMenu",
     hideOtherViews: () => {
-      window.hideAnimeMenu?.();
+      window.hideWatchMenu?.();
       window.hideChatPage?.();
     },
     showOnMount: openOnMount,

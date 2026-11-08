@@ -1,8 +1,8 @@
 export const loadGamesCatalog = () =>
   import("../components/games/GamesCatalog.tsx");
 
-export const loadAnimeCatalog = () =>
-  import("../components/anime/AnimeCatalog.tsx");
+export const loadWatchCatalog = () =>
+  import("../components/watch/WatchCatalog.tsx");
 
 export function preloadGamesCatalog() {
   void loadGamesCatalog().catch(() => {});
@@ -11,10 +11,13 @@ export function preloadGamesCatalog() {
     .catch(() => {});
 }
 
-export function preloadAnimeCatalog() {
-  void loadAnimeCatalog().catch(() => {});
+export function preloadWatchCatalog() {
+  void loadWatchCatalog().catch(() => {});
   void import("../features/anime/anime.ts")
     .then(({ fetchAnimeData }) => fetchAnimeData("trending"))
+    .catch(() => {});
+  void import("../features/watch/titles.ts")
+    .then(({ fetchTitleHome }) => fetchTitleHome())
     .catch(() => {});
 }
 
@@ -23,6 +26,9 @@ export const loadNewTabModal = () =>
 
 export const loadSettingsModal = () =>
   import("../components/settings/SettingsModal.tsx");
+
+export const loadFallingLeaves = () =>
+  import("../components/layout/FallingLeaves.tsx");
 
 export const loadChatPage = () => import("../components/chat/ChatPage.tsx");
 

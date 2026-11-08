@@ -5,6 +5,9 @@ import { negativeMessage } from "../messages";
 
 const MAX_TRACKED_CLIENTS = 256;
 const BOOTSTRAP_SUFFIX = "/__bootstrap__";
+const ISOLATED_BACKGROUND_SUFFIX = "/__isolated__";
+const ISOLATED_BACKGROUND_SCRIPT = "/b/rv/background.js";
+const ISOLATION_POLICY = "isolate-and-credentialless";
 const clientToExtId = new Map<string, string>();
 
 function rememberClient(clientId: string, extId: string): void {
@@ -52,6 +55,11 @@ function frameDocumentStub(): string {
   return `<!DOCTYPE html><html><head></head><body><script>(()=>{try{const mount=parent[Symbol.for(${JSON.stringify(RIVET_CHILD_FRAME_MOUNT_KEY)})];if(typeof mount==="function"&&mount(window))return}catch{}fetch(location.href).then((response)=>response.text()).then((html)=>{document.open();document.write(html);document.close()})})()</script></body></html>`;
 }
 
+function isolatedBackgroundDocument(): string {
+  const appBase = JSON.stringify(RIVET_APP_BASE).replace(/</g, "\\u003c");
+  return `<!DOCTYPE html><html><head></head><body><script>globalThis.__LYRA_APP_BASE__=${appBase}</script><script src="${ISOLATED_BACKGROUND_SCRIPT}"></script></body></html>`;
+}
+
 function isFrameDocumentNavigation(request: Request, path: string): boolean {
   return (
     request.mode === "navigate" &&
@@ -60,13 +68,10 @@ function isFrameDocumentNavigation(request: Request, path: string): boolean {
   );
 }
 
-function bootstrapExtensionId(pathname: string): string | null {
-  if (
-    !pathname.startsWith(RIVET_PREFIX) ||
-    !pathname.endsWith(BOOTSTRAP_SUFFIX)
-  )
+function bootstrapExtensionId(pathname: string, suffix: string): string | null {
+  if (!pathname.startsWith(RIVET_PREFIX) || !pathname.endsWith(suffix))
     return null;
-  const extId = pathname.slice(RIVET_PREFIX.length, -BOOTSTRAP_SUFFIX.length);
+  const extId = pathname.slice(RIVET_PREFIX.length, -suffix.length);
   return extId && !extId.includes("/") ? extId : null;
 }
 
@@ -119,7 +124,24 @@ export async function route(event: FetchEvent): Promise<Response> {
     );
   }
 
-  const bootstrapExtId = bootstrapExtensionId(url.pathname);
+  const isolatedExtId = bootstrapExtensionId(
+    url.pathname,
+    ISOLATED_BACKGROUND_SUFFIX,
+  );
+  if (isolatedExtId) {
+    const clientId = (event as unknown as { resultingClientId?: string })
+      .resultingClientId;
+    if (clientId) rememberClient(clientId, isolatedExtId);
+    return new Response(isolatedBackgroundDocument(), {
+      status: 200,
+      headers: {
+        ...responseHeaders("text/html"),
+        "Document-Isolation-Policy": ISOLATION_POLICY,
+      },
+    });
+  }
+
+  const bootstrapExtId = bootstrapExtensionId(url.pathname, BOOTSTRAP_SUFFIX);
   if (bootstrapExtId) {
     const clientId = (event as unknown as { resultingClientId?: string })
       .resultingClientId;

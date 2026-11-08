@@ -26,7 +26,7 @@ async function backendAvailable(origin: string) {
       credentials: "omit", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(5_000),
     });
     const status = response.ok ? await response.json() : null;
-    return status?.protocol === 1 && status.enabled === true;
+    return status?.protocol === 2 && status.enabled === true;
   } catch { return false; }
 }
 
@@ -70,7 +70,7 @@ async function request(path: string, init: RequestInit) {
 async function credentials(response: Response): Promise<Credentials> {
   if (!response.ok) throw new Error(negativeMessage("connection unavailable"));
   const value = await response.json();
-  if (value.protocol !== 1 || !Number.isSafeInteger(value.expires) || value.expires <= Date.now() ||
+  if (value.protocol !== 2 || !Number.isSafeInteger(value.expires) || value.expires <= Date.now() ||
       [value.access, value.refresh, value.nonce].some((entry) => typeof entry !== "string" || !/^[\w-]{43}$/.test(entry))) {
     throw new Error(negativeMessage("connection unavailable"));
   }

@@ -11,6 +11,7 @@ export interface CanvasCard {
   year?: number | undefined;
   rating?: number | undefined;
   adult?: boolean | undefined;
+  badge?: string | undefined;
   resumeLabel?: string | undefined;
 }
 
@@ -18,7 +19,7 @@ interface Props<T> {
   items: readonly T[];
   getCard: (item: T) => CanvasCard;
   onSelect: (item: T) => void;
-  anime: boolean;
+  posters: boolean;
   loading: boolean;
   active: boolean;
 }
@@ -71,7 +72,7 @@ export default function CatalogCanvas<T>({
   items,
   getCard,
   onSelect,
-  anime,
+  posters,
   loading,
   active,
 }: Props<T>) {
@@ -111,6 +112,7 @@ export default function CatalogCanvas<T>({
         lines?: string[];
         yearWidth?: number;
         ratingWidth?: number;
+        badgeWidth?: number;
         painted?: { amount: number; opacity: number; ready: boolean };
       }
     >();
@@ -132,7 +134,7 @@ export default function CatalogCanvas<T>({
       connection?.saveData ||
       /^(slow-2g|2g|3g)$/.test(connection?.effectiveType || "");
     let layoutWidth = host.clientWidth;
-    let layout = canvasLayout(layoutWidth, count, anime);
+    let layout = canvasLayout(layoutWidth, count, posters);
     let offset = 0;
     let frame = 0;
     let hovered = -1;
@@ -191,7 +193,7 @@ export default function CatalogCanvas<T>({
       data = dataRef.current;
       count = data.loading ? 18 : data.items.length;
       layoutWidth = host.clientWidth;
-      layout = canvasLayout(layoutWidth, count, anime);
+      layout = canvasLayout(layoutWidth, count, posters);
       cards.clear();
       transitions.clear();
       hovered = -1;
@@ -287,7 +289,7 @@ export default function CatalogCanvas<T>({
       if (!width) return;
       if (width !== layoutWidth) {
         layoutWidth = width;
-        layout = canvasLayout(width, count, anime);
+        layout = canvasLayout(width, count, posters);
         cards.clear();
         fullRedraw = true;
       }
@@ -508,7 +510,7 @@ export default function CatalogCanvas<T>({
             entry.lines.push(line);
           }
           const lines = entry.lines;
-          const hasMeta = anime && (card.year || card.rating || card.adult);
+          const hasMeta = posters && (card.year || card.rating || card.adult || card.badge);
           ctx.fillStyle = color("--game-info-text", "#f3f3f3");
           lines.forEach((text, row) =>
             ctx.fillText(
@@ -549,6 +551,16 @@ export default function CatalogCanvas<T>({
               ctx.fill();
               ctx.fillStyle = "#fff";
               ctx.fillText("18+", left + 3, metaY);
+              left += 31;
+            }
+            if (card.badge) {
+              const badgeWidth = (entry.badgeWidth ??= ctx.measureText(card.badge).width) + 8;
+              ctx.fillStyle = "rgba(255,255,255,0.18)";
+              ctx.beginPath();
+              ctx.roundRect(left, metaY - 2, badgeWidth, 14, detailRadius);
+              ctx.fill();
+              ctx.fillStyle = color("--game-info-text", "#f3f3f3");
+              ctx.fillText(card.badge, left + 4, metaY);
             }
           }
           if (card.resumeLabel) {
@@ -662,7 +674,7 @@ export default function CatalogCanvas<T>({
       canvas.removeEventListener("mouseleave", leave);
       canvas.removeEventListener("click", click);
     };
-  }, [anime, active]);
+  }, [posters, active]);
 
   useLayoutEffect(() => resetRef.current(), [items, getCard, loading]);
 

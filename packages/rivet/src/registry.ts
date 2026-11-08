@@ -50,6 +50,8 @@ export interface WebRequestResult {
   responseHeaders?: WebRequestHeader[];
 }
 
+const WEB_REQUEST_LISTENER_WAIT_MS = 250;
+
 interface WebRequestListener {
   extId: string;
   event: WebRequestEventName;
@@ -60,6 +62,7 @@ interface WebRequestListener {
     tabId?: number;
     windowId?: number;
   };
+  waitMs: number;
 }
 
 export interface PortRecord {
@@ -122,10 +125,11 @@ interface AlarmRecord {
 }
 
 interface BackgroundContext {
-  kind: "worker" | "frame";
+  kind: "worker" | "frame" | "isolated";
   worker?: Worker;
   frame?: HTMLIFrameElement;
   events: RealmEvents;
+  close?: () => void;
 }
 
 interface TabDocumentContext {
@@ -236,6 +240,7 @@ export interface ExtensionState {
   ports: Map<string, PortRecord>;
   tabEvents: Map<number, Map<string, TabDocumentContext>>;
   popupEvents: RealmEvents | null;
+  readsBackgroundWindow: boolean;
 }
 
 export function setExtensionIcon(
@@ -320,6 +325,7 @@ export class RivetRegistry {
       ports: new Map(),
       tabEvents: new Map(),
       popupEvents: null,
+      readsBackgroundWindow: true,
     };
     this.extensions.set(id, state);
     return state;
@@ -338,6 +344,7 @@ export class RivetRegistry {
     for (const alarm of ext.alarms.values()) clearTimeout(alarm.timer);
     if (ext.background?.kind === "worker") ext.background.worker?.terminate();
     if (ext.background?.kind === "frame") ext.background.frame?.remove();
+    ext.background?.close?.();
     setExtensionIcon(ext, null);
     this.removeWebRequestListeners(id);
     for (const key of this.contentScriptAssets.keys()) {
@@ -351,6 +358,7 @@ export class RivetRegistry {
     event: WebRequestEventName,
     listener: (details: WebRequestDetails) => unknown,
     filter: WebRequestListener["filter"] = {},
+    waitMs = WEB_REQUEST_LISTENER_WAIT_MS,
   ): void {
     const listeners = this.webRequestListeners.get(event) ?? [];
     if (
@@ -359,7 +367,7 @@ export class RivetRegistry {
       )
     )
       return;
-    listeners.push({ extId, event, listener, filter });
+    listeners.push({ extId, event, listener, filter, waitMs });
     this.webRequestListeners.set(event, listeners);
     const waiterKey = `${extId}:${event}`;
     const waiters = this.webRequestListenerWaiters.get(waiterKey);
@@ -528,7 +536,7 @@ export class RivetRegistry {
             result = await Promise.race([
               result,
               new Promise<undefined>((resolve) => {
-                timer = setTimeout(resolve, 250);
+                timer = setTimeout(resolve, entry.waitMs);
               }),
             ]);
           } finally {
@@ -583,6 +591,31 @@ export class RivetRegistry {
     for (const documents of ext.tabEvents.values()) {
       for (const { events } of documents.values()) pick(events).fire(...args);
     }
+  }
+
+  broadcastOutsideBackground(
+    extId: string,
+    pick: (events: RealmEvents) => EventHub,
+    args: unknown[],
+  ): void {
+    const ext = this.extensions.get(extId);
+    if (!ext) return;
+    for (const documents of ext.tabEvents.values()) {
+      for (const { events } of documents.values()) pick(events).fire(...args);
+    }
+  }
+
+  hasListenersOutsideBackground(
+    extId: string,
+    pick: (events: RealmEvents) => EventHub,
+  ): boolean {
+    const ext = this.extensions.get(extId);
+    if (!ext) return false;
+    for (const documents of ext.tabEvents.values()) {
+      for (const { events } of documents.values())
+        if (pick(events).hasListeners()) return true;
+    }
+    return false;
   }
 
   broadcastTabLifecycle(

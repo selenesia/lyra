@@ -1,4 +1,5 @@
 import type { MutableRef } from "preact/hooks";
+import type { AutoNextState } from "./playerEpisodes.ts";
 import {
   IconVolumeOff,
   IconVolumeMinimum,
@@ -73,13 +74,14 @@ export function renderVolumeControl({
 }
 
 interface AutoNextNoticeContext {
-  autoNext: { episode: number; seconds: number } | null;
+  autoNext: AutoNextState | null;
+  continueNextSeason: () => void;
   clearAutoNext: () => void;
   changeEpisode: (nextEpisode: number, autoplay?: boolean) => void;
 }
 
 export function renderAutoNextNotice({
-  autoNext, clearAutoNext, changeEpisode,
+  autoNext, clearAutoNext, changeEpisode, continueNextSeason,
 }: AutoNextNoticeContext) {
   return (
     autoNext && (
@@ -90,7 +92,9 @@ export function renderAutoNextNotice({
       >
         <div class="player-next-episode-copy">
           <span>up next</span>
-          <strong>episode {autoNext.episode}</strong>
+          <strong>
+            {autoNext.season !== undefined ? `season ${autoNext.season} · ` : ""}episode {autoNext.episode}
+          </strong>
           <small>playing in {autoNext.seconds}s</small>
         </div>
         <div class="player-next-episode-actions">
@@ -106,8 +110,10 @@ export function renderAutoNextNotice({
             class="player-action-button"
             onClick={() => {
               const nextEpisode = autoNext.episode;
+              const nextSeason = autoNext.season;
               clearAutoNext();
-              changeEpisode(nextEpisode, true);
+              if (nextSeason !== undefined) continueNextSeason();
+              else changeEpisode(nextEpisode, true);
             }}
           >
             play now

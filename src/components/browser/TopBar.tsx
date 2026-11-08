@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from "preact/hooks";
 import {
   gamesViewSignal,
-  animeViewSignal,
+  watchViewSignal,
   chatViewSignal,
   useUiSignal,
 } from "../../core/ui/uiSignals.ts";
@@ -10,7 +10,7 @@ import { svgIcon } from "../../core/ui/svgIcon";
 import { isManagedModalOpen } from "../../core/ui/modal.ts";
 import { invokeWindowAction } from "../../core/browser/windowActions.ts";import { isStatic } from "../../core/runtime/hosting.ts";
 import {
-  preloadAnimeCatalog,
+  preloadWatchCatalog,
   loadCloudSync,
   preloadGamesCatalog,
   loadSettingsModal,
@@ -40,7 +40,7 @@ function preloadChat(): void {
 
 export default function TopBar() {
   const gamesView = useUiSignal(gamesViewSignal);
-  const animeView = useUiSignal(animeViewSignal);
+  const watchView = useUiSignal(watchViewSignal);
   const chatView = useUiSignal(chatViewSignal);
 
   useEffect(() => {
@@ -53,9 +53,9 @@ export default function TopBar() {
     if (choiIcon && !choiIcon.innerHTML) {
       choiIcon.innerHTML = svgIcon("IconGamecontroller", { solid: true });
     }
-    const animeIcon = document.getElementById("anime-icon");
-    if (animeIcon && !animeIcon.innerHTML) {
-      animeIcon.innerHTML = svgIcon("IconSushi", { size: 22, solid: true });
+    const watchIcon = document.getElementById("watch-icon");
+    if (watchIcon && !watchIcon.innerHTML) {
+      watchIcon.innerHTML = svgIcon("IconVideoClip", { size: 22, solid: true });
     }
     const chatIcon = document.getElementById("chat-icon");
     if (chatIcon && !chatIcon.innerHTML) {
@@ -66,7 +66,7 @@ export default function TopBar() {
   const handleBrandClick = useCallback((e: MouseEvent) => {
     e.preventDefault();
     window.hideGameMenu?.();
-    window.hideAnimeMenu?.();
+    window.hideWatchMenu?.();
     window.hideChatPage?.();
   }, []);
 
@@ -75,9 +75,9 @@ export default function TopBar() {
     invokeWindowAction("toggleGameMenu");
   }, []);
 
-  const handleAnimeClick = useCallback((e: MouseEvent) => {
+  const handleWatchClick = useCallback((e: MouseEvent) => {
     e.preventDefault();
-    invokeWindowAction("toggleAnimeMenu");
+    invokeWindowAction("toggleWatchMenu");
   }, []);
 
   const handleChatClick = useCallback(
@@ -123,12 +123,12 @@ export default function TopBar() {
           href="#"
           id="media-catalog"
           class="icon-btn"
-          data-tooltip={animeView ? "search" : "anime"}
-          onPointerEnter={preloadAnimeCatalog}
-          onFocus={preloadAnimeCatalog}
-          onClick={handleAnimeClick}
+          data-tooltip={watchView ? "search" : "watch"}
+          onPointerEnter={preloadWatchCatalog}
+          onFocus={preloadWatchCatalog}
+          onClick={handleWatchClick}
         >
-          <span id="anime-icon" />
+          <span id="watch-icon" />
         </a>
         {!isStatic && (
           <a

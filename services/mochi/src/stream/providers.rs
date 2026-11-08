@@ -169,13 +169,10 @@ pub(super) async fn guarded_source(
         return Err(ResolveError::Upstream);
     }
     let _attempt = (!cached).then_some(ProviderAttempt(provider));
-    let budget = if matches!(
-        provider,
-        StreamProvider::Framex | StreamProvider::Framex4k(_)
-    ) {
-        Duration::from_secs(10)
-    } else {
-        Duration::from_secs(5)
+    let budget = match provider {
+        StreamProvider::Title => titles::RESOLUTION_BUDGET,
+        StreamProvider::Framex | StreamProvider::Framex4k(_) => Duration::from_secs(10),
+        _ => Duration::from_secs(5),
     };
     let started = Instant::now();
     let result = tokio::time::timeout(budget, ready_source(client, provider, key))
@@ -373,7 +370,7 @@ pub(super) async fn ready_source(
                     let source = provider.resolve(client, key).await?;
                     if matches!(
                         provider,
-                        StreamProvider::Framex | StreamProvider::Framex4k(_)
+                        StreamProvider::Framex | StreamProvider::Framex4k(_) | StreamProvider::Title
                     ) && !source.master.is_empty()
                     {
                         return Ok(Arc::new(source));
@@ -399,10 +396,11 @@ pub(super) async fn ready_source(
             elapsed_ms = started.elapsed().as_millis() as u64,
             anilist_id = key.anilist_id,
             mal_id = key.mal_id,
+            title = ?key.title,
             episode = key.episode,
             language = key.language.as_str(),
             ?error,
-            "anime provider failed... /ᐠ - ˕ -マ"
+            "stream provider failed... /ᐠ - ˕ -マ"
         );
     }
     result
@@ -438,12 +436,16 @@ pub(super) async fn validate_source(
     client: &reqwest::Client,
     source: &ResolvedSource,
 ) -> Result<Arc<String>, ResolveError> {
-    let master = fetch_playlist(client, &source.playlist_url, source.provider).await?;
+    let master = if source.provider == StreamProvider::Title && !source.master.is_empty() {
+        source.master.clone()
+    } else {
+        fetch_playlist(client, &source.playlist_url, source.provider).await?
+    };
     if is_master_playlist(&master) {
         let variants = hls_variant_references(&source.playlist_url, &master);
         let count = variants.len();
         let provider = source.provider;
-        let settle_all = matches!(provider, StreamProvider::Framex4k(_));
+        let settle_all = matches!(provider, StreamProvider::Framex4k(_) | StreamProvider::Title);
         let mut checks =
             futures_util::stream::iter(variants.into_iter().enumerate().map(|(index, url)| {
                 let client = client.clone();
@@ -651,11 +653,12 @@ pub(super) async fn get_source(
                     provider = source.provider.id(),
                     anilist_id = key.anilist_id,
                     mal_id = key.mal_id,
+                    title = ?key.title,
                     episode = key.episode,
                     language = key.language.as_str(),
                     confirmed_language = source.language.as_deref(),
                     elapsed_ms = started_at.elapsed().as_millis() as u64,
-                    "anime stream selected!! (˵◝ ⩊  ◜˵マ"
+                    "stream selected!! (˵◝ ⩊  ◜˵マ"
                 );
             }
             STREAM_METRICS

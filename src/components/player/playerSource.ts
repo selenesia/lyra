@@ -33,7 +33,9 @@ interface PlayerSourceContext {
   rebufferCountRef: MutableRef<number>;
   totalRebufferDurationMsRef: MutableRef<number>;
   episodeNumber: number;
-  language: "sub" | "dub";
+  language: string;
+  trackVersion: "sub" | "dub";
+  titleMode: boolean;
   manifestDurationRef: MutableRef<number | null>;
   syncMediaState: (patch?: MediaStateHints) => void;
   setQualityOptions: Dispatch<StateUpdater<StreamQualityOption[]>>;
@@ -65,7 +67,7 @@ export function attachPlayerSource({
   videoRef, videoSrc, hlsSessionRef, tracksSourceRef, sourceContextKey,
   sessionStartedAtRef, firstSegmentRecordedRef, firstFrameRecordedRef,
   rebufferStartedAtRef, rebufferCountRef, totalRebufferDurationMsRef,
-  episodeNumber, language, manifestDurationRef, syncMediaState,
+  episodeNumber, language, trackVersion, titleMode, manifestDurationRef, syncMediaState,
   setQualityOptions, setSelectedQuality, setActiveQuality, setAutoQuality,
   setAudioTracksReady, setEmbeddedSubtitles, playIntentRef, playAfterSeekRef,
   setAudioTracks, setOpenSelector, setActiveAudioTrack, audioPreferenceRef,
@@ -122,7 +124,7 @@ export function attachPlayerSource({
         tracks,
         audioPreferenceRef.current,
         "audio",
-        language,
+        trackVersion,
         audioChoiceRef.current.source === videoSrc
           ? audioChoiceRef.current.id
           : undefined,
@@ -140,6 +142,7 @@ export function attachPlayerSource({
       maxMaxBufferLength: 60,
       maxBufferSize: (prefer4k || request4k || start4k ? 64 : 24) * 1024 * 1024,
       ...PLAYER_SIZE_ABR_CONFIG,
+      capLevelToPlayerSize: !titleMode,
       manifestLoadPolicy: hlsLoadPolicy(23_000, 25_000, 1, 1),
       playlistLoadPolicy: hlsLoadPolicy(8_000, 15_000, 2, 2),
       fragLoadPolicy: hlsLoadPolicy(10_000, 45_000, 2, 3),

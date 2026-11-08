@@ -211,6 +211,27 @@
   gap: 6px;
   overflow-y: hidden;
   user-select: none;
+  position: relative;
+  isolation: isolate;
+}
+
+.settings-tab-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--pill-w, 0);
+  height: var(--pill-h, 0);
+  border-radius: var(--radius-control);
+  background-color: var(--border-focus);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+  transform: translate(var(--pill-x, 0), var(--pill-y, 0));
+}
+
+.settings-tabs.is-placed .settings-tab-pill {
+  opacity: 1;
+  transition: transform var(--motion-slide) var(--motion-ease-slide);
 }
 
 .settings {
@@ -222,6 +243,7 @@
 }
 
 .tab-button {
+  position: relative;
   background-color: transparent;
   color: var(--color-icon-dim);
   padding: 10px 14px;
@@ -235,7 +257,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: color var(--motion-control) var(--motion-ease);
+  transition: color var(--motion-slide) var(--motion-ease-slide);
 }
 
 .tab-button svg {
@@ -257,12 +279,8 @@
 
 .tab-button.active {
   color: var(--text-black);
-  background-color: var(--border-focus);
+  background-color: transparent;
   cursor: default;
-}
-
-.tab-button.active svg {
-  color: var(--text-black);
 }
 
 .settings-content-wrapper {

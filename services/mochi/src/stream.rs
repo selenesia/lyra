@@ -34,6 +34,7 @@ mod request;
 mod segment_cache;
 mod segment_fill;
 mod subtitles;
+mod titles;
 
 use megaplay::*;
 use playlist::*;
@@ -63,16 +64,18 @@ enum StreamProvider {
     Megavid,
     Framex,
     Framex4k(framex::MovieServer),
+    Title,
 }
 
 impl StreamProvider {
-    const ALL: [Self; 3] = [Self::Framex, Self::Megaplay, Self::Megavid];
+    const ALL: [Self; 4] = [Self::Framex, Self::Megaplay, Self::Megavid, Self::Title];
 
     fn id(self) -> &'static str {
         match self {
             Self::Megaplay => "megaplay",
             Self::Megavid => "megavid",
             Self::Framex | Self::Framex4k(_) => "framex",
+            Self::Title => "framex-title",
         }
     }
 
@@ -82,6 +85,7 @@ impl StreamProvider {
             Self::Megavid => "https://megavid.buzz/",
             Self::Framex => "https://krussdomi.com/",
             Self::Framex4k(server) => server.referer(),
+            Self::Title => titles::PAGE_REFERER,
         }
     }
 
@@ -95,16 +99,22 @@ impl StreamProvider {
                 "origin",
                 HeaderValue::from_str(server.referer().trim_end_matches('/')).unwrap(),
             );
+        } else if self == Self::Title {
+            headers.insert("origin", HeaderValue::from_static(titles::PAGE_ORIGIN));
         }
         headers
     }
 
     fn supports(self, key: &EpisodeKey) -> bool {
+        if self == Self::Title || key.title.is_some() {
+            return self == Self::Title && key.title.is_some();
+        }
         match self {
             Self::Megaplay => true,
             Self::Megavid => key.anilist_id > 0 || key.mal_id > 0,
             Self::Framex => key.anilist_id > 0,
             Self::Framex4k(_) => key.anilist_id > 0 && key.episode == 1,
+            Self::Title => false,
         }
     }
 
@@ -118,6 +128,7 @@ impl StreamProvider {
             Self::Megavid => megavid::resolve(client, key).await,
             Self::Framex => framex::resolve(client, key).await,
             Self::Framex4k(server) => framex::resolve_4k(client, key, server).await,
+            Self::Title => titles::resolve(client, key).await,
         }
     }
 }
@@ -179,11 +190,34 @@ impl Drop for ActiveRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum TitleKind {
+    Movie,
+    Tv,
+}
+
+impl TitleKind {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Tv => "tv",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct TitleKey {
+    kind: TitleKind,
+    tmdb_id: u32,
+    season: u16,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct EpisodeKey {
     anilist_id: i64,
     mal_id: i64,
     anikoto_episode_id: String,
+    title: Option<TitleKey>,
     episode: i32,
     language: String,
     session: String,
@@ -213,6 +247,7 @@ struct SourceMetadata {
     intro: Option<TimeMarker>,
     outro: Option<TimeMarker>,
     server: Option<String>,
+    languages: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +271,7 @@ impl ResolvedSource {
             + self.internal_id.len()
             + self.language.as_ref().map_or(0, String::len)
             + self.metadata.server.as_ref().map_or(0, String::len)
+            + self.metadata.languages.iter().map(String::len).sum::<usize>()
             + key.anikoto_episode_id.len()
             + key.language.len()
             + key.session.len();
@@ -518,7 +554,7 @@ async fn resource_handler(
                 ],
             );
             let rewritten = rewrite_hls(&playlist, |resource| {
-                format!("/stream/anikoto/resource?{query}&resource={resource}")
+                format!("{}/resource?{query}&resource={resource}", stream_base_path(key))
             })?;
             return Ok(playlist_response(rewritten));
         }
@@ -680,7 +716,8 @@ pub async fn stream_info_handler(
                 label: track.label.clone(),
                 language: track.language.clone(),
                 src: format!(
-                    "/stream/anikoto/track?{}",
+                    "{}/track?{}",
+                    stream_base_path(&key),
                     query_string(
                         &key,
                         &anilist_ids,
@@ -730,6 +767,8 @@ pub async fn stream_info_handler(
                     "server": source.metadata.server,
                     "language": source.language,
                 },
+                "media": key.title.map(|title| title.kind.id()).unwrap_or("anime"),
+                "languages": source.metadata.languages,
                 "duration": source.metadata.duration,
                 "intro": source.metadata.intro.map(|marker| {
                     serde_json::json!({"start": marker.start, "end": marker.end})
@@ -748,7 +787,7 @@ pub async fn stream_info_handler(
         tracing::warn!(
             stage = "stream_info",
             error = ?error,
-            "anime stream stage failed{}",
+            "stream stage failed{}",
             NEGATIVE
         );
     }
@@ -769,11 +808,14 @@ pub async fn stream_handler(
         Ok(key) => key,
         Err(error) => return error_response(error),
     };
+    if uri.path().starts_with("/stream/watch/") && key.title.is_none() {
+        return error_response(ResolveError::Invalid);
+    }
     let result = match uri.path() {
-        "/stream/anikoto" => master_handler(&state, &key, &uri).await,
-        "/stream/anikoto/variant" => variant_handler(&state, &key, &uri).await,
-        "/stream/anikoto/resource" => resource_handler(&state, &key, &uri, &method, &headers).await,
-        "/stream/anikoto/track" => track_handler(&state, &key, &uri, &method, &headers).await,
+        "/stream/anikoto" | "/stream/watch/playlist" => master_handler(&state, &key, &uri).await,
+        "/stream/anikoto/variant" | "/stream/watch/variant" => variant_handler(&state, &key, &uri).await,
+        "/stream/anikoto/resource" | "/stream/watch/resource" => resource_handler(&state, &key, &uri, &method, &headers).await,
+        "/stream/anikoto/track" | "/stream/watch/track" => track_handler(&state, &key, &uri, &method, &headers).await,
         path if path.starts_with("/stream/s-2/") => master_handler(&state, &key, &uri).await,
         _ => Err(ResolveError::Invalid),
     };
@@ -783,10 +825,11 @@ pub async fn stream_handler(
             anilist_id = key.anilist_id,
             mal_id = key.mal_id,
             anikoto_episode_id = %key.anikoto_episode_id,
+            title = ?key.title,
             episode = key.episode,
             language = %key.language,
             error = ?error,
-            "anime stream stage failed{}",
+            "stream stage failed{}",
             NEGATIVE
         );
     }
@@ -923,6 +966,7 @@ pub async fn reclaim_caches() {
     RESOURCE_PROBES.invalidate_all();
     tokio::join!(
         framex::reclaim_caches(),
+        titles::reclaim_caches(),
         SOURCE_CACHE.run_pending_tasks(),
         PROVIDER_FAILURES.run_pending_tasks(),
         QUALITY_DISCOVERY.run_pending_tasks(),

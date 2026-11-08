@@ -1,6 +1,6 @@
-import { EventHub } from "../eventHub";
+import { EventHub, type Listener } from "../eventHub";
 import { CONTENT_SCRIPT_STYLE_ATTRIBUTE } from "../htmlInject";
-import { NEGATIVE } from "../messages";
+import { NEGATIVE, negativeMessage } from "../messages";
 import type { RivetHostBindings, TabInfo } from "../types";
 import { decodeRivetUrl, rivetExtensionBase } from "../urlScheme";
 
@@ -360,11 +360,66 @@ export function dispatchMessage(
   });
 }
 
+export const REMOTE_MESSAGE_LISTENER = Symbol.for(
+  "rivet.remoteMessageListener",
+);
+
+export interface MessageAnswer {
+  answered: boolean;
+  response?: unknown;
+}
+
+export function cloneMessage(value: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(value) ?? "null");
+  } catch {
+    throw new Error(
+      negativeMessage("extension message could not be serialized"),
+    );
+  }
+}
+
+export function answerMessage(
+  listeners: Listener[],
+  message: unknown,
+  sender: unknown,
+): Promise<MessageAnswer> {
+  return new Promise((resolve) => {
+    runMessageListeners(
+      listeners,
+      message,
+      sender,
+      (response) => resolve({ answered: true, response }),
+      () => resolve({ answered: false }),
+    );
+  });
+}
+
 function dispatchMessageNow(
   hubs: EventHub[],
   message: unknown,
   sender: unknown,
   resolve: (value: unknown) => void,
+): void {
+  const listeners = hubs.flatMap((hub) => hub.snapshot());
+  if (listeners.length === 0) {
+    console.warn(
+      "[rivet] runtime message has no registered listeners for this extension",
+      message,
+      NEGATIVE,
+    );
+  }
+  runMessageListeners(listeners, message, sender, resolve, () =>
+    resolve(undefined),
+  );
+}
+
+function runMessageListeners(
+  listeners: Listener[],
+  message: unknown,
+  sender: unknown,
+  respond: (response: unknown) => void,
+  unanswered: () => void,
 ): void {
   let responded = false;
   const sendResponse = (response: unknown) => {
@@ -378,17 +433,21 @@ function dispatchMessageNow(
     );
     if (responded) return;
     responded = true;
-    resolve(response);
+    respond(response);
   };
-  const listeners = hubs.flatMap((hub) => hub.snapshot());
-  if (listeners.length === 0) {
-    console.warn(
-      "[rivet] runtime message has no registered listeners for this extension",
-      message,
-      NEGATIVE,
-    );
-  }
   let anyAsync = false;
+  let remotePending = 0;
+  const remoteSettled = (answer?: MessageAnswer) => {
+    if (answer?.answered) {
+      sendResponse(answer.response);
+      return;
+    }
+    remotePending -= 1;
+    if (remotePending === 0 && !anyAsync && !responded) {
+      responded = true;
+      unanswered();
+    }
+  };
   for (const [index, listener] of listeners.entries()) {
     rivetTraceLog(`dispatch message listener #${index} invoked for`, message);
     let result: unknown;
@@ -396,6 +455,17 @@ function dispatchMessageNow(
       result = listener(message, sender, sendResponse);
     } catch (error) {
       console.error("[rivet] runtime message listener threw", error, NEGATIVE);
+      continue;
+    }
+    if (
+      (listener as { [REMOTE_MESSAGE_LISTENER]?: boolean })[
+        REMOTE_MESSAGE_LISTENER
+      ]
+    ) {
+      remotePending += 1;
+      (result as Promise<MessageAnswer>).then(remoteSettled, () =>
+        remoteSettled(),
+      );
       continue;
     }
     rivetTraceLog(
@@ -436,7 +506,10 @@ function dispatchMessageNow(
       );
     }
   }
-  if (!anyAsync && !responded) sendResponse(undefined);
+  if (!anyAsync && remotePending === 0 && !responded) {
+    responded = true;
+    unanswered();
+  }
 }
 
 export function injectCss(win: Window, css: string): HTMLStyleElement | null {

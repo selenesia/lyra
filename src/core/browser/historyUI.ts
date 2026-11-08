@@ -2,7 +2,7 @@ import { store } from "../../state/store.ts";
 import { currentUrlSignal } from "../ui/uiSignals";
 import { pageStateUrl, getBestKnownUrl, navigationUrl } from "./iframeUrls.ts";
 import { getLoadedGameDisplayLabel } from "../media/gameMetadata.ts";
-import { getAnimeDisplayLabel } from "../media/animeMetadata.ts";
+import { getPlaybackDisplayLabel } from "../media/playbackMetadata.ts";
 import { normalizeGameHistoryUrl } from "../runtime/utils";
 import { getStoredGameSource } from "../config/settingsOptions.ts";
 import type { LyraTab } from "./iframe.ts";
@@ -78,8 +78,8 @@ export function updateHistoryUI(
     } catch (e) {}
 
     if (!activeTab.extensionPage && displayText === decoded) {
-      const animeLabel = getAnimeDisplayLabel(decoded);
-      if (animeLabel) displayText = animeLabel;
+      const playbackLabel = getPlaybackDisplayLabel(decoded);
+      if (playbackLabel) displayText = playbackLabel;
     }
 
     if (

@@ -151,7 +151,7 @@ async function runProxyEngine(
     if (response) {
       if (
         !isNavigate &&
-        response.headers.get("x-lyra-error-class") === "gateway"
+        response.headers.get("x-error-class") === "gateway"
       ) {
         return Response.error();
       }

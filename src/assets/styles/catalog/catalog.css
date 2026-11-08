@@ -21,12 +21,12 @@
 }
 
 body.games-view,
-body.anime-view {
+body.watch-view {
   background-color: var(--bg-body);
 }
 
 body.games-view .meow,
-body.anime-view .meow {
+body.watch-view .meow {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
@@ -35,8 +35,8 @@ body.anime-view .meow {
 
 body.games-view .main-container,
 body.games-view #bookmarks-container,
-body.anime-view .main-container,
-body.anime-view #bookmarks-container {
+body.watch-view .main-container,
+body.watch-view #bookmarks-container {
   display: none !important;
 }
 
@@ -54,7 +54,7 @@ body.anime-view #bookmarks-container {
 }
 
 body.games-view .catalog-topbar,
-body.anime-view .catalog-topbar {
+body.watch-view .catalog-topbar {
   display: flex;
 }
 
@@ -113,7 +113,7 @@ body.anime-view .catalog-topbar {
 }
 
 body.games-view .games-page,
-body.anime-view .anime-page {
+body.watch-view .watch-page {
   padding-top: 130px;
 }
 
@@ -148,7 +148,7 @@ body.anime-view .anime-page {
   }
 
   body.games-view .games-page,
-  body.anime-view .anime-page {
+  body.watch-view .watch-page {
     padding-top: 118px;
   }
 
@@ -168,7 +168,7 @@ body.anime-view .anime-page {
 }
 
 body.games-view .catalog-topbar::before,
-body.anime-view .catalog-topbar::before {
+body.watch-view .catalog-topbar::before {
   content: "";
   position: absolute;
   top: -57px;
@@ -191,6 +191,6 @@ body.anime-view .catalog-topbar::before {
 }
 
 body.games-view .catalog-topbar.has-scroll-shadow::before,
-body.anime-view .catalog-topbar.has-scroll-shadow::before {
+body.watch-view .catalog-topbar.has-scroll-shadow::before {
   opacity: 1;
 }

@@ -84,7 +84,7 @@ pub async fn headers(request: Request, next: Next) -> Response {
             EXPIRED.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(budget_ms = budget.as_millis() as u64, "upstream response deadline exceeded... /ᐠ - ˕ -マ");
             (StatusCode::GATEWAY_TIMEOUT,
-                [("cache-control", "no-store"), ("x-lyra-error-class", "network-timeout")],
+                [("cache-control", "no-store"), ("x-error-class", "network-timeout")],
                 crate::negative_message("the source took too long to respond")).into_response()
         }
     }

@@ -77,6 +77,55 @@ export function createFolioTokenMap(buildId) {
   );
 }
 
+export const APP_RUNTIME_TOKENS = [
+  "Lyra",
+  "lyraConnection",
+  "lyraUpdater",
+  "lyraExportAllData",
+  "lyraImportDataFromObject",
+  "__lyraStuffData",
+  "__lyraUpdatePollerStarted",
+  "__lyraStreamDiagnostics",
+  "__lyraAppInitialized",
+  "__lyraAdcashLoading",
+  "__LYRA_WEBRTC_TURN__",
+  "__lyraInternalHandlers",
+  "__lyraTabId",
+  "__lyraHistoryManager",
+  "__lyraRelay",
+  "lyraAppInitialized",
+  "lyraUpdateOverlayBound",
+  "lyra:stream-diagnostic",
+  "lyra:game-metric",
+  "lyra:game-catalog-updated",
+  "x-lyra-prefetch",
+  "lyra-prefetch",
+  "lyra-prefetch-bridge",
+  "lyra.nuruSocket",
+  "lyra.nuruTickets",
+  "__LYRA_APP_BASE__",
+  "__LYRA_BACKEND__",
+  "__LYRA_BACKEND_INDEX__",
+  "__LYRA_BACKENDS__",
+  "__LYRA_BACKEND_CONTROL__",
+  "__LYRA_WORKER_ORIGIN__",
+  "__LYRA_WORKER_BASE__",
+  "__LYRA_STORAGE_NAMESPACE__",
+  "__LYRA_PREPARE_FRAME__",
+  "__lyra_backend",
+  "lyra.staticWorker",
+  "lyra.staticSocket",
+];
+
+export function createAppRuntimeTokenMap(buildId) {
+  return new Map(
+    APP_RUNTIME_TOKENS.map((token) => [
+      token,
+      `x${createHash("sha256").update(`${buildId}\0app-global\0${token}`).digest("hex").slice(0, 20)}`,
+    ]),
+  );
+}
+
 const OBFUSCATION_OPTIONS = {
   compact: true,
   controlFlowFlattening: false,
@@ -146,8 +195,16 @@ const RUNTIME_ASSETS = [
     source: ["public", "b", "rv", "router.js"],
   },
   {
+    logicalPath: "/b/rv/background.js",
+    source: ["public", "b", "rv", "background.js"],
+  },
+  {
     logicalPath: "/b/rivet/ublock.crx",
     source: ["packages", "rivet", "extensions", "ublock.crx"],
+  },
+  {
+    logicalPath: "/b/rivet/ublock.state.gz",
+    source: ["packages", "rivet", "extensions", "ublock.state.gz"],
   },
 ];
 
@@ -211,6 +268,24 @@ function obfuscationPrefix(buildId, scope) {
     .update(`${buildId}\0${scope}\0obfuscation`)
     .digest("hex")
     .slice(0, 10)}`;
+}
+
+function inlineStyleScript(css) {
+  return `<script>(function(){const style=document.createElement("style");style.textContent=${JSON.stringify(css)};document.currentScript.replaceWith(style);})();</script>`;
+}
+
+export function obfuscateInlinePageCode(html, buildId, pageName) {
+  let scriptIndex = 0;
+  return html
+    .replace(/<style>([\s\S]*?)<\/style>/g, (_match, css) => inlineStyleScript(css))
+    .replace(/<script>([\s\S]*?)<\/script>/g, (_match, source) => {
+      const obfuscated = obfuscateSource(
+        source,
+        OBFUSCATION_OPTIONS,
+        obfuscationPrefix(buildId, `${pageName}#${scriptIndex++}`),
+      );
+      return `<script>${obfuscated.replace(/<\/(script)/gi, "<\\/$1")}</script>`;
+    });
 }
 
 function opaqueFileName(logicalPath, buildId) {
@@ -380,6 +455,7 @@ export default function lyraPlugin(
       const cssTokenMap = new Map([
         ...createCssTokenMap(cssSources, buildId),
         ...createFolioTokenMap(buildId),
+        ...createAppRuntimeTokenMap(buildId),
         [
           "bare-mux-path",
           `x${createHash("sha256").update(`${buildId}\0bare-mux-path`).digest("hex").slice(0, 20)}`,
@@ -396,10 +472,10 @@ export default function lyraPlugin(
       if (staticBase && staticBase !== "/") pathAliases.set("/assets/images/", `${staticBase}assets/images/`);
 
       const socketSource = staticBase
-        ? (await readFile(path.join(projectRoot, "src/static/socket.js"), "utf8"))
-          .replaceAll("__STATIC_BASE__", staticBase) : "";
-      const nuruSocketSource = staticBase ? "" :
-        (await readFile(path.join(projectRoot, "src/core/proxy/nuruSocket.js"), "utf8")).replace(/^export /m, "");
+        ? rewriteBuildTokens((await readFile(path.join(projectRoot, "src/static/socket.js"), "utf8"))
+          .replaceAll("__STATIC_BASE__", staticBase), cssTokenMap) : "";
+      const nuruSocketSource = staticBase ? "" : rewriteBuildTokens(
+        (await readFile(path.join(projectRoot, "src/core/proxy/nuruSocket.js"), "utf8")).replace(/^export /m, ""), cssTokenMap);
       let staticPrelude = "";
       if (staticBase) {
         const config = staticBackends.map((origin) => ({ origin,
@@ -408,7 +484,7 @@ export default function lyraPlugin(
         const backendSource = await readFile(path.join(projectRoot, "src/static/backend.js"), "utf8");
         const storageSource = await readFile(path.join(projectRoot, "src/static/storage.js"), "utf8");
         const workerSource = (await readFile(path.join(projectRoot, "src/static/workers.js"), "utf8")).replaceAll("__STATIC_BASE__", staticBase);
-        staticPrelude = `globalThis.__LYRA_APP_BASE__=${JSON.stringify(staticBase)};\n${backendSource}\n${storageSource}\n${workerSource}\ninstallStaticBackend(${JSON.stringify(config)}, ${JSON.stringify(controlKey)});\ninstallStaticStorage(${JSON.stringify(config)}[globalThis.__LYRA_BACKEND_INDEX__].namespace);\ninstallStaticWorkers();\nglobalThis.__LYRA_PREPARE_FRAME__ = (realm) => { realm.__LYRA_APP_BASE__=${JSON.stringify(staticBase)}; realm.__LYRA_BACKEND__=globalThis.__LYRA_BACKEND__; installStaticBackend(${JSON.stringify(config)}, ${JSON.stringify(controlKey)}, realm); installStaticStorage(${JSON.stringify(config)}[globalThis.__LYRA_BACKEND_INDEX__].namespace, realm); installStaticWorkers(realm); };`;
+        staticPrelude = rewriteBuildTokens(`globalThis.__LYRA_APP_BASE__=${JSON.stringify(staticBase)};\n${backendSource}\n${storageSource}\n${workerSource}\ninstallStaticBackend(${JSON.stringify(config)}, ${JSON.stringify(controlKey)});\ninstallStaticStorage(${JSON.stringify(config)}[globalThis.__LYRA_BACKEND_INDEX__].namespace);\ninstallStaticWorkers();\nglobalThis.__LYRA_PREPARE_FRAME__ = (realm) => { realm.__LYRA_APP_BASE__=${JSON.stringify(staticBase)}; realm.__LYRA_BACKEND__=globalThis.__LYRA_BACKEND__; installStaticBackend(${JSON.stringify(config)}, ${JSON.stringify(controlKey)}, realm); installStaticStorage(${JSON.stringify(config)}[globalThis.__LYRA_BACKEND_INDEX__].namespace, realm); installStaticWorkers(realm); };`, cssTokenMap);
         const bootstrapFile = opaqueFileName("/b/static.js", buildId);
         pathAliases.set("/b/static.js", staticBase + bootstrapFile);
         await writeFile(path.join(outputDirectory, bootstrapFile), obfuscateSource(
@@ -535,7 +611,7 @@ export default function lyraPlugin(
         path.join(outputDirectory, "build-meta.json"),
         JSON.stringify({ build: buildId, ...(staticBase ? {
           version: JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8")).version,
-            protocol: 1, base: staticBase, backend: staticBackends[0], backends: staticBackends,
+            protocol: 2, base: staticBase, backend: staticBackends[0], backends: staticBackends,
         } : {}) }),
       );
       await writeFile(
@@ -547,9 +623,11 @@ export default function lyraPlugin(
         if (chunk.type === "asset" && /\.(css|html)$/.test(fileName)) {
           const filePath = path.join(outputDirectory, fileName);
           const sourceCode = await readFile(filePath, "utf8");
+          const isPage = fileName.endsWith(".html");
+          const rewritten = rewriteBuildTokens(sourceCode, cssTokenMap, isPage ? pageAliases : pathAliases);
           await writeFile(
             filePath,
-            rewriteBuildTokens(sourceCode, cssTokenMap, fileName.endsWith(".html") ? pageAliases : pathAliases),
+            isPage ? obfuscateInlinePageCode(rewritten, buildId, fileName) : rewritten,
           );
           continue;
         }

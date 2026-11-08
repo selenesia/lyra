@@ -17,6 +17,8 @@ export interface StreamInfoResponse {
   quality_fallback?: boolean;
   available_4k?: boolean;
   tracks?: unknown;
+  media?: "anime" | "movie" | "tv";
+  languages?: unknown;
   source?: {
     provider?: string;
     id?: string;

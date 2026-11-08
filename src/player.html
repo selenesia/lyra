@@ -18,21 +18,21 @@
     <script>
       (function () {
         const recoveryUrl = new URL(window.location.href);
-        let recoveryAttempted = recoveryUrl.searchParams.has("lyra-recovery");
+        let recoveryAttempted = recoveryUrl.searchParams.has("recovery");
 
-        window.__lyraRecoverAsset = function () {
+        function recoverAsset() {
           if (recoveryAttempted) return;
           recoveryAttempted = true;
           const target = new URL(window.location.href);
-          target.searchParams.set("lyra-recovery", "1");
+          target.searchParams.set("recovery", "1");
           window.history.replaceState(window.history.state, "", target.href);
           window.location.reload();
-        };
+        }
         window.addEventListener(
           "vite:preloadError",
           function (event) {
             event.preventDefault();
-            window.__lyraRecoverAsset();
+            recoverAsset();
           },
           { once: true },
         );
@@ -55,7 +55,7 @@
               failedUrl.origin === window.location.origin &&
               /^\/assets\/[a-f0-9]{12}\/[^/]+$/.test(failedUrl.pathname)
             ) {
-              window.__lyraRecoverAsset();
+              recoverAsset();
             }
           },
           true,

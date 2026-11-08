@@ -100,10 +100,10 @@ export function getInternalRouteUrl(query: string): string | null {
   if (!trimmed) return null;
   try {
     const url = new URL(trimmed, window.location.origin);
-    const playerPath = appPath("/stream/anime");
+    const playerPaths = [appPath("/stream/anime"), appPath("/stream/watch")];
     if (
       url.origin === window.location.origin &&
-      (url.pathname === playerPath || url.pathname.startsWith(playerPath + "/"))
+      playerPaths.some((path) => url.pathname === path || url.pathname.startsWith(path + "/"))
     ) {
       return url.href;
     }
@@ -129,7 +129,7 @@ export async function handleSearch(
   const searchURL = executeBang(query) || generateSearchUrl(query);
   const isGame =
     Boolean(_gameName) ||
-    /jsdelivr|googleusercontent|githack|selenite|wasm\.rip|velara|gn-math\.dev|truffled|d20q8iy6t6707a\.cloudfront\.net/.test(
+    /jsdelivr|googleusercontent|githack|selenite|wasm\.rip|gn-math\.dev|truffled|d20q8iy6t6707a\.cloudfront\.net/.test(
       searchURL,
     );
   if (isGame) {
@@ -162,6 +162,7 @@ export function useSearchInputBindings({
     if (!input) return;
 
     const onInput = () => {
+      warmExtensionRuntime();
       if (!syncHistory) return;
       const activeTab = store.getActiveTab();
       if (!activeTab?.historyManager) return;

@@ -5,22 +5,13 @@ import { buildExtensionUrl } from "../urlScheme";
 import {
   buildTabObject,
   cloneForRealm,
+  cloneMessage,
   dispatchMessage,
   originOf,
 } from "./common";
 import type { ChromeApiContext } from "./context";
 
 let portIdCounter = 0;
-
-function cloneMessage(value: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(value) ?? "null");
-  } catch {
-    throw new Error(
-      negativeMessage("extension message could not be serialized"),
-    );
-  }
-}
 
 export function createRuntimeApis(context: ChromeApiContext) {
   const {
@@ -307,7 +298,10 @@ export function createRuntimeApis(context: ChromeApiContext) {
 
   const extension = {
     getURL: runtime.getURL,
-    getBackgroundPage: () => ext.background?.frame?.contentWindow ?? null,
+    getBackgroundPage: () =>
+      ext.background?.kind === "frame"
+        ? (ext.background.frame?.contentWindow ?? null)
+        : null,
     inIncognitoContext: false,
     isAllowedIncognitoAccess: (cb?: (allowed: boolean) => void) => {
       cb?.(false);

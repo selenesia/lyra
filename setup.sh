@@ -1103,13 +1103,6 @@ if [ -d "$ROOT/services/cloudsync" ]; then
   )
 fi
 
-if [ -d "$ROOT/services/isao" ]; then
-  (
-    cd "$ROOT/services/isao"
-    RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
-  )
-fi
-
 sudo cp "$ROOT/target/release/mochi" /usr/local/bin/mochi
 sudo chmod 755 /usr/local/bin/mochi
 sudo mkdir -p /var/cache/lyra-mochi
@@ -1318,7 +1311,7 @@ sudo tee /etc/caddy/Caddyfile >/dev/null <<EOF
 (mochi_stream) {
     @mochi_stream {
         path /stream/*
-        not path /stream/anime*
+        not path /stream/anime* /stream/watch
     }
     reverse_proxy @mochi_stream $MOCHI_UPSTREAMS {
         lb_policy query anilist_id {
@@ -1398,11 +1391,13 @@ http://127.0.0.1:4001 {
         ~^/api/auth/ auth
         ~^/api/sync/ sync
         ~^/api/anime/ anime
+        ~^/api/watch/ watch
         ~^/api/chat/ chat
         ~^/api/static/ static_gateway
         /api/presence presence
         /api/search/suggestions suggestions
         ~^/stream/anime player
+        /stream/watch player
         ~^/stream/ stream
         ~^/!!folio/ folio
         ~^/!!raw/ raw
@@ -1577,8 +1572,14 @@ http://127.0.0.1:4001 {
         }
     }
 
+    handle /api/watch/* {
+        reverse_proxy 127.0.0.1:6001 {
+            header_up X-Real-IP {lyra_client_ip}
+        }
+    }
+
     @lyra_player {
-        path /stream/anime*
+        path /stream/anime* /stream/watch
     }
     reverse_proxy @lyra_player h2c://127.0.0.1:4444 {
         header_up X-Real-IP {lyra_client_ip}
@@ -1666,7 +1667,7 @@ calc_mem() {
 
 LYRA_MEM="$(calc_mem 16 256 2560)M"
 CLOUDSYNC_MEM="$(calc_mem 6 128 768)M"
-ISAO_MEM="$(calc_mem 8 128 768)M"
+ISAO_MEM="$(calc_mem 8 256 768)M"
 log "memory restart thresholds — lyra: $LYRA_MEM, cloudsync: $CLOUDSYNC_MEM, isao: $ISAO_MEM"
 
 "$BUN_BIN" "$PM2_BIN" stop all >/dev/null 2>&1 || true
@@ -1749,7 +1750,9 @@ EOF
 tee -a ecosystem.config.cjs >/dev/null <<EOF
     {
       name: "isao",
-      script: "$ROOT/services/isao/target/release/isao",
+      script: "$BUN_BIN",
+      args: "services/isao/index.ts",
+      cwd: "$ROOT",
       interpreter: "none",
       exec_mode: "fork",
       instances: 1,
@@ -1760,7 +1763,7 @@ tee -a ecosystem.config.cjs >/dev/null <<EOF
       min_uptime: 10000,
       kill_timeout: 5000,
       env: {
-        RUST_LOG: "warn",
+        NODE_ENV: "production",
         ISAO_PORT: "6001",
         ISAO_HOST: "127.0.0.1"
       }
@@ -1941,7 +1944,7 @@ health_ok() {
   fi
   response="$(curl --fail --silent --max-time 3 "$1")" || return 1
   if [[ "$1" = */api/static/v1/status ]]; then
-    jq -e '.protocol == 1 and .enabled == true' <<< "$response" >/dev/null 2>&1
+    jq -e '.protocol == 2 and .enabled == true' <<< "$response" >/dev/null 2>&1
   else
     [ "$response" = "oki" ]
   fi

@@ -163,14 +163,14 @@ function proxyTarget(url, referer) {
     url.startsWith("/!!/") ||
     url.startsWith("/!!folio/") ||
     url.startsWith("/!cover!/") ||
-    (url.startsWith("/stream/") && !url.startsWith("/stream/anime"))
+    (url.startsWith("/stream/") && !url.startsWith("/stream/anime") && !/^\/stream\/watch(?:\?|$)/.test(url))
   ) {
     return { port: DEV_MOCHI_PORT, label: "mochi" };
   }
   if (url.startsWith("/api/auth") || url.startsWith("/api/sync")) {
     return { port: DEV_CLOUDSYNC_PORT, label: "cloudsync" };
   }
-  if (url.startsWith("/api/anime")) {
+  if (url.startsWith("/api/anime") || url.startsWith("/api/watch/")) {
     return { port: DEV_ISAO_PORT, label: "isao" };
   }
   return null;
@@ -436,13 +436,13 @@ app.get("/s", (req, res) => {
   transformHtml(vite, req, res, path.join(srcPath, "index.html"));
 });
 
-app.get("/stream/anime", (req, res) => {
+app.get(["/stream/anime", "/stream/watch"], (req, res) => {
   transformHtml(
     vite,
     req,
     res,
     path.join(srcPath, "player.html"),
-    "/stream/anime",
+    req.path,
   );
 });
 
@@ -499,6 +499,7 @@ const ALL_DEV_SERVICES = [
     dir: "services/isao",
     port: DEV_ISAO_PORT,
     requiresEphemeralSecrets: true,
+    command: [process.execPath, "index.ts"],
   },
 ];
 

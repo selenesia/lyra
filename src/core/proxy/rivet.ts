@@ -38,9 +38,16 @@ export type RivetFacade = Rivet;
 
 let instance: RivetFacade | null = null;
 let ready: Promise<RivetFacade> | null = null;
-let ublockFiltering: Promise<void> | null = null;
+interface UblockFilteringHold {
+  ready: Promise<void>;
+  holdMs: number;
+}
+
+let ublockFiltering: UblockFilteringHold | null = null;
 const UBLOCK_FILTERING_TIMEOUT_MS = 10_000;
+const UBLOCK_PREBUILT_HOLD_MS = 1_500;
 const UBLOCK_INSTALL_IDLE_TIMEOUT_MS = 2_000;
+const UBLOCK_INSTALL_QUIET_MS = 750;
 const UBLOCK_STARTUP_RESPONSE_TIMEOUT_MS = 1_500;
 let commandListenerInstalled = false;
 let contextMenuElement: HTMLDivElement | null = null;
@@ -480,40 +487,90 @@ function afterFirstTabPageLoad(): Promise<void> {
   });
 }
 
-function waitForUblockFiltering(rivet: Rivet): Promise<void> | null {
-  if (!hasCurrentUblock(rivet)) {
-    void afterFirstTabPageLoad()
-      .then(() => ensureUblockOrigin(rivet))
-      .catch((error) => {
-        console.error(
-          "[rivet] failed to install ublock origin:",
-          error,
-          NEGATIVE,
-        );
-      });
-    return null;
-  }
-  return (async () => {
-    try {
-      const extId = await ensureUblockOrigin(rivet);
-      const listening = await rivet.registry.waitForWebRequestListener(
-        extId,
-        UBLOCK_FILTERING_READY_EVENT,
-        UBLOCK_FILTERING_TIMEOUT_MS,
-      );
-      if (!listening)
-        console.warn(
-          "[rivet] ublock origin filtering startup timed out",
-          NEGATIVE,
-        );
-    } catch (error) {
-      console.error(
-        "[rivet] failed to install ublock origin:",
-        error,
+async function afterTabPagesSettle(): Promise<void> {
+  await new Promise<void>((resolve) =>
+    scheduleIdleTask(resolve, UBLOCK_INSTALL_IDLE_TIMEOUT_MS),
+  );
+  if (store.tabs.some((tab) => tab.isLoading)) await afterFirstTabPageLoad();
+}
+
+function afterUserGoesQuiet(): Promise<void> {
+  return new Promise((resolve) => {
+    const activity = ["keydown", "pointerdown", "pointermove", "wheel"];
+    const watched: Window[] = [];
+    let quietTimer = setTimeout(finish, UBLOCK_INSTALL_QUIET_MS);
+    const onActivity = () => {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, UBLOCK_INSTALL_QUIET_MS);
+    };
+    function finish() {
+      for (const win of watched)
+        for (const type of activity)
+          win.removeEventListener(type, onActivity, true);
+      resolve();
+    }
+    for (const win of [window, ...store.tabs.map((tab) => tab.iframe.contentWindow)]) {
+      try {
+        for (const type of activity)
+          win?.addEventListener(type, onActivity, {
+            capture: true,
+            passive: true,
+          });
+        if (win) watched.push(win);
+      } catch {}
+    }
+  });
+}
+
+async function beforeUblockStarts(): Promise<void> {
+  await afterUserGoesQuiet();
+  await afterTabPagesSettle();
+}
+
+async function untilUblockFilters(
+  rivet: Rivet,
+  install: Promise<string>,
+): Promise<void> {
+  try {
+    const listening = await rivet.registry.waitForWebRequestListener(
+      await install,
+      UBLOCK_FILTERING_READY_EVENT,
+      UBLOCK_FILTERING_TIMEOUT_MS,
+    );
+    if (!listening)
+      console.warn(
+        "[rivet] ublock origin filtering startup timed out",
         NEGATIVE,
       );
-    }
-  })();
+  } catch (error) {
+    console.error(
+      "[rivet] failed to install ublock origin:",
+      error,
+      NEGATIVE,
+    );
+  }
+}
+
+function waitForUblockFiltering(rivet: Rivet): UblockFilteringHold {
+  if (hasCurrentUblock(rivet)) {
+    return {
+      ready: untilUblockFilters(rivet, ensureUblockOrigin(rivet)),
+      holdMs: UBLOCK_FILTERING_TIMEOUT_MS,
+    };
+  }
+  let compiling!: () => void;
+  const compileInstall = new Promise<void>((resolve) => (compiling = resolve));
+  const install = ensureUblockOrigin(rivet, {
+    beforeInstall: async (prebuilt) => {
+      if (prebuilt) return;
+      compiling();
+      await beforeUblockStarts();
+    },
+  });
+  return {
+    ready: Promise.race([compileInstall, untilUblockFilters(rivet, install)]),
+    holdMs: UBLOCK_PREBUILT_HOLD_MS,
+  };
 }
 
 export async function initializeRivet(): Promise<RivetFacade> {
@@ -622,7 +679,7 @@ function createDnrPlugin(
   ManagedPlugin: FolioManagedPluginConstructor,
   rivet: Rivet,
   tabId: number,
-  filteringReady?: Promise<void> | null,
+  filtering?: UblockFilteringHold | null,
 ): InstanceType<FolioManagedPluginConstructor> {
   const folio = (
     window as typeof window & {
@@ -684,10 +741,20 @@ function createDnrPlugin(
       new Response(null, { status: 302, headers: { Location: url } }),
     );
 
-  let filteringSettled = !filteringReady;
-  void filteringReady?.then(() => {
+  let filteringSettled = !filtering;
+  void filtering?.ready.then(() => {
     filteringSettled = true;
   });
+  let filteringHold: Promise<void> | null = null;
+  const untilFilteringReady = (): Promise<void> =>
+    (filteringHold ??= filtering
+      ? Promise.race([
+          filtering.ready,
+          new Promise<void>((resolve) => setTimeout(resolve, filtering.holdMs)),
+        ]).then(() => {
+          filteringSettled = true;
+        })
+      : Promise.resolve());
   const deferredDocuments = new WeakMap<object, WebRequestHeader[]>();
 
   const deferredDocumentResponse = async (
@@ -724,7 +791,7 @@ function createDnrPlugin(
       this.tap(frame.hooks.fetch.request, async (context: any, props: any) => {
         let requestUrl = props.url?.href;
         if (!requestUrl) return;
-        if (filteringReady && !filteringSettled) {
+        if (!filteringSettled) {
           if (
             context.request &&
             webRequestType(context.parsed) === "main_frame"
@@ -735,7 +802,7 @@ function createDnrPlugin(
             );
             return;
           }
-          await filteringReady;
+          await untilFilteringReady();
         }
         const beforeRequestListeners =
           rivet.registry.hasWebRequestListeners("onBeforeRequest");
@@ -824,7 +891,7 @@ function createDnrPlugin(
             : undefined;
           if (deferredHeaders) {
             deferredDocuments.delete(context.request);
-            await filteringReady;
+            await untilFilteringReady();
             const replacement = await deferredDocumentResponse(
               context,
               requestUrl,

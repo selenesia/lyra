@@ -111,7 +111,7 @@ function unavailableResponse(): TransferrableResponse {
       headers: {
         "cache-control": "no-store",
         "content-type": "text/plain; charset=utf-8",
-        "x-lyra-error-class": "gateway",
+        "x-error-class": "gateway",
       },
     }),
   );

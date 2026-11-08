@@ -39,8 +39,8 @@ interface EpisodeChangeContext {
   syncMediaState: (patch?: MediaStateHints) => void;
   setConfirmedEpisodeNumber: Dispatch<StateUpdater<number | null>>;
   setEpisodeNumber: Dispatch<StateUpdater<number>>;
-  setLanguage: Dispatch<StateUpdater<"sub" | "dub">>;
-  nextAudioLanguageRef: MutableRef<"sub" | "dub">;
+  setLanguage: Dispatch<StateUpdater<string>>;
+  nextAudioLanguageRef: MutableRef<string>;
   setActiveAnikotoEpisodeId: Dispatch<StateUpdater<string>>;
   episodeParts: PlaybackEpisodePartRange[];
   setActivePartRange: Dispatch<StateUpdater<PlaybackEpisodePartRange | null>>;
@@ -115,8 +115,12 @@ export function changePlayerEpisode({
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.set("episode", String(nextEpisode));
     currentUrl.searchParams.set("language", nextAudioLanguageRef.current);
-    currentUrl.searchParams.set("season", String(currentSeason.number || 1));
-    currentUrl.searchParams.set("episodeName", `E${nextEpisode}`);
+    const seasonNumber = currentSeason.number ?? 1;
+    currentUrl.searchParams.set("season", String(seasonNumber));
+    currentUrl.searchParams.set(
+      "episodeName",
+      currentUrl.searchParams.has("media_type") ? `S${seasonNumber}E${nextEpisode}` : `E${nextEpisode}`,
+    );
     if (nextPart) {
       currentUrl.searchParams.set(
         "source_episode",
@@ -141,30 +145,41 @@ interface AutoNextContext {
   autoPlayNextEpisode: boolean;
   episodeCount: number;
   clearAutoNext: () => void;
-  setAutoNext: Dispatch<StateUpdater<{ episode: number; seconds: number } | null>>;
+  setAutoNext: Dispatch<StateUpdater<AutoNextState | null>>;
   autoNextTimerRef: MutableRef<ReturnType<typeof setTimeout> | null>;
   changeEpisode: (nextEpisode: number, autoplay?: boolean) => void;
+  nextSeason: number | null;
+  continueNextSeason: () => void;
+}
+
+export interface AutoNextState {
+  episode: number;
+  seconds: number;
+  season?: number | undefined;
 }
 
 export function scheduleAutoNext({
   episodeNumber, autoPlayNextEpisode, episodeCount, clearAutoNext, setAutoNext,
-  autoNextTimerRef, changeEpisode,
+  autoNextTimerRef, changeEpisode, nextSeason, continueNextSeason,
 }: AutoNextContext) {
-  const nextEp = episodeNumber + 1;
-  if (!autoPlayNextEpisode || episodeCount <= 0 || nextEp > episodeCount) {
+  const crossesSeason = episodeCount > 0 && episodeNumber >= episodeCount && nextSeason !== null;
+  const nextEp = crossesSeason ? 1 : episodeNumber + 1;
+  if (!autoPlayNextEpisode || episodeCount <= 0 || (!crossesSeason && nextEp > episodeCount)) {
     return;
   }
 
   clearAutoNext();
   let seconds = 10;
-  setAutoNext({ episode: nextEp, seconds });
+  const season = crossesSeason ? nextSeason : undefined;
+  setAutoNext({ episode: nextEp, seconds, season });
   autoNextTimerRef.current = setInterval(() => {
     seconds -= 1;
     if (seconds <= 0) {
       clearAutoNext();
-      changeEpisode(nextEp, true);
+      if (crossesSeason) continueNextSeason();
+      else changeEpisode(nextEp, true);
     } else {
-      setAutoNext({ episode: nextEp, seconds });
+      setAutoNext({ episode: nextEp, seconds, season });
     }
   }, 1000);
 }

@@ -1,37 +1,54 @@
 import { EventHub } from "../eventHub";
-import { findMessage, formatMessage } from "../manifest";
+import {
+  findMessage,
+  formatMessage,
+  type ExtensionMessage,
+} from "../manifest";
 import type { ChromeApiContext } from "./context";
+
+export function readExtensionMessage(
+  extId: string,
+  messages: Record<string, ExtensionMessage>,
+  realm: Window,
+  messageName: string,
+  substitutions?: unknown,
+): string {
+  const name = String(messageName);
+  switch (name.toLowerCase()) {
+    case "@@extension_id":
+      return extId;
+    case "@@ui_locale":
+      return (realm.navigator.language || "en").replace(/-/g, "_");
+    case "@@bidi_dir":
+      return "ltr";
+    case "@@bidi_reversed_dir":
+      return "rtl";
+    case "@@bidi_start_edge":
+      return "left";
+    case "@@bidi_end_edge":
+      return "right";
+  }
+  const message = findMessage(messages, name);
+  if (!message) return "";
+  const values =
+    substitutions == null
+      ? []
+      : (Array.isArray(substitutions) ? substitutions : [substitutions]).map(
+          String,
+        );
+  return formatMessage(message, values);
+}
+
+export function identityRedirectUrl(extId: string, path?: string): string {
+  return `https://rivet.invalid/${extId}/${path ?? ""}`;
+}
 
 export function createPlatformApis(context: ChromeApiContext) {
   const { realm, extId, registry, ext, events } = context;
 
   const i18n = {
-    getMessage: (messageName: string, substitutions?: unknown) => {
-      const name = String(messageName);
-      switch (name.toLowerCase()) {
-        case "@@extension_id":
-          return extId;
-        case "@@ui_locale":
-          return (realm.navigator.language || "en").replace(/-/g, "_");
-        case "@@bidi_dir":
-          return "ltr";
-        case "@@bidi_reversed_dir":
-          return "rtl";
-        case "@@bidi_start_edge":
-          return "left";
-        case "@@bidi_end_edge":
-          return "right";
-      }
-      const message = findMessage(ext.messages, name);
-      if (!message) return "";
-      const values =
-        substitutions == null
-          ? []
-          : (Array.isArray(substitutions) ? substitutions : [substitutions]).map(
-              String,
-            );
-      return formatMessage(message, values);
-    },
+    getMessage: (messageName: string, substitutions?: unknown) =>
+      readExtensionMessage(extId, ext.messages, realm, messageName, substitutions),
     getUILanguage: () => realm.navigator.language || "en",
     detectLanguage: (_text: string, cb?: (result: unknown) => void) => {
       const result = { isReliable: false, languages: [] };
@@ -62,8 +79,7 @@ export function createPlatformApis(context: ChromeApiContext) {
       cb?.(result);
       return Promise.resolve(result);
     },
-    getRedirectURL: (path?: string) =>
-      `https://rivet.invalid/${extId}/${path ?? ""}`,
+    getRedirectURL: (path?: string) => identityRedirectUrl(extId, path),
     removeCachedAuthToken: (_details: unknown, cb?: () => void) => {
       cb?.();
       return Promise.resolve(undefined);

@@ -9,9 +9,9 @@ declare global {
     showGameMenu?: () => void;
     hideGameMenu?: () => void;
     toggleGameMenu?: () => void;
-    showAnimeMenu?: () => void;
-    hideAnimeMenu?: () => void;
-    toggleAnimeMenu?: () => void;
+    showWatchMenu?: () => void;
+    hideWatchMenu?: () => void;
+    toggleWatchMenu?: () => void;
     playNextEpisode?: (request: {
       title: string;
       year?: number;

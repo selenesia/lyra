@@ -328,6 +328,7 @@ async function replaceRecords(
 export async function restoreIndexedDB(
   remote: Record<string, SyncDatabase>,
   includeSensitive: boolean,
+  progress: (done: number, total: number) => void = () => {},
 ): Promise<number> {
   const factory = globalThis.indexedDB;
   if (!factory) throw syncError("indexeddb is unavailable");
@@ -345,7 +346,10 @@ export async function restoreIndexedDB(
   }
 
   let folioUpdatedAt: number | null = null;
-  for (const [databaseName, databaseSnapshot] of Object.entries(remote)) {
+  const remoteDatabases = Object.entries(remote);
+  let restored = 0;
+  for (const [databaseName, databaseSnapshot] of remoteDatabases) {
+    progress(++restored, remoteDatabases.length);
     if (LOCAL_ONLY_DATABASES.has(databaseName)) continue;
     const { database, changed } = await reconcileDatabase(
       factory,
@@ -470,6 +474,7 @@ async function applyRecordDelta(
 export async function applyIndexedDBDelta(
   previous: Record<string, SyncDatabase>,
   target: Record<string, SyncDatabase>,
+  progress: (done: number, total: number) => void = () => {},
 ): Promise<number> {
   const factory = globalThis.indexedDB;
   if (!factory) throw syncError("indexeddb is unavailable");
@@ -481,7 +486,10 @@ export async function applyIndexedDBDelta(
     changes++;
   }
   const currentNames = new Set(await databaseNames(factory));
-  for (const [name, snapshot] of Object.entries(target)) {
+  const targetDatabases = Object.entries(target);
+  let applied = 0;
+  for (const [name, snapshot] of targetDatabases) {
+    progress(++applied, targetDatabases.length);
     if (LOCAL_ONLY_DATABASES.has(name)) continue;
     const prior = previous[name];
     const storeNames = Object.keys(snapshot.stores);

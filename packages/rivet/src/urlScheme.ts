@@ -6,6 +6,10 @@ export function rivetBootstrapUrl(extId: string): string {
   return `${rivetExtensionBase(extId)}__bootstrap__`;
 }
 
+export function rivetIsolatedBackgroundUrl(extId: string): string {
+  return `${rivetExtensionBase(extId)}__isolated__`;
+}
+
 export function rivetExtensionBase(extId: string): string {
   return `${globalThis.location.origin}${RIVET_PREFIX}${extId}/`;
 }

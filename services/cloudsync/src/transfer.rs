@@ -2,6 +2,8 @@ use super::*;
 use crate::admission::ACCOUNT_CHUNK_LIMIT;
 use axum::body::{to_bytes, Body};
 use axum::extract::{rejection::PathRejection, Path, Request};
+use axum::http::header::{ACCEPT_ENCODING, VARY};
+use axum::http::HeaderValue;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
@@ -12,6 +14,7 @@ pub const CHUNK_SIZE: usize = 1024 * 1024;
 const MAX_PARTS: i64 = (MAX_RAW_SIZE / CHUNK_SIZE) as i64;
 const MAX_SEALED_PARTS: i64 = 4096;
 const MAX_SEAL_LENGTH: usize = 512;
+const UPLOAD_CONCURRENCY: u8 = 4;
 const MANIFEST_MAGIC: &[u8] = b"wcs2";
 static UPLOADED_BYTES: AtomicU64 = AtomicU64::new(0);
 static REUSED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -199,9 +202,12 @@ fn decrypt_chunk(cipher: &Aes256Gcm, blob: &[u8], aad: &str) -> SyncResult<Vec<u
 }
 
 fn decode_chunk(cipher: &Aes256Gcm, blob: &[u8], aad: &str) -> SyncResult<Vec<u8>> {
-    let compressed = decrypt_chunk(cipher, blob, aad)?;
+    decompress_chunk(&decrypt_chunk(cipher, blob, aad)?)
+}
+
+fn decompress_chunk(compressed: &[u8]) -> SyncResult<Vec<u8>> {
     let mut bytes = Vec::new();
-    brotli::Decompressor::new(compressed.as_slice(), 64 * 1024)
+    brotli::Decompressor::new(compressed, 64 * 1024)
         .take((CHUNK_SIZE + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| SyncError::Corrupt)?;
@@ -218,6 +224,17 @@ fn read_chunk(
     id: &str,
     part: i64,
 ) -> SyncResult<Vec<u8>> {
+    read_chunk_encoded(connection, cipher, user_id, id, part, false).map(|(bytes, _)| bytes)
+}
+
+fn read_chunk_encoded(
+    connection: &Connection,
+    cipher: &Aes256Gcm,
+    user_id: i64,
+    id: &str,
+    part: i64,
+    brotli: bool,
+) -> SyncResult<(Vec<u8>, bool)> {
     let object: Option<(String, Vec<u8>, bool)> = connection.query_row("SELECT r.digest, o.data_blob, o.sealed FROM sync_chunk_refs r JOIN sync_objects o ON o.user_id = r.user_id AND o.digest = r.digest WHERE r.upload_id = ? AND r.part = ? AND r.user_id = ?", params![id, part, user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional()?;
     if let Some((hash, blob, sealed)) = object {
         if sealed {
@@ -225,13 +242,18 @@ fn read_chunk(
             if bytes.is_empty() || bytes.len() > CHUNK_SIZE {
                 return Err(SyncError::Corrupt);
             }
-            return Ok(bytes);
+            return Ok((bytes, false));
         }
-        let bytes = decode_chunk(cipher, &blob, &object_aad(user_id, &hash))?;
+        let compressed = decrypt_chunk(cipher, &blob, &object_aad(user_id, &hash))?;
+        let bytes = decompress_chunk(&compressed)?;
         if digest(&bytes) != hash {
             return Err(SyncError::Corrupt);
         }
-        return Ok(bytes);
+        return Ok(if brotli {
+            (compressed, true)
+        } else {
+            (bytes, false)
+        });
     }
     let blob: Vec<u8> = connection
         .query_row(
@@ -241,7 +263,30 @@ fn read_chunk(
         )
         .optional()?
         .ok_or(SyncError::Conflict)?;
-    decode_chunk(cipher, &blob, &chunk_aad(user_id, id, part))
+    Ok((
+        decode_chunk(cipher, &blob, &chunk_aad(user_id, id, part))?,
+        false,
+    ))
+}
+
+fn accepts_brotli(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|entry| {
+            let mut parts = entry.split(';');
+            parts
+                .next()
+                .is_some_and(|coding| coding.trim().eq_ignore_ascii_case("br"))
+                && parts.all(|parameter| {
+                    parameter
+                        .trim()
+                        .strip_prefix("q=")
+                        .is_none_or(|quality| quality.trim().parse::<f32>().is_ok_and(|q| q > 0.0))
+                })
+        })
 }
 
 fn chunk_exists(connection: &Connection, id: &str, part: i64) -> SyncResult<bool> {
@@ -578,7 +623,7 @@ pub async fn begin(
         let request: Start = serde_json::from_slice(&bytes).map_err(|_| SyncError::InvalidPayload)?;
         let (id, missing) = begin_with_hashes(connection, user_id, request.parts, request.hashes.as_deref(), request.sealed)?;
         let max_parts = if request.sealed { MAX_SEALED_PARTS } else { MAX_PARTS };
-        Ok(Json(serde_json::json!({"id": id, "chunk_size": CHUNK_SIZE, "missing": missing, "concurrency": ACCOUNT_CHUNK_LIMIT, "max_bytes": MAX_RAW_SIZE, "max_parts": max_parts})).into_response())
+        Ok(Json(serde_json::json!({"id": id, "chunk_size": CHUNK_SIZE, "missing": missing, "concurrency": UPLOAD_CONCURRENCY, "max_bytes": MAX_RAW_SIZE, "max_parts": max_parts})).into_response())
     }).await
 }
 
@@ -672,8 +717,10 @@ pub async fn manifest(State(state): State<Arc<AppState>>, cookies: Cookies) -> R
 pub async fn get(
     State(state): State<Arc<AppState>>,
     cookies: Cookies,
+    headers: HeaderMap,
     path: Result<Path<(String, i64)>, PathRejection>,
 ) -> Response {
+    let brotli = accepts_brotli(&headers);
     run(
         state,
         cookies,
@@ -685,11 +732,16 @@ pub async fn get(
             if !upload.committed || part < 0 || part >= upload.parts {
                 return Err(SyncError::Conflict);
             }
-            Ok((
-                [(CONTENT_TYPE, "application/octet-stream")],
-                read_chunk(connection, cipher, user_id, &id, part)?,
-            )
-                .into_response())
+            let (bytes, encoded) =
+                read_chunk_encoded(connection, cipher, user_id, &id, part, brotli)?;
+            let mut response =
+                ([(CONTENT_TYPE, "application/octet-stream")], bytes).into_response();
+            let response_headers = response.headers_mut();
+            response_headers.insert(VARY, HeaderValue::from_static("accept-encoding"));
+            if encoded {
+                response_headers.insert(CONTENT_ENCODING, HeaderValue::from_static("br"));
+            }
+            Ok(response)
         },
     )
     .await

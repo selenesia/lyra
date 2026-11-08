@@ -2,7 +2,9 @@ import type { SyncSnapshot } from "./snapshotSchema.ts";
 
 declare global {
   interface Window {
-    lyraExportAllData?: () => Promise<SyncSnapshot>;
+    lyraExportAllData?: (
+      callback?: (progressText: string) => void,
+    ) => Promise<SyncSnapshot>;
     lyraImportDataFromObject?: (
       data: unknown,
       callback?: (progressText: string) => void,
@@ -10,9 +12,9 @@ declare global {
   }
 }
 
-window.lyraExportAllData = async () => {
+window.lyraExportAllData = async (callback) => {
   const { exportSyncSnapshot } = await import("./syncSnapshot.ts");
-  return exportSyncSnapshot();
+  return exportSyncSnapshot(callback);
 };
 window.lyraImportDataFromObject = async (data, callback) => {
   const { importSyncSnapshot } = await import("./syncSnapshot.ts");

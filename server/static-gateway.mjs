@@ -1,6 +1,8 @@
 import { StaticAuth, isStaticOrigin, STATIC_PREFIX, STATIC_PROTOCOL } from "./static-auth.mjs";
 
 const NEGATIVE = "... /ᐠ - ˕ -マ";
+const RELAY_PROTOCOL = "relay-v1";
+const TICKET_PREFIX = "ticket.";
 const BODY_LIMIT = 10 * 1024 * 1024;
 const FRAME_LIMIT = 1024 * 1024;
 const BUFFER_LIMIT = 4 * 1024 * 1024;
@@ -12,7 +14,7 @@ const corsHeaders = new Set([...requestHeaders, "authorization", "dpop"]);
 const responseHeaders = new Set([
   "content-type", "content-range", "accept-ranges", "etag", "last-modified",
   "retry-after", "x-mochi-upstream-meta", "x-mochi-cache", "x-mochi-folio-cache",
-  "x-lyra-error-class", "content-length",
+  "x-error-class", "content-length",
 ]);
 const readMethods = new Set(["GET", "HEAD"]);
 const proxyMethods = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
@@ -25,6 +27,7 @@ export function staticRoute(pathname, method) {
   if (readMethods.has(method)) {
     if (/^\/api\/(?:dns|presence|search\/suggestions)$/.test(pathname)) return true;
     if (/^\/api\/anime\/(?:episodes(?:\/\d+)?|relations\/\d+|alttitles\/\d+)$/.test(pathname)) return true;
+    if (/^\/api\/watch\/(?:home|discover|search|details|season)$/.test(pathname)) return true;
     if (/^\/stream\/(?:info|anikoto(?:\/(?:variant|resource|track))?|s-2\/[^/]+)$/.test(pathname)) return true;
     if (pathname === "/!!folio/capabilities" || /^\/!cover!\/.+$/.test(pathname)) return true;
   }
@@ -78,7 +81,7 @@ export function createStaticGateway({ backend = "",
       "x-content-type-options": "nosniff", "vary": "Origin, Authorization" });
     if (isStaticOrigin(origin)) {
       result.set("access-control-allow-origin", origin);
-      result.set("access-control-expose-headers", [...responseHeaders, "x-lyra-static-auth"].join(", "));
+      result.set("access-control-expose-headers", [...responseHeaders, "x-static-auth"].join(", "));
     }
     return result;
   }
@@ -89,7 +92,7 @@ export function createStaticGateway({ backend = "",
 
   function error(status, origin = "", code = "static_request_rejected") {
     const response = json({ error: `connection request is unavailable${NEGATIVE}`, code }, status, origin);
-    if (status === 401) response.headers.set("x-lyra-static-auth", "required");
+    if (status === 401) response.headers.set("x-static-auth", "required");
     return response;
   }
 
@@ -288,11 +291,11 @@ export function createStaticGateway({ backend = "",
   async function upgrade(request, { ip, server, origin }) {
     if (!server || !wispUpstream || request.headers.get("upgrade")?.toLowerCase() !== "websocket") return error(400, origin);
     const protocols = (request.headers.get("sec-websocket-protocol") || "").split(",").map((value) => value.trim());
-    const tickets = protocols.filter((value) => value.startsWith("lyra-ticket."));
-    const actual = protocols.filter((value) => !value.startsWith("lyra-ticket.") && value !== "lyra-relay-v1");
-    if (protocols.filter((value) => value === "lyra-relay-v1").length !== 1 || tickets.length !== 1 || actual.length > 8 || new Set(actual).size !== actual.length ||
+    const tickets = protocols.filter((value) => value.startsWith(TICKET_PREFIX));
+    const actual = protocols.filter((value) => !value.startsWith(TICKET_PREFIX) && value !== RELAY_PROTOCOL);
+    if (protocols.filter((value) => value === RELAY_PROTOCOL).length !== 1 || tickets.length !== 1 || actual.length > 8 || new Set(actual).size !== actual.length ||
         actual.some((value) => !/^[!#$%&'*+.^_`|~\w-]{1,128}$/.test(value))) return error(400, origin);
-    const claim = await auth.consumeTicket(tickets[0].slice(12), origin, ip);
+    const claim = await auth.consumeTicket(tickets[0].slice(TICKET_PREFIX.length), origin, ip);
     const session = claim?.session;
     const backendOrigin = requestBackend(request);
     if (!session || session.backend !== backendOrigin || session.sockets.size >= 4) return error(401, origin);
@@ -348,10 +351,10 @@ export function createStaticGateway({ backend = "",
       });
       upstream.addEventListener("error", () => connection.close(1011));
       upstream.addEventListener("close", () => connection.close(1000));
-      const selected = upstream.protocol.startsWith("lyra-nuru.") ? "" : upstream.protocol;
+      const selected = upstream.protocol.startsWith("auth.") ? "" : upstream.protocol;
       phase = "upgrade";
       if (selected && !actual.includes(selected)) { connection.close(); return error(502, origin); }
-      const responseHeaders = new Headers({ "sec-websocket-protocol": selected || "lyra-relay-v1" });
+      const responseHeaders = new Headers({ "sec-websocket-protocol": selected || RELAY_PROTOCOL });
       if (!server.upgrade(request, { headers: responseHeaders, data: { staticConnection: connection } })) {
         connection.close(); return error(400, origin);
       }

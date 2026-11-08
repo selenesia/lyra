@@ -7,7 +7,7 @@ import {
 } from "../../core/browser/iframe.ts";
 import { useSearchInputBindings } from "../../features/search/search.ts";
 import { currentUrlSignal } from "../../core/ui/uiSignals";
-import { compactAnimePlaybackPath } from "../../core/media/animeMetadata.ts";
+import { compactPlaybackPath } from "../../core/media/playbackMetadata.ts";
 import { toast } from "../../core/ui/toast.ts";
 import { NEGATIVE } from "../../core/runtime/messages.ts";
 import { appPath, isStatic } from "../../core/runtime/hosting.ts";
@@ -30,11 +30,11 @@ function CopyLinkIcon() {
   const handleClick = useCallback(async () => {
     const url = currentUrlSignal.value;
     if (!url || url === "about:blank") return;
-    const animePath = compactAnimePlaybackPath(url);
+    const playbackPath = compactPlaybackPath(url);
     const shareUrl = isStatic
-      ? `${window.location.origin}${appPath("/index.html")}?=${encodeURIComponent(animePath || url)}`
-      : animePath
-      ? `${window.location.origin}${animePath}`
+      ? `${window.location.origin}${appPath("/index.html")}?=${encodeURIComponent(playbackPath || url)}`
+      : playbackPath
+      ? `${window.location.origin}${playbackPath}`
       : `${window.location.origin}/s?=${encodeURIComponent(url)}`;
     try {
       await navigator.clipboard.writeText(shareUrl);

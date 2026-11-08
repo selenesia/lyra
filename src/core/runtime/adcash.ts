@@ -1,4 +1,4 @@
-export const ADCASH_LIBRARY_PATH = "/_lyra/assets/core.js";
+export const ADCASH_LIBRARY_PATH = "/_app/core.js";
 
 export function loadAdcash(origin = ""): void {
   const page = window as Window & { __lyraAdcashLoading?: boolean };

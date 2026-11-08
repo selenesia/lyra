@@ -37,7 +37,7 @@ export function nuruSocketClass(NativeWebSocket, wispPath) {
     async function credentials(response) {
       if (!response.ok) throw new Error("connection unavailable... /ᐠ - ˕ -マ");
       const value = await response.json();
-      if (value.protocol !== 1 || !Number.isSafeInteger(value.expires) || typeof value.backend !== "string" ||
+      if (value.protocol !== 2 || !Number.isSafeInteger(value.expires) || typeof value.backend !== "string" ||
           [value.access, value.refresh, value.nonce].some((entry) => typeof entry !== "string" || !/^[\w-]{43}$/.test(entry))) {
         throw new Error("connection unavailable... /ᐠ - ˕ -マ");
       }
@@ -70,7 +70,7 @@ export function nuruSocketClass(NativeWebSocket, wispPath) {
       }
       if (!response.ok) throw new Error("connection unavailable... /ᐠ - ˕ -マ");
       const value = await response.json();
-      if (typeof value.ticket !== "string" || !/^lyra-nuru\.[\w.-]{1,200}$/.test(value.ticket)) {
+      if (typeof value.ticket !== "string" || !/^auth\.[\w.-]{1,200}$/.test(value.ticket)) {
         throw new Error("connection unavailable... /ᐠ - ˕ -マ");
       }
       return value.ticket;
@@ -131,7 +131,7 @@ export function nuruSocketClass(NativeWebSocket, wispPath) {
     }
     get readyState() { return this.socket?.readyState ?? this.state; }
     get bufferedAmount() { return this.socket?.bufferedAmount ?? 0; }
-    get protocol() { return this.socket?.protocol.startsWith("lyra-nuru.") ? "" : this.socket?.protocol ?? ""; }
+    get protocol() { return this.socket?.protocol.startsWith("auth.") ? "" : this.socket?.protocol ?? ""; }
     get extensions() { return this.socket?.extensions ?? ""; }
     get binaryType() { return this.type; }
     set binaryType(value) { this.type = value; if (this.socket) this.socket.binaryType = value; }

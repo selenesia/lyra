@@ -20,10 +20,20 @@ import type { CloudSync } from "./cloudsync.ts";
 import { revisionTime } from "./syncMeta.ts";
 import { canEncryptSync } from "./syncCrypto.ts";
 const LOADING_SCREEN = `
-    <div id="loading-screen" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-body); z-index: 99999; display: flex; justify-content: center; align-items: center; color: var(--text-muted); font-family: 'Lexend', sans-serif;">
+    <div id="loading-screen" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-body); z-index: 99999; display: flex; flex-direction: column; gap: 8px; justify-content: center; align-items: center; color: var(--text-muted); font-family: 'Lexend', sans-serif;">
         <h1 style="margin: 0; font-size: 1.2rem; font-weight: 300;">syncing data...</h1>
+        <div id="loading-screen-progress" aria-live="polite" style="font-size: 13px; text-align: center; white-space: pre-line; min-height: 18px;"></div>
     </div>
 `;
+const LOADING_STALL_MS = 10_000;
+
+function holdLoadingScreen(sync: CloudSync): void {
+  if (sync._loadingTimer) clearTimeout(sync._loadingTimer);
+  sync._loadingTimer = setTimeout(
+    () => sync.hideLoadingScreen(),
+    LOADING_STALL_MS,
+  );
+}
 
 export function showLoadingScreen(this: CloudSync): void {
   if (!document.getElementById("loading-screen")) {
@@ -31,9 +41,27 @@ export function showLoadingScreen(this: CloudSync): void {
     div.innerHTML = LOADING_SCREEN.trim();
     document.body.appendChild(div.firstChild!);
   }
+  this._loadingStages = new Map();
+  holdLoadingScreen(this);
+}
+
+export function showLoadingProgress(
+  this: CloudSync,
+  stage: string,
+  text: string | null,
+): void {
+  const progress = document.getElementById?.("loading-screen-progress");
+  if (!progress || !this._loadingStages) return;
+  if (text === null) this._loadingStages.delete(stage);
+  else this._loadingStages.set(stage, text);
+  progress.textContent = [...this._loadingStages.values()].join("\n");
+  holdLoadingScreen(this);
 }
 
 export function hideLoadingScreen(this: CloudSync): void {
+  if (this._loadingTimer) clearTimeout(this._loadingTimer);
+  this._loadingTimer = null;
+  this._loadingStages = null;
   const screen = document.getElementById("loading-screen");
   if (screen) {
     screen.remove();

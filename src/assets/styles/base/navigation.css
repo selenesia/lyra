@@ -134,13 +134,13 @@ body.browser-view .main-nav {
 }
 
 #games-icon,
-#anime-icon,
+#watch-icon,
 #chat-icon {
   display: flex;
 }
 
 body.games-view #games-icon svg path,
-body.anime-view #anime-icon svg path,
+body.watch-view #watch-icon svg path,
 body.chat-view #chat-icon svg path {
   stroke-width: 2;
 }

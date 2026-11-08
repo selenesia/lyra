@@ -1,13 +1,16 @@
-import { installChromeApi } from "./chromeApi";
+import { createChromeApi, installChromeApi } from "./chromeApi";
 import { readExtFileText } from "./fileStore";
 import {
   bootstrapExtensionFrame,
   injectScriptFromUrl,
   installClassicWorkerGlobals,
+  preloadClassicWorkerImports,
   rewriteExtHtml,
   writeDocument,
 } from "./htmlInject";
-import { getBackgroundInfo } from "./manifest";
+import { connectIsolatedBackground } from "./isolatedBackground/host";
+import { ISOLATED_BACKGROUND_HELLO } from "./isolatedBackground/protocol";
+import { getBackgroundInfo, type BackgroundInfo } from "./manifest";
 import { NEGATIVE, negativeMessage } from "./messages";
 import type { ExtensionState, RivetRegistry } from "./registry";
 import type { RivetHostBindings } from "./types";
@@ -15,9 +18,13 @@ import {
   buildExtensionUrl,
   chromeExtensionUrl,
   extensionDocumentUrl,
-  extensionPathDir,
-  resolveExtensionResourcePath,
+  rivetIsolatedBackgroundUrl,
 } from "./urlScheme";
+
+const ISOLATED_FRAME_TIMEOUT_MS = 10_000;
+const ISOLATED_FRAME_HELLO_GRACE_MS = 1_000;
+const ISOLATED_BACKGROUND_START_TIMEOUT_MS = 30_000;
+let backgroundIsolationUnavailable = false;
 
 export interface BackgroundLifecycle {
   installedReason?: "install" | "update";
@@ -47,46 +54,182 @@ function createStartupHostGuard(host: RivetHostBindings): {
   };
 }
 
+function createBackgroundFrame(rootEl: HTMLElement): HTMLIFrameElement {
+  const frame = document.createElement("iframe");
+  frame.style.cssText =
+    "position:fixed;width:0;height:0;border:none;opacity:0;pointer-events:none;z-index:-1;";
+  frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+  frame.setAttribute("aria-hidden", "true");
+  rootEl.appendChild(frame);
+  return frame;
+}
+
+function activateBackground(
+  ext: ExtensionState,
+  background: NonNullable<ExtensionState["background"]>,
+  lifecycle: BackgroundLifecycle,
+): void {
+  ext.background = background;
+  if (lifecycle.installedReason) {
+    background.events.runtimeOnInstalled.fire({
+      reason: lifecycle.installedReason,
+    });
+  }
+  if (lifecycle.startup) background.events.runtimeOnStartup.fire();
+}
+
+function waitForIsolatedFrame(
+  frame: HTMLIFrameElement,
+  extId: string,
+): Promise<Window | null> {
+  return new Promise((resolve) => {
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (target: Window | null) => {
+      clearTimeout(timer);
+      clearTimeout(graceTimer);
+      removeEventListener("message", onMessage);
+      frame.removeEventListener("load", onLoad);
+      resolve(target);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (
+        event.source !== frame.contentWindow ||
+        event.origin !== location.origin ||
+        (event.data as { type?: unknown } | null)?.type !==
+          ISOLATED_BACKGROUND_HELLO
+      )
+        return;
+      finish(frame.contentWindow);
+    };
+    const onLoad = () => {
+      graceTimer ??= setTimeout(
+        () => finish(null),
+        ISOLATED_FRAME_HELLO_GRACE_MS,
+      );
+    };
+    const timer = setTimeout(() => finish(null), ISOLATED_FRAME_TIMEOUT_MS);
+    addEventListener("message", onMessage);
+    frame.addEventListener("load", onLoad);
+    frame.src = rivetIsolatedBackgroundUrl(extId);
+  });
+}
+
+function runsInAnotherAgent(frame: HTMLIFrameElement): boolean {
+  try {
+    return !frame.contentWindow?.document;
+  } catch {
+    return true;
+  }
+}
+
+async function startIsolatedBackground(
+  ext: ExtensionState,
+  registry: RivetRegistry,
+  host: RivetHostBindings,
+  rootEl: HTMLElement,
+  bgInfo: NonNullable<BackgroundInfo>,
+  lifecycle: BackgroundLifecycle,
+  isCurrent: () => boolean,
+): Promise<boolean> {
+  if (
+    backgroundIsolationUnavailable ||
+    ext.readsBackgroundWindow ||
+    typeof MessageChannel !== "function" ||
+    (globalThis as { __LYRA_PREPARE_FRAME__?: unknown }).__LYRA_PREPARE_FRAME__
+  )
+    return false;
+  const frame = createBackgroundFrame(rootEl);
+  const target = await waitForIsolatedFrame(frame, ext.id);
+  if (!isCurrent()) {
+    frame.remove();
+    return true;
+  }
+  if (!target || !runsInAnotherAgent(frame)) {
+    backgroundIsolationUnavailable = true;
+    frame.remove();
+    console.warn(
+      "[rivet] isolated extension backgrounds are unavailable here",
+      NEGATIVE,
+    );
+    return false;
+  }
+
+  const backgroundPath =
+    bgInfo.type === "page"
+      ? bgInfo.page
+      : bgInfo.type === "worker"
+        ? bgInfo.script
+        : bgInfo.scripts[0];
+  const senderUrl = backgroundPath
+    ? chromeExtensionUrl(ext.id, backgroundPath)
+    : undefined;
+  const startupHostGuard = lifecycle.startup
+    ? createStartupHostGuard(host)
+    : null;
+  try {
+    const { chrome, events } = createChromeApi(window, {
+      extId: ext.id,
+      tabId: null,
+      isBackground: true,
+      registry,
+      host: startupHostGuard?.host ?? host,
+      senderUrl,
+      installNetwork: false,
+    });
+    const connection = connectIsolatedBackground({
+      target,
+      ext,
+      registry,
+      host,
+      api: chrome as object,
+      background: bgInfo,
+      senderUrl,
+    });
+    const timeout = setTimeout(
+      () => connection.close(),
+      ISOLATED_BACKGROUND_START_TIMEOUT_MS,
+    );
+    const started = await connection.ready;
+    clearTimeout(timeout);
+    if (!started || !isCurrent()) {
+      connection.close();
+      frame.remove();
+      if (!isCurrent()) return true;
+      console.error(
+        "[rivet] isolated background startup failed for extension",
+        ext.manifest.name,
+        NEGATIVE,
+      );
+      return false;
+    }
+    activateBackground(
+      ext,
+      {
+        kind: "isolated",
+        frame,
+        events,
+        close: () => {
+          connection.close();
+          frame.remove();
+        },
+      },
+      lifecycle,
+    );
+    return true;
+  } finally {
+    startupHostGuard?.release();
+  }
+}
+
 export function stopBackground(ext: ExtensionState): void {
   ext.backgroundGeneration += 1;
+  ext.background?.close?.();
   if (ext.background?.kind === "frame") ext.background.frame?.remove();
   if (ext.background?.kind === "worker") ext.background.worker?.terminate();
   ext.background = null;
   ext.resolveBackgroundReady?.();
   ext.resolveBackgroundReady = null;
   ext.backgroundReady = Promise.resolve();
-}
-
-async function preloadClassicWorkerImports(
-  extId: string,
-  entryPath: string,
-): Promise<Map<string, string>> {
-  const scripts = new Map<string, string>();
-  const visited = new Set<string>();
-  const visit = async (path: string): Promise<void> => {
-    if (visited.has(path)) return;
-    visited.add(path);
-    const source = await readExtFileText(extId, path);
-    if (source === null) return;
-
-    const importPattern = /\bimportScripts\s*\(\s*(["'])([^"'\\]*)\1\s*\)/g;
-    for (const match of source.matchAll(importPattern)) {
-      const specifier = match[2];
-      if (!specifier || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(specifier))
-        continue;
-      const importedPath = resolveExtensionResourcePath(
-        specifier.startsWith("/") ? "" : extensionPathDir(path),
-        specifier,
-      );
-      const importedSource = await readExtFileText(extId, importedPath);
-      if (importedSource === null) continue;
-      scripts.set(buildExtensionUrl(extId, importedPath), importedSource);
-      await visit(importedPath);
-    }
-  };
-
-  await visit(entryPath);
-  return scripts;
 }
 
 export async function startBackground(
@@ -106,13 +249,20 @@ export async function startBackground(
   ext.resolveBackgroundReady = resolveBackgroundReady;
   try {
     const generation = ext.backgroundGeneration;
+    if (
+      await startIsolatedBackground(
+        ext,
+        registry,
+        host,
+        rootEl,
+        bgInfo,
+        lifecycle,
+        () => ext.backgroundGeneration === generation,
+      )
+    )
+      return;
 
-    const frame = document.createElement("iframe");
-    frame.style.cssText =
-      "position:fixed;width:0;height:0;border:none;opacity:0;pointer-events:none;z-index:-1;";
-    frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
-    frame.setAttribute("aria-hidden", "true");
-    rootEl.appendChild(frame);
+    const frame = createBackgroundFrame(rootEl);
 
     let win: Window;
     try {
@@ -218,12 +368,7 @@ export async function startBackground(
           negativeMessage("rivet background api installation failed"),
         );
       }
-      ext.background = { kind: "frame", frame, events };
-
-      if (lifecycle.installedReason) {
-        events.runtimeOnInstalled.fire({ reason: lifecycle.installedReason });
-      }
-      if (lifecycle.startup) events.runtimeOnStartup.fire();
+      activateBackground(ext, { kind: "frame", frame, events }, lifecycle);
     } finally {
       startupHostGuard?.release();
     }

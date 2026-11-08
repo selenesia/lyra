@@ -25,7 +25,7 @@ export function productionStaticGateway(metadata, env = process.env) {
     nuruTicket,
     ...(nuruTicket ? { sessions: (Number(env.LYRA_MEMORY_MB) || 512) * 32, starts: 300, idle: 15 * 60_000 } : {}),
     forward(target, init) {
-      const upstream = target.startsWith("/api/anime/") ? isao :
+      const upstream = target.startsWith("/api/anime/") || target.startsWith("/api/watch/") ? isao :
         target.startsWith("/api/") ? app : mochi;
       return fetch(new URL(target, upstream), init);
     },

@@ -1,11 +1,11 @@
-export function canvasLayout(width: number, count: number, anime: boolean) {
-  const gap = anime ? 12 : 8;
+export function canvasLayout(width: number, count: number, posters: boolean) {
+  const gap = posters ? 12 : 8;
   const columns = Math.max(
     1,
-    Math.floor((width + gap) / ((anime ? 150 : 130) + gap)),
+    Math.floor((width + gap) / ((posters ? 150 : 130) + gap)),
   );
   const cardWidth = (width - (columns - 1) * gap) / columns;
-  const cardHeight = anime ? cardWidth * 1.5 : Math.max(70, cardWidth * 1.05);
+  const cardHeight = posters ? cardWidth * 1.5 : Math.max(70, cardWidth * 1.05);
   const stride = cardHeight + gap;
   return {
     columns,

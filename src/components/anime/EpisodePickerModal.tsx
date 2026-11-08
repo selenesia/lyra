@@ -26,8 +26,8 @@ import { useManagedModal } from "../../core/ui/modal.ts";
 import { negativeMessage } from "../../core/runtime/messages.ts";
 import { svgIcon } from "../../core/ui/svgIcon.ts";
 import { useVirtualGrid } from "../../hooks/useVirtualGrid.ts";
-import "../../assets/styles/anime/episode-selector.css";
-import "../../assets/styles/anime/episode-picker-modal.css";
+import "../../assets/styles/watch/episode-selector.css";
+import "../../assets/styles/watch/episode-picker-modal.css";
 
 const SVG_XMARK = svgIcon("IconCrossMedium");
 const NO_EPISODES: AnimeEpisodeMapping[] = [];

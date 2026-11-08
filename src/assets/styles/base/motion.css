@@ -3,12 +3,14 @@
   --motion-enter: 180ms;
   --motion-exit: 120ms;
   --motion-reveal: 320ms;
+  --motion-slide: 220ms;
   --motion-shimmer: 1000ms;
   --motion-spin: 800ms;
   --motion-idle: 800ms;
   --motion-groom: 1200ms;
   --motion-ease: ease;
   --motion-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-slide: cubic-bezier(0.33, 1, 0.68, 1);
   --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 

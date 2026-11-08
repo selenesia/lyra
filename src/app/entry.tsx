@@ -26,8 +26,8 @@ import "../assets/styles/browser/tabs.css";
 import "../assets/styles/browser/rivet.css";
 
 const recoveryUrl = new URL(window.location.href);
-if (recoveryUrl.searchParams.has("lyra-recovery")) {
-  recoveryUrl.searchParams.delete("lyra-recovery");
+if (recoveryUrl.searchParams.has("recovery")) {
+  recoveryUrl.searchParams.delete("recovery");
   history.replaceState(history.state, "", recoveryUrl.href);
 }
 

@@ -42,8 +42,8 @@ interface MediaEventsContext {
   resumeAppliedRef: MutableRef<boolean>;
   resumeKey: string;
   initialEpisode: number;
-  language: "sub" | "dub";
-  initialLanguage: "sub" | "dub";
+  language: string;
+  initialLanguage: string;
   params: URLSearchParams;
   persistProgress: (currentTime: number, duration: number, completed?: boolean) => void;
 }

@@ -12,12 +12,17 @@ import konaUrl from "../assets/images/peaks/kona.webp";
 import osaUrl from "../assets/images/peaks/osa.webp";
 import azuUrl from "../assets/images/peaks/azu.webp";
 import {
-  loadAnimeCatalog,
+  loadWatchCatalog,
   loadGamesCatalog,
   loadNewTabModal,
   loadSettingsModal,
   loadChatPage,
+  loadFallingLeaves,
 } from "./loaders.ts";
+import {
+  prefersReducedMotion,
+  readAdvancedToggle,
+} from "../core/config/advancedSettings.ts";
 
 const peakUrls = [hachiiUrl, konaUrl, osaUrl, azuUrl];
 const PEAK_INDEX_STORAGE_KEY = "lyra-title-peak-index";
@@ -52,17 +57,38 @@ function getRandomPeakIndex(): number {
 }
 
 const GamesCatalog = lazy(loadGamesCatalog);
-const AnimeCatalog = lazy(loadAnimeCatalog);
+const WatchCatalog = lazy(loadWatchCatalog);
 const NewTabModal = lazy(loadNewTabModal);
 const SettingsModal = lazy(loadSettingsModal);
 const ChatPage = lazy(loadChatPage);
+const FallingLeaves = lazy(loadFallingLeaves);
+
+const SITE_IN_USE_CLASSES = [
+  "browser-view",
+  "split-view",
+  "is-picking-split",
+] as const;
+
+function siteInUse(): boolean {
+  const { classList } = document.body;
+  return SITE_IN_USE_CLASSES.some((name) => classList.contains(name));
+}
+
+function shouldShowLeaves(): boolean {
+  return (
+    readAdvancedToggle("fallingLeaves") &&
+    !prefersReducedMotion() &&
+    !siteInUse()
+  );
+}
 
 export default function App() {
   const [gamesMounted, setGamesMounted] = useState(false);
-  const [animeMounted, setAnimeMounted] = useState(false);
+  const [watchMounted, setWatchMounted] = useState(false);
   const [newTabMounted, setNewTabMounted] = useState(false);
   const [settingsMounted, setSettingsMounted] = useState(false);
   const [chatMounted, setChatMounted] = useState(false);
+  const [leavesMounted, setLeavesMounted] = useState(false);
   const [peakSrc] = useState(
     () =>
       document.documentElement.dataset.peakSrc ||
@@ -71,7 +97,7 @@ export default function App() {
 
   useEffect(() => {
     const showGames = () => setGamesMounted(true);
-    const showAnime = () => setAnimeMounted(true);
+    const showWatch = () => setWatchMounted(true);
     const showNewTab = () => {
       setNewTabMounted(true);
     };
@@ -85,8 +111,8 @@ export default function App() {
 
     window.showGameMenu = showGames;
     window.toggleGameMenu = showGames;
-    window.showAnimeMenu = showAnime;
-    window.toggleAnimeMenu = showAnime;
+    window.showWatchMenu = showWatch;
+    window.toggleWatchMenu = showWatch;
     runtimeWindow.showNewTabModal = showNewTab;
     window.toggleSettingsModal = showSettings;
     window.showChatPage = showChat;
@@ -95,8 +121,8 @@ export default function App() {
     return () => {
       if (window.showGameMenu === showGames) delete window.showGameMenu;
       if (window.toggleGameMenu === showGames) delete window.toggleGameMenu;
-      if (window.showAnimeMenu === showAnime) delete window.showAnimeMenu;
-      if (window.toggleAnimeMenu === showAnime) delete window.toggleAnimeMenu;
+      if (window.showWatchMenu === showWatch) delete window.showWatchMenu;
+      if (window.toggleWatchMenu === showWatch) delete window.toggleWatchMenu;
       if (runtimeWindow.showNewTabModal === showNewTab) {
         delete runtimeWindow.showNewTabModal;
       }
@@ -108,8 +134,62 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let idleHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+
+    const cancelPending = () => {
+      if (idleHandle !== undefined) cancelIdleCallback(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+      idleHandle = undefined;
+      timeoutHandle = undefined;
+    };
+
+    let wanted = false;
+    const sync = () => {
+      const next = shouldShowLeaves();
+      if (next === wanted) return;
+      wanted = next;
+      cancelPending();
+      if (!next) {
+        setLeavesMounted(false);
+        return;
+      }
+      const mount = () => setLeavesMounted(true);
+      if (typeof requestIdleCallback === "function") {
+        idleHandle = requestIdleCallback(mount, { timeout: 3000 });
+      } else {
+        timeoutHandle = window.setTimeout(mount, 1500);
+      }
+    };
+
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+    const systemMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    sync();
+    document.addEventListener("fallingLeavesUpdated", sync);
+    document.addEventListener("motionPreferenceUpdated", sync);
+    systemMotion.addEventListener("change", sync);
+    return () => {
+      cancelPending();
+      observer.disconnect();
+      document.removeEventListener("fallingLeavesUpdated", sync);
+      document.removeEventListener("motionPreferenceUpdated", sync);
+      systemMotion.removeEventListener("change", sync);
+    };
+  }, []);
+
   return (
     <>
+      {leavesMounted && (
+        <Suspense fallback={null}>
+          <FallingLeaves />
+        </Suspense>
+      )}
       <TopBar />
       <Sidebar />
       <div class="content-area">
@@ -135,9 +215,9 @@ export default function App() {
             <GamesCatalog openOnMount />
           </Suspense>
         )}
-        {animeMounted && (
+        {watchMounted && (
           <Suspense fallback={null}>
-            <AnimeCatalog openOnMount />
+            <WatchCatalog openOnMount />
           </Suspense>
         )}
         {chatMounted && (

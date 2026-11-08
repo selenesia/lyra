@@ -11,7 +11,7 @@ const CHUNK_SIZE = 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 80 * CHUNK_SIZE;
 const MAX_PARTS = MAX_SNAPSHOT_BYTES / CHUNK_SIZE;
 const MAX_SEALED_PARTS = 4096;
-const MAX_CONCURRENCY = 4;
+const MAX_CONCURRENCY = 8;
 const REQUEST_TIMEOUT = 60_000;
 const TRANSFER_TIMEOUT = 5 * 60_000;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -272,9 +272,24 @@ export async function uploadSealedSnapshot(
   return commitRequest(id, deadline, options, sealed.seal);
 }
 
+interface LocalChunks {
+  body: Blob;
+  chunks: SnapshotChunk[];
+}
+
 export interface DownloadOptions {
   keys?: SyncKeys | null;
-  local?: { body: Blob; chunks: SnapshotChunk[] } | null;
+  local?: LocalChunks | Promise<LocalChunks | null> | null;
+  progress?: (done: number, total: number) => void;
+}
+
+function partProgress(
+  total: number,
+  progress: DownloadOptions["progress"],
+): () => void {
+  let done = 0;
+  progress?.(done, total);
+  return () => progress?.(++done, total);
 }
 
 function joinedSnapshot(
@@ -318,16 +333,18 @@ async function downloadSealed(
   ) {
     return sealedFailure("sync_key_mismatch", "synced data needs a different password");
   }
+  const reusable = await options.local;
   const local = new Map<string, Blob>();
-  for (const chunk of options.local?.chunks ?? []) {
+  for (const chunk of reusable?.chunks ?? []) {
     local.set(
       chunk.id,
-      options.local!.body.slice(chunk.offset, chunk.offset + chunk.length),
+      reusable!.body.slice(chunk.offset, chunk.offset + chunk.length),
     );
   }
   const opened = new Map<string, Promise<Blob>>();
   const chunks: Blob[] = [];
   const indexes = Array.from({ length: digests.length }, (_, part) => part);
+  const advance = partProgress(digests.length, options.progress);
   const failure = await transferParts(
     indexes,
     concurrency(manifest.concurrency),
@@ -336,6 +353,7 @@ async function downloadSealed(
       const reused = local.get(digest);
       if (reused) {
         chunks[part] = reused;
+        advance();
         return new Response(null, { status: 204 });
       }
       let pending = opened.get(digest);
@@ -357,6 +375,7 @@ async function downloadSealed(
         if (error instanceof Response) return error;
         throw error;
       }
+      advance();
       return new Response(null, { status: 204 });
     },
   );
@@ -368,6 +387,10 @@ export async function downloadSnapshot(
   options: DownloadOptions = {},
 ): Promise<Response> {
   const deadline = Date.now() + TRANSFER_TIMEOUT;
+  options = {
+    ...options,
+    local: Promise.resolve(options.local ?? null).catch(() => null),
+  };
   const response = await request("/api/sync/transfer", deadline);
   if (!response.ok) return response;
   const manifest = await response.json();
@@ -385,6 +408,7 @@ export async function downloadSnapshot(
   if (manifest.sealed === true) return downloadSealed(manifest, deadline, options);
   const chunks: Blob[] = [];
   const indexes = Array.from({ length: manifest.parts }, (_, part) => part);
+  const advance = partProgress(manifest.parts, options.progress);
   const failure = await transferParts(indexes, concurrency(manifest.concurrency), async (part) => {
     const chunk = await request(`/api/sync/transfer/${manifest.id}/${part}`, deadline);
     if (!chunk.ok) return chunk;
@@ -393,6 +417,7 @@ export async function downloadSnapshot(
       throw new Error(negativeMessage("synced data is unavailable"));
     }
     chunks[part] = bytes;
+    advance();
     return chunk;
   });
   if (failure) return failure;

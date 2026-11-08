@@ -406,7 +406,7 @@ pub(super) fn passthrough_response(
             .fetch_add(1, Ordering::Relaxed);
         "unavailable"
     };
-    headers.insert("x-lyra-error-class", HeaderValue::from_static(class));
+    headers.insert("x-error-class", HeaderValue::from_static(class));
     let stream = response.bytes_stream().map(move |chunk| {
         let _permit = &permit;
         chunk

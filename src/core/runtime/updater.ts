@@ -24,7 +24,7 @@ export type UpdateDecision =
   | { action: "reload"; target: string; attempt: UpdateAttempt }
   | { action: "wait"; failed: boolean };
 
-const UPDATE_PARAM = "lyra-update";
+const UPDATE_PARAM = "update";
 export const UPDATE_POLL_MS = 5 * 60 * 1000;
 export const UPDATE_CHECK_THROTTLE_MS = 30 * 1000;
 export const UPDATE_RETRY_MS = 5 * 60 * 1000;

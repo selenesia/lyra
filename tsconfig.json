@@ -25,6 +25,6 @@
       "react/jsx-runtime": ["./node_modules/preact/jsx-runtime/"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx", "services/isao/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

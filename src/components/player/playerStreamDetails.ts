@@ -2,11 +2,6 @@ import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import { type SubtitleTrack, externalSubtitleTracks } from "./tracks.ts";
 import { type StreamInfoResponse, fetchStreamInfo } from "./streamInfo.ts";
 import { type SkipRange, readPlayerStorage } from "./playerState.ts";
-import {
-  type AnimeProvider,
-  hasMegaPlayIdentifier,
-  appendMegaPlayParams,
-} from "../../features/anime/animeIdentity.ts";
 import { RequestError, negativeMessage } from "../../core/runtime/messages.ts";
 import { recordStreamDiagnostic } from "../../core/media/streamDiagnostics.ts";
 import type {
@@ -19,18 +14,17 @@ import {
 } from "../../core/media/animeSettings.ts";
 
 interface StreamDetailsContext {
-  episodeNumber: number;
-  playbackIds: Partial<Record<AnimeProvider, string>>;
+  streamQuery: URLSearchParams | null;
+  titleMode: boolean;
+  setStreamLanguages: Dispatch<StateUpdater<string[]>>;
+  setSourceLanguage: Dispatch<StateUpdater<string>>;
   setLoadingStreamInfo: Dispatch<StateUpdater<boolean>>;
   sourceGenerationRef: MutableRef<number>;
   sourceContextRef: MutableRef<string>;
   manifestDurationRef: MutableRef<number | null>;
   setIntroMarker: Dispatch<StateUpdater<SkipRange | null>>;
   setOutroMarker: Dispatch<StateUpdater<SkipRange | null>>;
-  sourceEpisodeNumber: number;
-  language: "sub" | "dub";
-  streamSessionRef: MutableRef<string>;
-  qualityRequest: "" | "2160p" | "auto";
+  language: string;
   languageStreamInfoRef: MutableRef<{ params: string; info: StreamInfoResponse } | null>;
   syncMediaState: (patch?: MediaStateHints) => void;
   setStreamProvider: Dispatch<StateUpdater<string | null>>;
@@ -46,17 +40,14 @@ interface StreamDetailsContext {
 }
 
 export function loadStreamDetails({
-  episodeNumber, playbackIds, setLoadingStreamInfo, sourceGenerationRef,
-  sourceContextRef, manifestDurationRef, setIntroMarker, setOutroMarker,
-  sourceEpisodeNumber, language, streamSessionRef, qualityRequest,
+  streamQuery, titleMode, setStreamLanguages, setSourceLanguage,
+  setLoadingStreamInfo, sourceGenerationRef, sourceContextRef,
+  manifestDurationRef, setIntroMarker, setOutroMarker, language,
   languageStreamInfoRef, syncMediaState, setStreamProvider, fallbackPendingRef,
   requested4kContext, playbackContext, request4k, notify4kFallback,
   setSubtitleTracks, notifyPreference, mediaStateRef, unavailableMessage,
 }: StreamDetailsContext) {
-  if (
-    !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
-    !hasMegaPlayIdentifier(playbackIds)
-  ) {
+  if (!streamQuery) {
     setLoadingStreamInfo(false);
     return;
   }
@@ -68,13 +59,7 @@ export function loadStreamDetails({
   manifestDurationRef.current = null;
   setIntroMarker(null);
   setOutroMarker(null);
-  const params = new URLSearchParams({
-    episode: String(sourceEpisodeNumber),
-    language,
-    session: streamSessionRef.current,
-  });
-  if (qualityRequest) params.set("preferred_quality", qualityRequest);
-  appendMegaPlayParams(params, playbackIds);
+  const params = streamQuery;
 
   const confirmed = languageStreamInfoRef.current;
   languageStreamInfoRef.current = null;
@@ -109,7 +94,17 @@ export function loadStreamDetails({
       notify4kFallback();
       const tracks = externalSubtitleTracks(info?.tracks);
       setSubtitleTracks(tracks);
-      if (
+      if (titleMode) {
+        const languages = Array.isArray(info.languages)
+          ? info.languages.filter((code): code is string => typeof code === "string" && /^[a-z]{2,3}$/.test(code))
+          : [];
+        const sourceLanguage = typeof info.source?.language === "string" ? info.source.language : "";
+        setStreamLanguages(languages);
+        setSourceLanguage(sourceLanguage);
+        if (sourceLanguage && sourceLanguage !== "und" && sourceLanguage !== language) {
+          notifyPreference("audio", "selected audio is unavailable for this title");
+        }
+      } else if (
         readPlayerStorage(ANIME_LANGUAGE_KEY) &&
         language === readAnimeLanguage() &&
         info.source?.language !== language

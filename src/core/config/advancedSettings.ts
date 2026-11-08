@@ -2,17 +2,19 @@ export const ADVANCED_SETTING_KEYS = {
   saveHistory: "saveBrowsingHistory",
   preloadProxy: "preloadProxyRuntime",
   motion: "motionPreference",
+  fallingLeaves: "fallingLeaves",
 } as const;
 
 const DEFAULT_ADVANCED_SETTINGS = {
   saveHistory: true,
   preloadProxy: false,
+  fallingLeaves: true,
   motion: "system",
 } as const;
 
 export const MOTION_OPTIONS = ["system", "reduced", "full"] as const;
 export type MotionPreference = (typeof MOTION_OPTIONS)[number];
-export type AdvancedToggle = "saveHistory" | "preloadProxy";
+export type AdvancedToggle = "saveHistory" | "preloadProxy" | "fallingLeaves";
 
 type StorageReader = Pick<Storage, "getItem">;
 

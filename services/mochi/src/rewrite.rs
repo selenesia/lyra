@@ -83,48 +83,6 @@ pub fn rewrite_html(
                         el.prepend(&full_script, ContentType::Html);
                         *script_injected_for_head.borrow_mut() = true;
                     }
-                    if base_url_for_head.contains("gn-math.dev") {
-                        let intercept_script = r##"<script>
-(function(){
-var _f=window.fetch.bind(window);
-window.fetch=function(u,o){
-var s=typeof u==='string'?u:(u&&u.url?u.url:String(u));
-if(s.indexOf('data.jsdelivr.com/v1/stats/')!==-1){
-return Promise.resolve(new Response('{"total":0,"files":[],"versions":[]}',{status:200,headers:{'Content-Type':'application/json'}}));
-}
-return _f(u,o);
-};
-var _iv=setInterval(function(){
-var zf=document.getElementById('zoneFrame');
-if(zf&&!zf._hooked){
-zf._hooked=1;
-zf.addEventListener('load',function(){
-try{if(zf.contentDocument&&zf.contentDocument.body){
-var t=zf.contentDocument.body.innerText||'';
-if(t.indexOf('Failed to fetch')!==-1||t.indexOf('upstream error')!==-1||t.indexOf('not found')!==-1){
-zf.srcdoc='<html><body style="background:#000;color:#fff;display:flex;align-items:center;justify-content:center;height:100%;margin:0;font-family:sans-serif;text-align:center"><div><h2 style="font-size:24px;margin-bottom:8px">game unavailable... /ᐠ - ˕ -マ</h2><p style="color:#999">this game\u2019s content is no longer available... /ᐠ - ˕ -マ</p></div></body></html>';
-}
-}}catch(e){}
-});
-clearInterval(_iv);
-}
-},200);
-setTimeout(function(){clearInterval(_iv);},15000);
-})();
-</script>"##;
-                        el.prepend(intercept_script, ContentType::Html);
-
-                        let gnmath_inject = r#"<style>
-                            .zone-header { display: none !important; }
-                            header { display: none !important; }
-                            main { display: none !important; }
-                            footer { display: none !important; }
-                            #zoneViewer { display: flex !important; position: fixed; inset: 0; z-index: 9999; background: #000; }
-                            #zoneFrame { flex: 1; width: 100%; height: 100%; border: none; }
-                            body { margin: 0; padding: 0; overflow: hidden; background: #000; }
-                        </style><script>window.sadjgknsdfjg='https://gn-math.dev'</script>"#;
-                        el.append(gnmath_inject, ContentType::Html);
-                    }
                     Ok(())
                 }),
                 element!("base[href]", move |el| {

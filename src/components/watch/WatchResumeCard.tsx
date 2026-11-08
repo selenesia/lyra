@@ -1,22 +1,22 @@
-import {
-  animeProgressLabel,
-  type AnimeProgress,
-} from "../../features/anime/animeProgress.ts";
 import { useImageLoad } from "../../hooks/useImageLoad.ts";
 import { IconPlay } from "../icons";
 import IconBase from "../icons/IconBase.tsx";
 import { ICON_PATHS } from "../icons/paths.ts";
 
-export default function AnimeResumeCard({
-  progress,
+export default function WatchResumeCard({
+  title,
+  posterUrl,
+  caption,
   onResume,
 }: {
-  progress: AnimeProgress;
+  title: string;
+  posterUrl: string;
+  caption: string;
   onResume: () => void;
 }) {
-  const image = useImageLoad(progress.posterUrl);
+  const image = useImageLoad(posterUrl);
   return (
-    <button type="button" class="anime-resume-card" onClick={onResume}>
+    <button type="button" class="watch-resume-card" onClick={onResume}>
       <span
         class={`poster-cover${image.loaded ? " loaded" : ""}${image.errored ? " no-cover" : ""}`}
       >
@@ -34,14 +34,12 @@ export default function AnimeResumeCard({
           />
         )}
       </span>
-      <span class="anime-info">
-        <span class="anime-resume-caption">continue watching...</span>
-        <span class="anime-resume-title">{progress.title}</span>
-        <span class="anime-resume-caption">
-          {animeProgressLabel(progress, "resume")} · {progress.language}
-        </span>
+      <span class="watch-info">
+        <span class="watch-resume-caption">continue watching...</span>
+        <span class="watch-resume-title">{title}</span>
+        <span class="watch-resume-caption">{caption}</span>
       </span>
-      <IconPlay class="anime-resume-play" />
+      <IconPlay class="watch-resume-play" />
     </button>
   );
 }

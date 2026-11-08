@@ -55,11 +55,29 @@ import {
   selectTrack,
   subtitleLabels,
   trackLabel,
+  trackLanguage,
+  trackRole,
   type AudioTrack,
   type SubtitleTrack,
 } from "./tracks.ts";
 import type { StreamInfoResponse, StreamQualityOption } from "./streamInfo.ts";
 import {
+  appendTitleStreamParams,
+  buildTitlePlaybackUrl,
+  isWatchLanguage,
+  parseTitlePlayback,
+  readWatchLanguage,
+  titleResumeKey,
+  watchLanguageName,
+} from "../../features/watch/watchPlayback.ts";
+import {
+  fetchTitleDetails,
+  fetchTitleSeason,
+  nextSeasonNumber,
+  type TitleSeasonSummary,
+} from "../../features/watch/titles.ts";
+import {
+  buildNextEpisodeStreamUrl,
   parsePlaybackEpisodeParts,
   type PlaybackEpisodePartRange,
   mergeEpisodeCount,
@@ -97,6 +115,7 @@ import {
 import { preloadNextEpisode } from "./playerPreload.ts";
 import { attachPlayerSource, resetSourceState } from "./playerSource.ts";
 import {
+  type AutoNextState,
   changePlayerEpisode,
   scheduleAutoNext,
   watchAnimeSettings,
@@ -120,8 +139,14 @@ export default function Player() {
   const params = useRef(new URLSearchParams(window.location.search)).current;
   const title = params.get("title") || "";
   const poster = params.get("poster") || "";
+  const titlePlayback = useMemo(() => parseTitlePlayback(params), [params]);
+  const titleMode = titlePlayback !== null;
+  const titleKind = titlePlayback?.type;
+  const titleIdentity = titlePlayback
+    ? `${titlePlayback.type}:${titlePlayback.id}:${titlePlayback.season ?? ""}`
+    : "";
   const hasEpisodeParam = params.has("episode");
-  const initialEpisode = parseInt(params.get("episode") || "0", 10);
+  const initialEpisode = titleKind === "movie" ? 1 : parseInt(params.get("episode") || "0", 10);
   const anilistId = parseInt(params.get("anilist_id") || "0", 10);
   const malId = parseInt(params.get("mal_id") || "0", 10);
   const anikotoEpisodeId = params.get("anikoto_episode_id") || "";
@@ -146,15 +171,24 @@ export default function Player() {
       String(initialEpisode || (anikotoEpisodeId ? 1 : 0)),
     10,
   );
-  const initialLanguage = preferredAudioVersion(
-    readPlayerStorage("lyra-anime-audio") || "",
-    params.has("language")
-      ? params.get("language") === "dub"
-        ? "dub"
-        : "sub"
-      : readAnimeLanguage(),
-  );
-  const [language, setLanguage] = useState<"sub" | "dub">(initialLanguage);
+  const requestedLanguage = params.get("language");
+  const initialLanguage: string = titleMode
+    ? isWatchLanguage(requestedLanguage)
+      ? requestedLanguage
+      : readWatchLanguage()
+    : preferredAudioVersion(
+        readPlayerStorage("lyra-anime-audio") || "",
+        params.has("language")
+          ? params.get("language") === "dub"
+            ? "dub"
+            : "sub"
+          : readAnimeLanguage(),
+      );
+  const [language, setLanguage] = useState<string>(initialLanguage);
+  const trackVersion: "sub" | "dub" = titleMode || language === "dub" ? "dub" : "sub";
+  const [streamLanguages, setStreamLanguages] = useState<string[]>([]);
+  const [sourceLanguage, setSourceLanguage] = useState("");
+  const [titleSeasons, setTitleSeasons] = useState<TitleSeasonSummary[]>([]);
   const [prefer4k, setPrefer4k] = useState(() => readAnimeQuality() === "2160p");
   const [auto4k, setAuto4k] = useState(() => startsIn4k(readAnimeQuality()));
   const [requested4kContext, setRequested4kContext] = useState("");
@@ -181,21 +215,27 @@ export default function Player() {
     [identityIds, activePartRange, activePartIds, activeAnikotoEpisodeId],
   );
   const initialEpisodeCount = parseInt(params.get("episode_count") || "0", 10);
-  const format = params.get("format") || "";
+  const format = titleKind === "movie" ? "MOVIE" : params.get("format") || "";
   const currentSeason = useMemo<AnimeSeason>(
     () => ({
       id: animeIdentityCacheKey({ ids: identityIds }),
       title,
       ids: identityIds,
       format,
-      number: Number(params.get("season")) || 1,
+      number: titlePlayback?.season ?? (Number(params.get("season")) || 1),
       episodeCount: initialEpisodeCount,
       year: Number(params.get("year")) || undefined,
     }),
-    [identityIds, title, format, params, initialEpisodeCount],
+    [identityIds, title, format, params, initialEpisodeCount, titlePlayback],
   );
   const [episodeNumber, setEpisodeNumber] = useState(
-    hasEpisodeParam ? Math.max(0, initialEpisode) : anikotoEpisodeId ? 1 : 0,
+    titleKind === "movie"
+      ? 1
+      : hasEpisodeParam
+        ? Math.max(0, initialEpisode)
+        : anikotoEpisodeId
+          ? 1
+          : 0,
   );
   const [confirmedEpisodeNumber, setConfirmedEpisodeNumber] = useState<
     number | null
@@ -211,6 +251,7 @@ export default function Player() {
   const streamSessionRef = useRef("");
   if (!streamSessionRef.current) streamSessionRef.current = crypto.randomUUID();
   const episodeContext = [
+    titleIdentity,
     episodeNumber,
     sourceEpisodeNumber,
     playbackIds.anilist || 0,
@@ -221,26 +262,42 @@ export default function Player() {
   const request4k = requested4kContext === playbackContext && failed4kContext !== playbackContext;
   const start4k = auto4k && failed4kContext !== playbackContext;
   const qualityRequest = request4k ? "2160p" : start4k ? "auto" : "";
-  const fallbackQuery = new URLSearchParams({
-    episode: String(sourceEpisodeNumber),
-    language,
-    session: streamSessionRef.current,
-  });
-  if (qualityRequest) fallbackQuery.set("preferred_quality", qualityRequest);
-  appendMegaPlayParams(fallbackQuery, playbackIds);
-  const baseVideoSrc =
-    (episodeNumber > 0 || Boolean(playbackIds.anikotoEpisode)) &&
-    hasMegaPlayIdentifier(playbackIds)
-      ? `/stream/anikoto?${fallbackQuery}`
-      : "";
-  const resumeKey = `lyra-resume-anikoto-${animeIdentityCacheKey({ ids: playbackIds })}-${episodeNumber}-${language}`;
+  const streamParams = useCallback(
+    (nextLanguage: string, quality: string): URLSearchParams | null => {
+      const query = new URLSearchParams({
+        episode: String(sourceEpisodeNumber),
+        language: nextLanguage,
+        session: streamSessionRef.current,
+      });
+      if (quality) query.set("preferred_quality", quality);
+      if (titlePlayback) {
+        return appendTitleStreamParams(query, titlePlayback, episodeNumber) ? query : null;
+      }
+      if (
+        !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
+        !hasMegaPlayIdentifier(playbackIds)
+      ) {
+        return null;
+      }
+      appendMegaPlayParams(query, playbackIds);
+      return query;
+    },
+    [sourceEpisodeNumber, titlePlayback, episodeNumber, playbackIds],
+  );
+  const streamQuery = streamParams(language, qualityRequest);
+  const streamQueryKey = streamQuery?.toString() || "";
+  const streamPath = titleMode ? "/stream/watch/playlist" : "/stream/anikoto";
+  const baseVideoSrc = streamQuery ? `${streamPath}?${streamQueryKey}` : "";
+  const resumeKey = titlePlayback
+    ? titleResumeKey(titlePlayback, episodeNumber)
+    : `lyra-resume-anikoto-${animeIdentityCacheKey({ ids: playbackIds })}-${episodeNumber}-${language}`;
   const episodeCountRef = useRef(episodeCount);
   episodeCountRef.current = episodeCount;
   const persistProgress = useCallback(
     (currentTime: number, duration: number, completed = false) => persistPlayerProgress({
     title, poster, identityIds, activeAnikotoEpisodeId, episodeNumber,
     sourceEpisodeNumber, params, episodeCountRef, format, language,
-    episodeParts, resumeKey,
+    episodeParts, resumeKey, titlePlayback,
   }, currentTime, duration, completed),
     [
       title,
@@ -254,9 +311,11 @@ export default function Player() {
       language,
       episodeParts,
       resumeKey,
+      titlePlayback,
     ],
   );
   const sourceContextKey = [
+    titleIdentity,
     episodeNumber,
     sourceEpisodeNumber,
     language,
@@ -416,19 +475,29 @@ export default function Player() {
   const [subtitleChoice, setSubtitleChoice] = useState({ source: "", id: "" });
   const subtitleChoiceRef = useRef(subtitleChoice);
   subtitleChoiceRef.current = subtitleChoice;
+  const effectiveSubtitlePreference = useMemo(() => {
+    const spokenLanguage = (sourceLanguage && sourceLanguage !== "und" ? sourceLanguage : language).split("-")[0];
+    if (!titleMode || subtitlePreference !== "" || spokenLanguage !== "en") return subtitlePreference;
+    const hasForcedEnglish = subtitleTracks.some(
+      (track) =>
+        trackRole(track) === "forced" &&
+        trackLanguage(track.language, track.label).split("-")[0] === "en",
+    );
+    return hasForcedEnglish ? JSON.stringify({ language: "en", label: "", role: "forced" }) : "off";
+  }, [titleMode, subtitlePreference, sourceLanguage, language, subtitleTracks]);
   const selectedSubtitle = useMemo(
     () =>
       selectTrack(
         subtitleTracks,
-        subtitlePreference,
+        effectiveSubtitlePreference,
         "subtitles",
-        language,
+        trackVersion,
         subtitleChoice.source === baseVideoSrc ? subtitleChoice.id : undefined,
       ),
     [
       subtitleTracks,
-      subtitlePreference,
-      language,
+      effectiveSubtitlePreference,
+      trackVersion,
       subtitleChoice,
       baseVideoSrc,
     ],
@@ -455,17 +524,19 @@ export default function Player() {
     dub: readPlayerStorage("lyra-anime-audio-dub") || "",
   });
   const audioPreferenceRef = useRef(
-    readPlayerStorage("lyra-anime-audio") || audioPreferencesRef.current[language],
+    titleMode
+      ? ""
+      : readPlayerStorage("lyra-anime-audio") ||
+          audioPreferencesRef.current[language === "dub" ? "dub" : "sub"],
   );
-  const nextAudioLanguageRef = useRef(
-    preferredAudioVersion(audioPreferenceRef.current, language),
+  const nextAudioLanguageRef = useRef<string>(
+    titleMode
+      ? language
+      : preferredAudioVersion(audioPreferenceRef.current, language === "dub" ? "dub" : "sub"),
   );
   const audioChoiceRef = useRef({ source: "", id: "" });
   const [activeSubtitle, setActiveSubtitle] = useState(-1);
-  const [autoNext, setAutoNext] = useState<{
-    episode: number;
-    seconds: number;
-  } | null>(null);
+  const [autoNext, setAutoNext] = useState<AutoNextState | null>(null);
   const [preloadSource, setPreloadSource] = useState("");
   const [autoPlayNextEpisode, setAutoPlayNextEpisode] = useState(() =>
     readAnimeSetting("autoPlayNextEpisode"),
@@ -504,19 +575,25 @@ export default function Player() {
     sourceSwitchTimeRef.current = Math.max(
       0, pendingSeekRef.current ?? videoRef.current?.currentTime ?? 0,
     );
-    const nextLanguage = preferredAudioVersion(audioPreferenceRef.current, language);
+    const nextLanguage = titleMode
+      ? language
+      : preferredAudioVersion(audioPreferenceRef.current, language === "dub" ? "dub" : "sub");
     setFailed4kContext(`${episodeContext}|${nextLanguage}`);
     setLanguage(nextLanguage);
     return true;
-  }, [request4k, start4k, episodeContext, language]);
+  }, [request4k, start4k, episodeContext, language, titleMode]);
 
   const unavailableMessage = useCallback((status?: number) => negativeMessage(
     status === 404
-      ? isAnimeMovieFormat(format)
-        ? "this anime is unavailable from all providers"
-        : "this episode is unavailable from all providers"
-      : "unable to load this episode; please try again",
-  ), [format]);
+      ? titleKind === "movie"
+        ? "this movie is unavailable from all providers"
+        : isAnimeMovieFormat(format)
+          ? "this anime is unavailable from all providers"
+          : "this episode is unavailable from all providers"
+      : titleKind === "movie"
+        ? "unable to load this movie; please try again"
+        : "unable to load this episode; please try again",
+  ), [format, titleKind]);
   const displayDuration = mediaState.duration ?? 0;
   const buffering = mediaState.buffering;
   const loading = mediaState.status === "loading";
@@ -706,6 +783,35 @@ export default function Player() {
     episodeParts.length,
   ]);
 
+  useEffect(() => {
+    if (titlePlayback?.type !== "tv" || titlePlayback.season === undefined) return;
+    const controller = new AbortController();
+    const seasonNumber = titlePlayback.season;
+    const today = new Date().toISOString().slice(0, 10);
+    setLoadingEpisodeCount(true);
+    void Promise.allSettled([
+      fetchTitleSeason(titlePlayback.id, seasonNumber, controller.signal),
+      fetchTitleDetails("tv", titlePlayback.id, controller.signal),
+    ]).then(([season, details]) => {
+      if (controller.signal.aborted) return;
+      if (season.status === "fulfilled") {
+        const aired = season.value.episodes.filter(
+          (episode) => !episode.airDate || episode.airDate <= today,
+        );
+        const count = aired.reduce((highest, episode) => Math.max(highest, episode.number), 0);
+        if (count > 0) setEpisodeCount(Math.max(count, episodeNumber));
+      }
+      if (details.status === "fulfilled") setTitleSeasons(details.value.seasons);
+      setLoadingEpisodeCount(false);
+    });
+    return () => controller.abort();
+  }, [titlePlayback]);
+
+  const nextSeason =
+    titlePlayback?.type === "tv" && titlePlayback.season !== undefined
+      ? nextSeasonNumber(titleSeasons, titlePlayback.season)
+      : null;
+
   const togglePlay = useCallback(() => togglePlayback({
     videoRef, playRequestRef, playIntentRef, hlsRef, playAfterSeekRef,
     syncMediaState,
@@ -866,15 +972,37 @@ export default function Player() {
     ],
   );
 
+  const continueNextSeason = useCallback(() => {
+    if (!titlePlayback || nextSeason === null) return;
+    const video = videoRef.current;
+    if (video && video.currentTime > 0) {
+      persistProgress(video.currentTime, mediaStateRef.current.duration || 0, true);
+    }
+    window.location.assign(
+      buildTitlePlaybackUrl({
+        ...titlePlayback,
+        season: nextSeason,
+        episode: 1,
+        title,
+        posterUrl: poster,
+        year: Number(params.get("year")) || undefined,
+        language,
+      }),
+    );
+  }, [titlePlayback, nextSeason, persistProgress, title, poster, params, language]);
+
   const startAutoNext = useCallback(() => scheduleAutoNext({
     episodeNumber, autoPlayNextEpisode, episodeCount, clearAutoNext,
-    setAutoNext, autoNextTimerRef, changeEpisode,
+    setAutoNext, autoNextTimerRef, changeEpisode, nextSeason,
+    continueNextSeason,
   }), [
     autoPlayNextEpisode,
     clearAutoNext,
     changeEpisode,
     episodeCount,
     episodeNumber,
+    nextSeason,
+    continueNextSeason,
   ]);
   const startAutoNextRef = useRef(startAutoNext);
   startAutoNextRef.current = startAutoNext;
@@ -902,34 +1030,44 @@ export default function Player() {
     videoRef, videoSrc, hlsSessionRef, tracksSourceRef, sourceContextKey,
     sessionStartedAtRef, firstSegmentRecordedRef, firstFrameRecordedRef,
     rebufferStartedAtRef, rebufferCountRef, totalRebufferDurationMsRef,
-    episodeNumber, language, manifestDurationRef, syncMediaState,
+    episodeNumber, language, trackVersion, titleMode, manifestDurationRef, syncMediaState,
     setQualityOptions, setSelectedQuality, setActiveQuality, setAutoQuality,
     setAudioTracksReady, setEmbeddedSubtitles, playIntentRef, playAfterSeekRef,
     setAudioTracks, setOpenSelector, setActiveAudioTrack, audioPreferenceRef,
     audioChoiceRef, prefer4k, request4k, start4k, hlsRef, sourceContextRef,
     pendingSeekRef, fallbackPendingRef, setInfoRevision, fallbackFrom4k,
     unavailableMessage,
-  }), [episodeNumber, language, videoSrc, syncMediaState, prefer4k, request4k, start4k, fallbackFrom4k, unavailableMessage]);
+  }), [episodeNumber, language, trackVersion, titleMode, videoSrc, syncMediaState, prefer4k, request4k, start4k, fallbackFrom4k, unavailableMessage]);
 
   useEffect(() => probeRemote4k({
     videoRef, videoSrc, request4k, hasLocal4k, setAvailable4kSource,
   }), [videoSrc, request4k, hasLocal4k]);
 
+  const nextVideoSrc = useMemo(() => {
+    if (episodeNumber < 1 || episodeCount <= episodeNumber || isAnimeMovieFormat(format)) return "";
+    const quality = auto4k ? "auto" : "";
+    if (titlePlayback) {
+      const query = new URLSearchParams({
+        episode: String(episodeNumber + 1),
+        language,
+        session: streamSessionRef.current,
+      });
+      if (quality) query.set("preferred_quality", quality);
+      return appendTitleStreamParams(query, titlePlayback, episodeNumber + 1) ? `/stream/watch/playlist?${query}` : "";
+    }
+    return buildNextEpisodeStreamUrl(
+      episodeNumber + 1,
+      episodeParts,
+      identityIds,
+      language === "dub" ? "dub" : "sub",
+      streamSessionRef.current,
+      quality,
+    );
+  }, [episodeNumber, episodeCount, format, auto4k, titlePlayback, language, episodeParts, identityIds]);
+
   useEffect(() => preloadNextEpisode({
-    preloadSource, videoSrc, episodeNumber, episodeCount, format, episodeParts,
-    identityIds, language, streamSessionRef, auto4k,
-  }), [
-    preloadSource,
-    videoSrc,
-    episodeCount,
-    episodeNumber,
-    episodeParts,
-    format,
-    identityIds.anilist,
-    identityIds.mal,
-    language,
-    auto4k,
-  ]);
+    preloadSource, videoSrc, nextVideoSrc,
+  }), [preloadSource, videoSrc, nextVideoSrc]);
 
   const refreshAutoQuality = useCallback(() => {
     const hls = hlsRef.current;
@@ -998,24 +1136,22 @@ export default function Player() {
     (index: number) => pickAudioTrack({
     audioTracks, audioTracksReady, tracksSourceRef, videoSrc, hlsRef,
     setActiveAudioTrack, audioChoiceRef, audioPreferenceRef,
-    nextAudioLanguageRef, audioPreferencesRef, setOpenSelector,
+    nextAudioLanguageRef, audioPreferencesRef, setOpenSelector, titleMode,
   }, index),
-    [audioTracks, audioTracksReady, videoSrc],
+    [audioTracks, audioTracksReady, videoSrc, titleMode],
   );
 
   useEffect(() => loadStreamDetails({
-    episodeNumber, playbackIds, setLoadingStreamInfo, sourceGenerationRef,
-    sourceContextRef, manifestDurationRef, setIntroMarker, setOutroMarker,
-    sourceEpisodeNumber, language, streamSessionRef, qualityRequest,
+    streamQuery, titleMode, setStreamLanguages, setSourceLanguage,
+    setLoadingStreamInfo, sourceGenerationRef, sourceContextRef,
+    manifestDurationRef, setIntroMarker, setOutroMarker, language,
     languageStreamInfoRef, syncMediaState, setStreamProvider,
     fallbackPendingRef, requested4kContext, playbackContext, request4k,
     notify4kFallback, setSubtitleTracks, notifyPreference, mediaStateRef,
     unavailableMessage,
   }), [
-    sourceEpisodeNumber,
-    playbackIds.anilist,
-    playbackIds.mal,
-    playbackIds.anikotoEpisode,
+    streamQueryKey,
+    titleMode,
     language,
     request4k,
     qualityRequest,
@@ -1105,26 +1241,26 @@ export default function Player() {
             subtitleTracks,
             lastSubtitlePreferenceRef.current,
             "subtitles",
-            language,
+            trackVersion,
           ),
     );
-  }, [subtitleTracks, selectedSubtitle, chooseSubtitle, language]);
+  }, [subtitleTracks, selectedSubtitle, chooseSubtitle, trackVersion]);
 
   const changeLanguage = useCallback(
-    (nextLanguage: "sub" | "dub") => switchPlayerLanguage({
-    setOpenSelector, language, changingLanguage, episodeNumber, playbackIds,
-    languageRequestRef, setChangingLanguage, videoRef, sourceEpisodeNumber,
-    streamSessionRef, auto4k, sourceContextRef, sourceContextGenerationRef,
-    sourceSwitchTimeRef, pendingSeekRef, playAfterSeekRef, playIntentRef,
-    persistProgress, mediaStateRef, languageStreamInfoRef, nextAudioLanguageRef,
+    (nextLanguage: string) => switchPlayerLanguage({
+    setOpenSelector, language, changingLanguage, titleMode, streamParams,
+    languageRequestRef, setChangingLanguage, videoRef, auto4k,
+    sourceContextRef, sourceContextGenerationRef, sourceSwitchTimeRef,
+    pendingSeekRef, playAfterSeekRef, playIntentRef, persistProgress,
+    mediaStateRef, languageStreamInfoRef, nextAudioLanguageRef,
     audioPreferenceRef, audioPreferencesRef, setLanguage,
   }, nextLanguage),
     [
       language,
       changingLanguage,
       persistProgress,
-      sourceEpisodeNumber,
-      playbackIds,
+      titleMode,
+      streamParams,
       auto4k,
     ],
   );
@@ -1268,7 +1404,7 @@ export default function Player() {
   );
   const selectedAudioTrack = audioTracks[activeAudioTrack]
     ? activeAudioTrack
-    : selectTrack(audioTracks, audioPreferenceRef.current, "audio", language);
+    : selectTrack(audioTracks, audioPreferenceRef.current, "audio", trackVersion);
   const activeAudioLabel = streamProvider === null
     ? "audio"
     : audioMenuLabels[selectedAudioTrack] || "audio";
@@ -1282,6 +1418,24 @@ export default function Player() {
     [currentSeason, episodeCount, episodeNumber],
   );
   const closeSelector = useCallback(() => setOpenSelector(null), []);
+  const languageMenu = useMemo(() => {
+    if (!titleMode) {
+      return {
+        visible: streamProvider !== null && streamProvider !== "framex",
+        value: language,
+        label: language,
+        options: (["sub", "dub"] as const).map((option) => ({ value: option, label: option })),
+      };
+    }
+    const current = sourceLanguage && sourceLanguage !== "und" ? sourceLanguage : language;
+    const codes = [...new Set([current, ...streamLanguages])];
+    return {
+      visible: streamProvider !== null && codes.length > 1,
+      value: current,
+      label: watchLanguageName(current),
+      options: codes.map((code) => ({ value: code, label: watchLanguageName(code) })),
+    };
+  }, [titleMode, streamProvider, language, sourceLanguage, streamLanguages]);
   const playPickedEpisode = useCallback(
     (playerUrl: string) => {
       const next = new URL(playerUrl, window.location.origin);
@@ -1364,7 +1518,7 @@ export default function Player() {
           </button>
         )}
         {renderAutoNextNotice({
-          autoNext, clearAutoNext, changeEpisode,
+          autoNext, clearAutoNext, changeEpisode, continueNextSeason,
         })}
 
         <div class={`player-controls${controlsVisible ? "" : " is-hidden"}`}>
@@ -1423,10 +1577,13 @@ export default function Player() {
               confirmedEpisodeNumber, setEpisodeSelectorMounted, title,
               episodeSelectorRendered, identityIds, poster, currentSeason,
               pickerSeasons, language, closeSelector, playPickedEpisode,
+              show: titlePlayback?.type === "tv"
+                ? { id: titlePlayback.id, season: titlePlayback.season ?? 1 }
+                : null,
             })}
             {renderLanguageMenu({
-              streamProvider, openSelector, setOpenSelector, changingLanguage,
-              loadingStreamInfo, language, changeLanguage,
+              ...languageMenu, openSelector, setOpenSelector, changingLanguage,
+              loadingStreamInfo, changeLanguage,
             })}
             {renderAudioMenu({
               streamProvider, audioTracksReady, audioTracks, openSelector,

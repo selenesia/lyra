@@ -363,6 +363,8 @@ pub(super) async fn invalidate_source(
 ) {
     if source.provider == StreamProvider::Framex {
         framex::invalidate(key).await;
+    } else if source.provider == StreamProvider::Title {
+        titles::invalidate(key).await;
     }
     let quality_key = provider_cache_key(StreamProvider::Megaplay, key).1;
     if QUALITY_DISCOVERY
@@ -543,18 +545,19 @@ pub(super) async fn master_handler(
     warm_source(state, &source);
     let source_generation = source.generation.to_string();
     let anilist_ids = received_anilist_ids(uri);
+    let stream_path = stream_base_path(key);
     if is_master_playlist(&master) {
         let query = query_string(key, &anilist_ids, &[]);
         let rewritten = rewrite_hls_master(
             &master,
             |variant| {
                 format!(
-                    "/stream/anikoto/variant?{query}&source_generation={source_generation}&variant={variant}"
+                    "{stream_path}/variant?{query}&source_generation={source_generation}&variant={variant}"
                 )
             },
             |resource| {
                 format!(
-                    "/stream/anikoto/resource?{query}&source_generation={source_generation}&master_resource={resource}"
+                    "{stream_path}/resource?{query}&source_generation={source_generation}&master_resource={resource}"
                 )
             },
         )?;
@@ -563,7 +566,7 @@ pub(super) async fn master_handler(
         let query = query_string(key, &anilist_ids, &[]);
         let rewritten = rewrite_hls(&master, |resource| {
             format!(
-                "/stream/anikoto/resource?{query}&source_generation={source_generation}&variant=-1&resource={resource}"
+                "{stream_path}/resource?{query}&source_generation={source_generation}&variant=-1&resource={resource}"
             )
         })?;
         Ok(playlist_response(rewritten))
@@ -589,7 +592,7 @@ pub(super) async fn variant_handler(
         ],
     );
     let rewritten = rewrite_hls(&playlist, |resource| {
-        format!("/stream/anikoto/resource?{query}&resource={resource}")
+        format!("{}/resource?{query}&resource={resource}", stream_base_path(key))
     })?;
     Ok(playlist_response(rewritten))
 }

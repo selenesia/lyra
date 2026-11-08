@@ -179,6 +179,7 @@ pub(super) fn source_metadata(payload: &serde_json::Value) -> SourceMetadata {
         intro: source_marker(source_field(payload, "intro")),
         outro: source_marker(source_field(payload, "outro")),
         server: source_label(source_field(payload, "server")),
+        languages: Vec::new(),
     }
 }
 

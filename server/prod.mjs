@@ -439,6 +439,7 @@ async function routeStatic(req, pathname) {
 function isMochiPath(pathname) {
   return (
     !pathname.startsWith("/stream/anime") &&
+    pathname !== "/stream/watch" &&
     MOCHI_PROXY_PATHS.some((prefix) => pathname.startsWith(prefix))
   );
 }
@@ -508,7 +509,6 @@ async function proxyToMochi(req) {
     ]) {
       responseHeaders.delete(name);
     }
-    responseHeaders.set("x-lyra-proxy", "prod-mochi");
 
     let body = null;
     if (req.method !== "HEAD" && response.body) {
@@ -552,7 +552,7 @@ async function proxyToMochi(req) {
         status: 503,
         headers: baseHeaders(NO_STORE_CACHE_CONTROL, {
           "Content-Type": "text/plain; charset=utf-8",
-          "X-Lyra-Error-Class": aborted ? "network-timeout" : "infrastructure",
+          "X-Error-Class": aborted ? "network-timeout" : "infrastructure",
         }),
       },
     );
@@ -685,7 +685,7 @@ async function appFetch(req, server, url) {
     if (response) return adcash.enabled ? injectAdcashPage(req, response) : response;
   }
 
-  if (pathname === "/stream/anime") {
+  if (pathname === "/stream/anime" || pathname === "/stream/watch") {
     const response = await serveFile(
       req,
       path.join(distPath, "player.html"),

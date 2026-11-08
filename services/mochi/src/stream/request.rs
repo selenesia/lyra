@@ -8,15 +8,68 @@ pub(super) fn normalized_language(value: &str) -> Option<&'static str> {
     }
 }
 
+pub(super) fn normalized_title_language(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Some("en".into());
+    }
+    ((2..=3).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_lowercase()))
+        .then_some(value)
+}
+
+fn parse_title_key(
+    media_type: &str,
+    tmdb_id: &str,
+    season: Option<&str>,
+    episode: &str,
+) -> Result<(TitleKey, i32), ResolveError> {
+    let kind = match media_type {
+        "movie" => TitleKind::Movie,
+        "tv" => TitleKind::Tv,
+        _ => return Err(ResolveError::Invalid),
+    };
+    let digits = |value: &str, max_len: usize| {
+        !value.is_empty() && value.len() <= max_len && value.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    if !digits(tmdb_id, 10) {
+        return Err(ResolveError::Invalid);
+    }
+    let tmdb_id = tmdb_id.parse::<u32>().map_err(|_| ResolveError::Invalid)?;
+    if tmdb_id == 0 {
+        return Err(ResolveError::Invalid);
+    }
+    if kind == TitleKind::Movie {
+        if season.is_some_and(|season| !season.is_empty()) || !(episode.is_empty() || episode == "1") {
+            return Err(ResolveError::Invalid);
+        }
+        return Ok((TitleKey { kind, tmdb_id, season: 0 }, 1));
+    }
+    let season = season.ok_or(ResolveError::Invalid)?;
+    if !digits(season, 4) || !digits(episode, 5) {
+        return Err(ResolveError::Invalid);
+    }
+    let season = season.parse::<u16>().map_err(|_| ResolveError::Invalid)?;
+    let episode = episode.parse::<i32>().map_err(|_| ResolveError::Invalid)?;
+    if episode <= 0 {
+        return Err(ResolveError::Invalid);
+    }
+    Ok((TitleKey { kind, tmdb_id, season }, episode))
+}
+
 pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
     let mut anilist_id = 0;
     let mut mal_id = 0;
     let mut anikoto_episode_id = String::new();
     let mut episode = 0;
-    let mut language = "sub".to_string();
+    let mut episode_value = String::new();
+    let mut language = None::<String>;
     let mut session = String::new();
     let mut prefer_4k = false;
     let mut auto_4k = false;
+    let mut media_type = None::<String>;
+    let mut tmdb_id = String::new();
+    let mut season = None::<String>;
+    let mut has_anime_id = false;
     let path_parts: Vec<_> = uri
         .path()
         .split('/')
@@ -24,17 +77,33 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
         .collect();
     if path_parts.first() == Some(&"stream") && path_parts.get(1) == Some(&"s-2") {
         anikoto_episode_id = path_parts.get(2).copied().unwrap_or_default().to_string();
+        has_anime_id = true;
         if let Some(path_language) = path_parts.get(3) {
-            language = (*path_language).to_string();
+            language = Some((*path_language).to_string());
         }
     }
     for (key, value) in url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
         match key.as_ref() {
-            "anilist_id" => anilist_id = value.parse().unwrap_or(0),
-            "mal_id" => mal_id = value.parse().unwrap_or(0),
-            "anikoto_episode_id" => anikoto_episode_id = value.into_owned(),
-            "episode" => episode = value.parse().unwrap_or(0),
-            "language" => language = value.into_owned(),
+            "anilist_id" => {
+                has_anime_id = true;
+                anilist_id = value.parse().unwrap_or(0)
+            }
+            "mal_id" => {
+                has_anime_id = true;
+                mal_id = value.parse().unwrap_or(0)
+            }
+            "anikoto_episode_id" => {
+                has_anime_id = true;
+                anikoto_episode_id = value.into_owned()
+            }
+            "episode" => {
+                episode = value.parse().unwrap_or(0);
+                episode_value = value.into_owned();
+            }
+            "language" => language = Some(value.into_owned()),
+            "media_type" => media_type = Some(value.into_owned()),
+            "tmdb_id" => tmdb_id = value.into_owned(),
+            "season" => season = Some(value.into_owned()),
             "session" => session = value.into_owned(),
             "preferred_quality" => {
                 prefer_4k = value == "2160p";
@@ -43,9 +112,6 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
             _ => {}
         }
     }
-    let Some(language) = normalized_language(&language) else {
-        return Err(ResolveError::Invalid);
-    };
     if session.len() > 64
         || !session
             .bytes()
@@ -53,6 +119,31 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
     {
         return Err(ResolveError::Invalid);
     }
+    if let Some(media_type) = media_type {
+        if has_anime_id {
+            return Err(ResolveError::Invalid);
+        }
+        let (title, episode) = parse_title_key(&media_type, &tmdb_id, season.as_deref(), &episode_value)?;
+        let language = normalized_title_language(language.as_deref().unwrap_or_default())
+            .ok_or(ResolveError::Invalid)?;
+        return Ok(EpisodeKey {
+            anilist_id: 0,
+            mal_id: 0,
+            anikoto_episode_id: String::new(),
+            title: Some(title),
+            episode,
+            language,
+            session,
+            prefer_4k,
+            auto_4k,
+        });
+    }
+    if !tmdb_id.is_empty() {
+        return Err(ResolveError::Invalid);
+    }
+    let Some(language) = normalized_language(language.as_deref().unwrap_or("sub")) else {
+        return Err(ResolveError::Invalid);
+    };
     let valid_direct_id = !anikoto_episode_id.is_empty()
         && anikoto_episode_id.bytes().all(|byte| byte.is_ascii_digit());
     if !valid_direct_id && (episode <= 0 || (anilist_id <= 0 && mal_id <= 0)) {
@@ -69,6 +160,7 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
         } else {
             String::new()
         },
+        title: None,
         episode,
         language: language.to_string(),
         session,
@@ -89,13 +181,27 @@ pub(super) fn received_anilist_ids(uri: &Uri) -> Vec<String> {
         .collect()
 }
 
+pub(super) fn stream_base_path(key: &EpisodeKey) -> &'static str {
+    if key.title.is_some() {
+        "/stream/watch"
+    } else {
+        "/stream/anikoto"
+    }
+}
+
 pub(super) fn query_string(
     key: &EpisodeKey,
     anilist_ids: &[String],
     extra: &[(&str, String)],
 ) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
-    if !anilist_ids.is_empty() {
+    if let Some(title) = key.title {
+        query.append_pair("media_type", title.kind.id());
+        query.append_pair("tmdb_id", &title.tmdb_id.to_string());
+        if title.kind == TitleKind::Tv {
+            query.append_pair("season", &title.season.to_string());
+        }
+    } else if !anilist_ids.is_empty() {
         for anilist_id in anilist_ids {
             query.append_pair("anilist_id", anilist_id);
         }

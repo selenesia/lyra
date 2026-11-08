@@ -9,7 +9,7 @@ const fail = () => { throw new Error(`static deployment validation failed${negat
 const allowed = new Set([".html", ".js", ".mjs", ".css", ".json", ".wasm", ".crx", ".svg", ".png", ".jpg", ".jpeg", ".ico", ".avif", ".webp", ".gif", ".woff", ".woff2", ".ttf", ".otf"]);
 const metadata = JSON.parse(await readFile(path.join(root, "build-meta.json"), "utf8"));
 const backends = staticBackends((metadata.backends || [metadata.backend]).join(","));
-if (metadata.protocol !== 1 || !/^[a-f0-9]{12}$/.test(metadata.build) ||
+if (metadata.protocol !== 2 || !/^[a-f0-9]{12}$/.test(metadata.build) ||
     !/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(metadata.base)) fail();
 const files = [];
 async function inspect(directory) {

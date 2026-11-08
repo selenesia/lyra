@@ -2,11 +2,7 @@ import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import { trackLanguage, type AudioTrack, trackPreference } from "./tracks.ts";
 import { type StreamInfoResponse, fetchStreamInfo } from "./streamInfo.ts";
 import type { PlayerSelector } from "./playerState.ts";
-import {
-  type AnimeProvider,
-  hasMegaPlayIdentifier,
-  appendMegaPlayParams,
-} from "../../features/anime/animeIdentity.ts";
+import { saveWatchLanguage } from "../../features/watch/watchPlayback.ts";
 import { showToast } from "../../core/ui/toast.ts";
 import { RequestError } from "../../core/runtime/messages.ts";
 import { recordStreamDiagnostic } from "../../core/media/streamDiagnostics.ts";
@@ -15,15 +11,13 @@ import Hls from "hls.js";
 
 interface LanguageSwitchContext {
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
-  language: "sub" | "dub";
+  language: string;
   changingLanguage: boolean;
-  episodeNumber: number;
-  playbackIds: Partial<Record<AnimeProvider, string>>;
+  titleMode: boolean;
+  streamParams: (language: string, qualityRequest: string) => URLSearchParams | null;
   languageRequestRef: MutableRef<AbortController | null>;
   setChangingLanguage: Dispatch<StateUpdater<boolean>>;
   videoRef: MutableRef<HTMLVideoElement | null>;
-  sourceEpisodeNumber: number;
-  streamSessionRef: MutableRef<string>;
   auto4k: boolean;
   sourceContextRef: MutableRef<string>;
   sourceContextGenerationRef: MutableRef<number>;
@@ -34,27 +28,23 @@ interface LanguageSwitchContext {
   persistProgress: (currentTime: number, duration: number, completed?: boolean) => void;
   mediaStateRef: MutableRef<MediaState>;
   languageStreamInfoRef: MutableRef<{ params: string; info: StreamInfoResponse } | null>;
-  nextAudioLanguageRef: MutableRef<"sub" | "dub">;
+  nextAudioLanguageRef: MutableRef<string>;
   audioPreferenceRef: MutableRef<string>;
   audioPreferencesRef: MutableRef<{ sub: string; dub: string }>;
-  setLanguage: Dispatch<StateUpdater<"sub" | "dub">>;
+  setLanguage: Dispatch<StateUpdater<string>>;
 }
 
 export async function switchPlayerLanguage({
-  setOpenSelector, language, changingLanguage, episodeNumber, playbackIds,
-  languageRequestRef, setChangingLanguage, videoRef, sourceEpisodeNumber,
-  streamSessionRef, auto4k, sourceContextRef, sourceContextGenerationRef,
-  sourceSwitchTimeRef, pendingSeekRef, playAfterSeekRef, playIntentRef,
-  persistProgress, mediaStateRef, languageStreamInfoRef, nextAudioLanguageRef,
-  audioPreferenceRef, audioPreferencesRef, setLanguage,
-}: LanguageSwitchContext, nextLanguage: "sub" | "dub") {
+  setOpenSelector, language, changingLanguage, titleMode, streamParams,
+  languageRequestRef, setChangingLanguage, videoRef, auto4k, sourceContextRef,
+  sourceContextGenerationRef, sourceSwitchTimeRef, pendingSeekRef,
+  playAfterSeekRef, playIntentRef, persistProgress, mediaStateRef,
+  languageStreamInfoRef, nextAudioLanguageRef, audioPreferenceRef,
+  audioPreferencesRef, setLanguage,
+}: LanguageSwitchContext, nextLanguage: string) {
     setOpenSelector(null);
-    if (
-      nextLanguage === language ||
-      changingLanguage ||
-      !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
-      !hasMegaPlayIdentifier(playbackIds)
-    ) {
+    const params = streamParams(nextLanguage, auto4k ? "auto" : "");
+    if (nextLanguage === language || changingLanguage || !params) {
       return;
     }
     const controller = new AbortController();
@@ -62,13 +52,6 @@ export async function switchPlayerLanguage({
     languageRequestRef.current = controller;
     setChangingLanguage(true);
     const video = videoRef.current;
-    const params = new URLSearchParams({
-      episode: String(sourceEpisodeNumber),
-      language: nextLanguage,
-      session: streamSessionRef.current,
-    });
-    if (auto4k) params.set("preferred_quality", "auto");
-    appendMegaPlayParams(params, playbackIds);
     const requestContext = sourceContextRef.current;
     const requestGeneration = sourceContextGenerationRef.current;
     try {
@@ -82,7 +65,7 @@ export async function switchPlayerLanguage({
       }
       if (info.source?.language !== nextLanguage) {
         throw new RequestError("selected audio is unconfirmed", {
-          code: "AUDIO_LANGUAGE_UNCONFIRMED",
+          code: titleMode ? "AUDIO_LANGUAGE_UNAVAILABLE" : "AUDIO_LANGUAGE_UNCONFIRMED",
         });
       }
       sourceSwitchTimeRef.current = Math.max(
@@ -103,16 +86,20 @@ export async function switchPlayerLanguage({
       window.history.replaceState(null, "", currentUrl);
       languageStreamInfoRef.current = { params: params.toString(), info };
       nextAudioLanguageRef.current = nextLanguage;
-      audioPreferenceRef.current =
-        audioPreferencesRef.current[nextLanguage] ||
-        trackPreference({
-          id: "",
-          label: "",
-          language: nextLanguage === "sub" ? "ja" : "en",
-        });
-      try {
-        localStorage.setItem("lyra-anime-audio", audioPreferenceRef.current);
-      } catch {}
+      if (titleMode) {
+        saveWatchLanguage(nextLanguage);
+      } else if (nextLanguage === "sub" || nextLanguage === "dub") {
+        audioPreferenceRef.current =
+          audioPreferencesRef.current[nextLanguage] ||
+          trackPreference({
+            id: "",
+            label: "",
+            language: nextLanguage === "sub" ? "ja" : "en",
+          });
+        try {
+          localStorage.setItem("lyra-anime-audio", audioPreferenceRef.current);
+        } catch {}
+      }
       setLanguage(nextLanguage);
     } catch (error) {
       if (
@@ -156,15 +143,16 @@ interface AudioPickContext {
   setActiveAudioTrack: Dispatch<StateUpdater<number>>;
   audioChoiceRef: MutableRef<{ source: string; id: string }>;
   audioPreferenceRef: MutableRef<string>;
-  nextAudioLanguageRef: MutableRef<"sub" | "dub">;
+  nextAudioLanguageRef: MutableRef<string>;
   audioPreferencesRef: MutableRef<{ sub: string; dub: string }>;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
+  titleMode: boolean;
 }
 
 export function pickAudioTrack({
   audioTracks, audioTracksReady, tracksSourceRef, videoSrc, hlsRef,
   setActiveAudioTrack, audioChoiceRef, audioPreferenceRef, nextAudioLanguageRef,
-  audioPreferencesRef, setOpenSelector,
+  audioPreferencesRef, setOpenSelector, titleMode,
 }: AudioPickContext, index: number) {
     const track = audioTracks[index];
     if (!track || !audioTracksReady || tracksSourceRef.current !== videoSrc)
@@ -185,6 +173,10 @@ export function pickAudioTrack({
     audioChoiceRef.current = { source: videoSrc, id: track.id };
     const preference = trackPreference(track);
     audioPreferenceRef.current = preference;
+    if (titleMode) {
+      setOpenSelector(null);
+      return;
+    }
     const code = trackLanguage(track.language, track.label).split("-")[0];
     const version = code === "ja" ? "sub" : code === "en" ? "dub" : null;
     if (version) {

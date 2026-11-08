@@ -52,7 +52,9 @@ interface LocalExport {
 
 declare global {
   interface Window {
-    lyraExportAllData?: () => Promise<SyncSnapshot>;
+    lyraExportAllData?: (
+      callback?: (progressText: string) => void,
+    ) => Promise<SyncSnapshot>;
     lyraImportDataFromObject?: (
       data: unknown,
       callback?: (progressText: string) => void,
@@ -145,7 +147,10 @@ export class CloudSync {
   _scanInterval: number;
   _lastCycleMs: number;
   _lockNotified: boolean;
+  _loadingTimer: ReturnType<typeof setTimeout> | null = null;
+  _loadingStages: Map<string, string> | null = null;
   declare showLoadingScreen: typeof modalMethods.showLoadingScreen;
+  declare showLoadingProgress: typeof modalMethods.showLoadingProgress;
   declare hideLoadingScreen: typeof modalMethods.hideLoadingScreen;
   declare createCloudSyncModal: typeof modalMethods.createCloudSyncModal;
   declare attachCloudSyncModalListeners: typeof modalMethods.attachCloudSyncModalListeners;
@@ -225,16 +230,20 @@ export class CloudSync {
       void this.toggleCloudSyncModal();
     });
     let needsLoadingScreen = false;
-    let safetyTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
+      const earlyMeta =
+        this.baseKey() === null
+          ? undefined
+          : fetchWithTimeout("/api/sync/meta", { cache: "no-store" });
+      earlyMeta?.catch(() => {});
       await this.applyAuthResponse(
         await fetchWithTimeout("/api/auth/me", { cache: "no-store" }),
       );
 
       if (this.isAuthenticated) {
         this.keys = await loadSyncKeys(this.user.id);
-        const serverUpdatedAt = await this.remoteRevision();
+        const serverUpdatedAt = await this.remoteRevision(earlyMeta);
         if (serverUpdatedAt === null) {
           throw new Error(negativeMessage("sync metadata unavailable"));
         }
@@ -242,7 +251,6 @@ export class CloudSync {
         if (serverUpdatedAt && serverUpdatedAt !== this.syncMeta.last_synced) {
           needsLoadingScreen = true;
           this.showLoadingScreen();
-          safetyTimer = setTimeout(() => this.hideLoadingScreen(), 10000);
           await this.restoreData(true);
         } else if (this.syncMeta.dirty || !serverUpdatedAt) {
           this.syncMeta.dirty = true;
@@ -255,7 +263,6 @@ export class CloudSync {
     } catch {
       console.warn("[cloudsync] startup check failed... /ᐠ - ˕ -マ");
     } finally {
-      if (safetyTimer) clearTimeout(safetyTimer);
       if (needsLoadingScreen) this.hideLoadingScreen();
     }
 
@@ -293,11 +300,10 @@ export class CloudSync {
     }
   }
 
-  async remoteRevision(): Promise<string | null> {
+  async remoteRevision(pending?: Promise<Response>): Promise<string | null> {
     try {
-      const response = await fetchWithTimeout("/api/sync/meta", {
-        cache: "no-store",
-      });
+      const response = await (pending ??
+        fetchWithTimeout("/api/sync/meta", { cache: "no-store" }));
       if (response.status === 401) {
         await this.checkAuthStatus();
         return null;
@@ -424,13 +430,16 @@ export class CloudSync {
     }
   }
 
-  async exportLocal(): Promise<LocalExport> {
+  async exportLocal(
+    progress?: (progressText: string) => void,
+  ): Promise<LocalExport> {
     const exporter = window.lyraExportAllData;
     if (typeof exporter !== "function") {
       throw new Error(negativeMessage("export boundary unavailable"));
     }
     const started = now();
-    const snapshot = await exporter();
+    const snapshot = await exporter(progress);
+    progress?.("preparing local data...");
     const prepared = await prepareSnapshot({
       snapshot,
       keys: this.keys ?? null,
@@ -499,10 +508,21 @@ export class CloudSync {
         const { prepared } = await this.exportLocal();
         const { fingerprint } = prepared;
 
-        const unchanged =
+        let unchanged =
           !manual &&
           this.syncMeta.last_synced !== null &&
           fingerprint === this.syncMeta.fingerprint;
+        if (
+          !unchanged &&
+          !manual &&
+          this.syncMeta.last_synced &&
+          this.syncMeta.fingerprint == null
+        ) {
+          const base = await this.loadBase();
+          unchanged =
+            base?.revision === this.syncMeta.last_synced &&
+            sameIndex(prepared.index, base.index);
+        }
         this.syncMeta.dirty = true;
         this.saveMeta();
         const options = { base: this.syncMeta.last_synced ?? "" };
@@ -613,13 +633,33 @@ export class CloudSync {
 
     try {
       await withSyncLock(async () => {
-        const local = replace ? null : await this.exportLocal();
-        const response = await downloadSnapshot({
-          keys: this.keys ?? null,
-          local: local?.prepared.sealed
-            ? { body: local.prepared.body, chunks: local.prepared.sealed.chunks }
-            : null,
-        });
+        const exporting = replace
+          ? null
+          : this.exportLocal((text) =>
+              this.showLoadingProgress("local", text),
+            ).finally(() => this.showLoadingProgress("local", null));
+        const [downloaded, exported] = await Promise.allSettled([
+          downloadSnapshot({
+            keys: this.keys ?? null,
+            local:
+              exporting?.then(({ prepared }) =>
+                prepared.sealed
+                  ? { body: prepared.body, chunks: prepared.sealed.chunks }
+                  : null,
+              ) ?? null,
+            progress: (done, total) =>
+              this.showLoadingProgress(
+                "download",
+                `downloading synced data... (${done}/${total})`,
+              ),
+          }),
+          exporting,
+        ]);
+        this.showLoadingProgress("download", null);
+        if (downloaded.status === "rejected") throw downloaded.reason;
+        if (exported.status === "rejected") throw exported.reason;
+        const response = downloaded.value;
+        const local = exported.value;
 
         if (response.status === 423) {
           if ((await responseCode(response)) === "sync_key_mismatch") {
@@ -653,6 +693,9 @@ export class CloudSync {
           const revision: string = syncPayload.updated_at;
           let target: unknown = remote;
           let localWins = 0;
+          const progress = (progressText: string) =>
+            this.showLoadingProgress("apply", progressText);
+          progress("merging changes...");
           if (local && isCurrentSnapshot(remote)) {
             const base = await this.loadBase();
             const usableBase =
@@ -670,11 +713,6 @@ export class CloudSync {
               localWins = merged.localWins;
             }
           }
-          const progress = (progressText: string) => {
-            const loadingH1 =
-              document.querySelector<HTMLElement>("#loading-screen h1");
-            if (loadingH1) loadingH1.textContent = progressText;
-          };
           const changes = local
             ? await applySyncDelta(local.snapshot, target, progress)
             : await importer(target, progress);
@@ -684,7 +722,9 @@ export class CloudSync {
             await this.saveBase(revision, snapshotIndex(remote));
           }
           let pending = localWins > 0;
-          if (changes > 0 || !local) {
+          if (changes > 0 && isCurrentSnapshot(remote)) {
+            this.syncMeta.fingerprint = null;
+          } else if (changes > 0 || !local) {
             const after = await this.exportLocal();
             this.syncMeta.fingerprint = after.prepared.fingerprint;
             pending ||=
@@ -699,6 +739,7 @@ export class CloudSync {
           this.saveMeta();
 
           if (changes > 0) {
+            progress("reloading...");
             document.dispatchEvent(new CustomEvent("cloudsync-restored"));
             reloading = true;
             window.bypassPreventClosing = true;

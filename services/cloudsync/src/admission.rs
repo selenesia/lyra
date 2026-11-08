@@ -11,7 +11,7 @@ use tokio::sync::Semaphore;
 
 const QUEUE_LIMIT: usize = 32;
 const WAIT_LIMIT: Duration = Duration::from_secs(2);
-pub const ACCOUNT_CHUNK_LIMIT: u8 = 4;
+pub const ACCOUNT_CHUNK_LIMIT: u8 = 8;
 
 #[derive(Default)]
 struct AccountSlots {
@@ -54,7 +54,7 @@ pub struct Admission {
 impl Admission {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            chunks: AdaptiveGate::new(1, 8, 16),
+            chunks: AdaptiveGate::new(2, 16, 32),
             writers: AdaptiveGate::new(1, 2, 4),
             queue: Arc::new(Semaphore::new(QUEUE_LIMIT)),
             users: DashMap::new(),

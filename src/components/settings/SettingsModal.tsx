@@ -17,9 +17,11 @@ import {
   IconCrossMedium,
   IconChevronBottom,
   IconHammer2,
+  IconVideoClip,
 } from "../icons";
 import type { IconProps } from "../icons/IconBase";
 import { useManagedModal } from "../../core/ui/modal.ts";
+import { useSlidingPill } from "../../hooks/useSlidingPill.ts";
 import { toast } from "../../core/ui/toast.ts";
 import { switchTheme } from "../../core/ui/theme.ts";
 import { SEARCH_ENGINE_OPTIONS } from "../../core/config/config.ts";
@@ -58,6 +60,12 @@ import {
   type AnimeQuality,
 } from "../../core/media/animeSettings.ts";
 import {
+  WATCH_LANGUAGE_KEY,
+  WATCH_LANGUAGE_OPTIONS,
+  readWatchLanguage,
+  watchLanguageName,
+} from "../../features/watch/watchPlayback.ts";
+import {
   DEFAULT_SETTINGS,
   GAME_SOURCE_OPTIONS,
   LINK_CLOAKING_OPTIONS,
@@ -73,6 +81,7 @@ const iconMap: Record<string, (props: IconProps) => any> = {
   IconColorPalette,
   IconPaintBrush,
   IconSushi,
+  IconVideoClip,
   IconGhost,
   IconHammer2,
   IconPuzzle,
@@ -86,7 +95,7 @@ const SETTINGS_TABS: readonly {
 }[] = [
   { id: "preferences", icon: "IconSettingsSliderHor", label: "preferences" },
   { id: "appearance", icon: "IconPaintBrush", label: "appearance" },
-  { id: "anime", icon: "IconSushi", label: "anime" },
+  { id: "watch", icon: "IconVideoClip", label: "watch" },
   { id: "cloaking", icon: "IconGhost", label: "tab identity" },
   { id: "extensions", icon: "IconPuzzle", label: "extensions" },
   { id: "advanced", icon: "IconHammer2", label: "advanced" },
@@ -192,6 +201,7 @@ export default function SettingsModal({
   const [isOpen, setIsOpen] = useState(openOnMount);
   const [isClosing, setIsClosing] = useState(false);
   const [activeTab, setActiveTab] = useState("preferences");
+  const setTabsTrack = useSlidingPill(".tab-button.active", activeTab);
   const [openSelector, setOpenSelector] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -229,6 +239,9 @@ export default function SettingsModal({
   const [preloadProxy, setPreloadProxy] = useState(() =>
     readAdvancedToggle("preloadProxy"),
   );
+  const [fallingLeaves, setFallingLeaves] = useState(() =>
+    readAdvancedToggle("fallingLeaves"),
+  );
   const [motionPreference, setMotionPreference] = useState<MotionPreference>(
     () => readMotionPreference(),
   );
@@ -241,6 +254,7 @@ export default function SettingsModal({
   const [animeLanguage, setAnimeLanguage] = useState<AnimeLanguage>(() =>
     readAnimeLanguage(),
   );
+  const [watchLanguage, setWatchLanguage] = useState(readWatchLanguage);
   const [animeQuality, setAnimeQuality] = useState<AnimeQuality>(() =>
     readAnimeQuality(),
   );
@@ -378,6 +392,7 @@ export default function SettingsModal({
       );
     } else if (
       key === ANIME_LANGUAGE_KEY ||
+      key === WATCH_LANGUAGE_KEY ||
       key === ANIME_QUALITY_KEY ||
       key === ANIME_SUBTITLE_KEY
     ) {
@@ -421,6 +436,8 @@ export default function SettingsModal({
       localStorage.removeItem(HISTORY_STORAGE_KEY);
     } else if (key === ADVANCED_SETTING_KEYS.preloadProxy && value) {
       warmProxyRuntime();
+    } else if (key === ADVANCED_SETTING_KEYS.fallingLeaves) {
+      document.dispatchEvent(new CustomEvent("fallingLeavesUpdated"));
     }
   };
 
@@ -437,7 +454,8 @@ export default function SettingsModal({
     >
       <h2>settings</h2>
       <div class="settings-container">
-        <div class="settings-tabs">
+        <div class="settings-tabs" ref={setTabsTrack}>
+          <span class="settings-tab-pill" aria-hidden="true" />
           {SETTINGS_TABS.map((t) => (
             <button
               key={t.id}
@@ -510,11 +528,27 @@ export default function SettingsModal({
             </div>
           )}
 
-          {activeTab === "anime" && (
+          {activeTab === "watch" && (
             <div class="tab-content active">
               <div class="settings-item">
-                <label>preferred audio</label>
-                <p>choose the default audio for when playback starts, if available.</p>
+                <label>movie and show audio</label>
+                <p>default audio language for movies and shows.</p>
+                <Selector
+                  label="watch-language"
+                  value={watchLanguage}
+                  options={WATCH_LANGUAGE_OPTIONS}
+                  formatOption={watchLanguageName}
+                  isOpen={openSelector}
+                  onOpen={setOpenSelector}
+                  onClose={closeSelector}
+                  onChange={(value) =>
+                    handleSetting(WATCH_LANGUAGE_KEY, value, setWatchLanguage)
+                  }
+                />
+              </div>
+              <div class="settings-item">
+                <label>anime audio</label>
+                <p>default audio for anime.</p>
                 <Selector
                   label="anime-language"
                   value={animeLanguage}
@@ -531,7 +565,7 @@ export default function SettingsModal({
               </div>
               <div class="settings-item">
                 <label>preferred quality</label>
-                <p>choose the default quality for when playback starts; auto adjusts based on your network connection.</p>
+                <p>default quality; auto adapts to your connection.</p>
                 <Selector
                   label="anime-quality"
                   value={animeQuality}
@@ -549,7 +583,7 @@ export default function SettingsModal({
               </div>
               <div class="settings-item">
                 <label>preferred subtitles</label>
-                <p>choose the default subtitles when playback starts; auto follows the audio version.</p>
+                <p>default subtitles; auto follows the audio.</p>
                 <Selector
                   label="anime-subtitles"
                   value={animeSubtitles}
@@ -628,6 +662,21 @@ export default function SettingsModal({
                   onChange={(value) =>
                     handleSetting(ADVANCED_SETTING_KEYS.motion, value, (next) =>
                       setMotionPreference(next as MotionPreference),
+                    )
+                  }
+                />
+              </div>
+              <div class="settings-item">
+                <label>falling leaves</label>
+                <p>autumn leaves falling across your screen.</p>
+                <Toggle
+                  id="falling-leaves-toggle"
+                  checked={fallingLeaves}
+                  onChange={(v) =>
+                    handleToggle(
+                      ADVANCED_SETTING_KEYS.fallingLeaves,
+                      v,
+                      setFallingLeaves,
                     )
                   }
                 />

@@ -20,7 +20,7 @@ body.chat-view .footer {
 body.chat-view .main-container,
 body.chat-view #bookmarks-container,
 body.chat-view .games-page,
-body.chat-view .anime-page {
+body.chat-view .watch-page {
   display: none !important;
 }
 

@@ -68,12 +68,12 @@ const SOURCE_ORIGINS = {
   edurocks: "https://d20q8iy6t6707a.cloudfront.net",
   "gn-math": "https://gn-math.dev",
   "wasm.rip": "https://wasm.rip",
-  velara: "https://velara.cc",
   truffled: "https://truffled.lol",
 } as const satisfies Record<GameSourceKey, string>;
 
 const GN_MATH_COVER_ORIGIN =
   "https://cdn.jsdelivr.net/gh/freebuisness/covers@main";
+const GN_MATH_HTML_ORIGIN = "https://cdn.jsdelivr.net/gh/freebuisness/html@main";
 const EDUROCKS_CATALOG_URL = `${SOURCE_ORIGINS.edurocks}/index.html`;
 const EDUROCKS_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 const EDUROCKS_PLAIN_ALPHABET =
@@ -91,7 +91,8 @@ const EDUROCKS_ENTRY_PATTERN = new RegExp(
 const EDUROCKS_MAIN_SCRIPT_PATTERN =
   /<script\b(?=[^>]*\btype=["']module["'])[^>]*\bsrc=["']([^"']+)["'][^>]*>/i;
 const EDUROCKS_HOME_MODULE_PATTERN =
-  /path:[A-Za-z_$][\w$]*\(["']home["']\)[\s\S]{0,500}?import\(["'](\.\/[^"']+\.js)["']\)/;
+  /path\s*:\s*[A-Za-z_$][\w$]*\(\s*["']home["']\s*\)[\s\S]{0,500}?import\(\s*["'](\.\/[^"']+\.js)["']\s*\)/;
+const EDUROCKS_CODE_ARRAY_PATTERN = /\[\s*((?:\d+\s*,\s*){61}\d+)\s*,?\s*\]/g;
 const EDUROCKS_MODULE_REFERENCE_PATTERN =
   /(?:from\s*|import\(\s*)["'](\.\/[^"']+\.js)["']/g;
 
@@ -127,23 +128,17 @@ function isEdurocksAlphabet(value: string): boolean {
 }
 
 function findEdurocksEncodedAlphabet(value: string): string | null {
-  const plainCodes = [...EDUROCKS_PLAIN_ALPHABET]
-    .map((character) => character.charCodeAt(0))
-    .join(",");
-  const marker = `[${plainCodes}]`;
-  const markerIndex = value.indexOf(marker);
-  if (markerIndex < 0) return null;
-
-  const remainder = value.slice(
-    markerIndex + marker.length,
-    markerIndex + marker.length + 500,
-  );
-  const encodedCodes = remainder.match(/\[((?:\d+,){61}\d+)\]/)?.[1];
-  if (!encodedCodes) return null;
-  const alphabet = String.fromCharCode(
-    ...encodedCodes.split(",").map((code) => Number(code)),
-  );
-  return isEdurocksAlphabet(alphabet) ? alphabet : null;
+  let hasPlainAlphabet = false;
+  let encodedAlphabet: string | null = null;
+  for (const match of value.matchAll(EDUROCKS_CODE_ARRAY_PATTERN)) {
+    const alphabet = String.fromCharCode(
+      ...match[1]!.split(",").map((code) => Number(code)),
+    );
+    if (!isEdurocksAlphabet(alphabet)) continue;
+    if (alphabet === EDUROCKS_PLAIN_ALPHABET) hasPlainAlphabet = true;
+    else encodedAlphabet ??= alphabet;
+  }
+  return hasPlainAlphabet ? encodedAlphabet : null;
 }
 
 function edurocksDecodeMap(encodedAlphabet: string): Map<string, string> {
@@ -465,30 +460,6 @@ function parseEdurocks(payload: unknown): GameEntry[] {
   return games;
 }
 
-function parseVelara(payload: unknown): GameEntry[] {
-  const rows = arrayPayload(payload, "velara");
-  return rows.flatMap((game) => {
-    const name = text(game.title);
-    if (!name || name === "!!DMCA" || name === "!!Game Request") return [];
-
-    const location = absoluteHttpUrl(game.location, SOURCE_ORIGINS.velara);
-    const takedown = absoluteHttpUrl(game.grdmca, SOURCE_ORIGINS.velara);
-    const gameUrl = location ?? takedown;
-    if (!gameUrl) return [];
-
-    const mapped = mappedGame("velara", {
-      id: identifier(game.id, gameUrl),
-      name,
-      gameUrl,
-      coverUrl: proxiedCoverUrl(game.image, SOURCE_ORIGINS.velara),
-      isExternal: !location,
-      author: text(game.author),
-      featured: booleanValue(game.featured),
-    });
-    return mapped ? [mapped] : [];
-  });
-}
-
 function parseWasmRip(payload: unknown): GameEntry[] {
   const rows = arrayPayload(payload, "wasm.rip");
   return rows.flatMap((game) => {
@@ -519,14 +490,15 @@ function parseGnMath(payload: unknown): GameEntry[] {
     const isExternal = Boolean(
       upstreamUrl && !upstreamUrl.includes("{HTML_URL}"),
     );
-    const gameUrl = isExternal
-      ? absoluteHttpUrl(upstreamUrl, SOURCE_ORIGINS["gn-math"])
-      : `${SOURCE_ORIGINS["gn-math"]}/?id=${encodeURIComponent(id)}`;
+    const gameUrl = absoluteHttpUrl(
+      upstreamUrl.replace("{HTML_URL}", GN_MATH_HTML_ORIGIN),
+      SOURCE_ORIGINS["gn-math"],
+    );
     if (!gameUrl) return [];
 
     const cover = text(zone.cover)
       .replace("{COVER_URL}", GN_MATH_COVER_ORIGIN)
-      .replace("{HTML_URL}", SOURCE_ORIGINS["gn-math"]);
+      .replace("{HTML_URL}", GN_MATH_HTML_ORIGIN);
     const mapped = mappedGame("gn-math", {
       id,
       name,
@@ -588,11 +560,6 @@ export const GAME_SOURCE_ADAPTERS: Record<GameSourceKey, GameSourceAdapter> = {
     key: "wasm.rip",
     catalogUrl: getProxyUrl(`${SOURCE_ORIGINS["wasm.rip"]}/games.json`),
     parse: parseWasmRip,
-  },
-  velara: {
-    key: "velara",
-    catalogUrl: getProxyUrl(`${SOURCE_ORIGINS.velara}/data/games.json`),
-    parse: parseVelara,
   },
   truffled: {
     key: "truffled",

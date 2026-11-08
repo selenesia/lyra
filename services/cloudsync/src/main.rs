@@ -155,10 +155,16 @@ async fn main() {
         tuning.sync_work_permits,
         tuning.sync_work_max,
     );
+    let sync_admission = admission::Admission::new();
     spawn_rebalancer(
         vec![
             CapacityTarget::new(auth_work.clone(), 24 * 1024 * 1024, Workload::Cpu),
             CapacityTarget::new(sync_work.clone(), 80 * 8 * 1024 * 1024, Workload::Mixed),
+            CapacityTarget::new(
+                sync_admission.chunks.clone(),
+                4 * sync::transfer::CHUNK_SIZE as u64,
+                Workload::Mixed,
+            ),
         ],
         std::time::Duration::from_secs(2),
     );
@@ -169,7 +175,7 @@ async fn main() {
         aes_cipher,
         auth_work,
         sync_work,
-        sync_admission: admission::Admission::new(),
+        sync_admission,
         opaque_setup: Arc::new(opaque::server_setup_from_env()),
     });
 

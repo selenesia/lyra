@@ -82,6 +82,7 @@ export interface ExtensionMeta {
   installedAt: number;
   filename: string;
   fileList: string[];
+  readsBackgroundWindow?: boolean;
 }
 
 interface DNRRuleCondition {

@@ -14,7 +14,6 @@ export const GAME_SOURCE_OPTIONS = [
   "selenite",
   "edurocks",
   "wasm.rip",
-  "velara",
 ] as const;
 export const SITE_CLOAKING_OPTIONS = [
   "coursera",

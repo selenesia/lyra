@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-export const STATIC_PROTOCOL = 1;
+export const STATIC_PROTOCOL = 2;
 export const STATIC_PREFIX = "/api/static/v1/";
 const ACCESS_MS = 10 * 60_000;
 const SESSION_MS = 8 * 60 * 60_000;

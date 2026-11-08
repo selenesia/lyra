@@ -1,6 +1,8 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 import { ADCASH_LIBRARY_PATH, adcashEmbedderPolicy } from "../src/core/runtime/adcash.ts";
@@ -23,18 +25,26 @@ const JS_HEADERS = {
   Vary: "Accept-Encoding",
 };
 
-const BOOTSTRAP = [
-  "<script>",
-  "(function () {",
-  "  if (window.top !== window.self || window.__lyraAdcashLoading) return;",
-  "  window.__lyraAdcashLoading = true;",
-  "  var library = document.createElement('script');",
-  "  library.async = true;",
-  "  library.src = '" + ADCASH_LIBRARY_PATH + "';",
-  "  document.head.appendChild(library);",
-  "})();",
-  "</script>",
-].join("\n");
+const BUILD_MODULE = fileURLToPath(new URL("../build.js", import.meta.url));
+
+function bootstrapSource(loadingFlag) {
+  const flag = JSON.stringify(loadingFlag);
+  return `(function(){if(window.top!==window.self||window[${flag}])return;window[${flag}]=true;var library=document.createElement("script");library.async=true;library.src=${JSON.stringify(ADCASH_LIBRARY_PATH)};document.head.appendChild(library);})();`;
+}
+
+function createBootstrap(logger) {
+  const source = bootstrapSource(`x${randomBytes(10).toString("hex")}`);
+  const prefix = `x${randomBytes(5).toString("hex")}`;
+  const result = Bun.spawnSync([
+    process.execPath,
+    "-e",
+    `const { obfuscateSource, RUNTIME_OBFUSCATION_OPTIONS } = await import(${JSON.stringify(BUILD_MODULE)});` +
+      `process.stdout.write(obfuscateSource(${JSON.stringify(source)}, RUNTIME_OBFUSCATION_OPTIONS, ${JSON.stringify(prefix)}));`,
+  ], { stdout: "pipe", stderr: "ignore" });
+  const obfuscated = result.success ? result.stdout.toString() : "";
+  if (!obfuscated) logger.warn(negativeMessage("[adcash] loader obfuscation failed; serving the plain loader"));
+  return `<script>${(obfuscated || source).replace(/<\/(script)/gi, "<\\/$1")}</script>`;
+}
 
 async function encodeLibrary(source, zone) {
   const raw = Buffer.concat([source, zone]);
@@ -100,6 +110,7 @@ export function createAdcash({
   }
 
   const zoneCall = Buffer.from("\n;(function () {\nif (!window.aclib) return;\n" + zone + "\n})();\n");
+  const bootstrap = createBootstrap(logger);
   let cached = null;
   let freshUntil = 0;
   let retryAt = 0;
@@ -182,7 +193,7 @@ export function createAdcash({
   return {
     enabled: true,
     injectHtml(html) {
-      return html.replace(/<\/head\s*>/i, () => BOOTSTRAP + "\n</head>");
+      return html.replace(/<\/head\s*>/i, () => bootstrap + "\n</head>");
     },
     async handle(req, pathname) {
       if (pathname !== ADCASH_LIBRARY_PATH) return null;

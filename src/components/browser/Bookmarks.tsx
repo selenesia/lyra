@@ -15,7 +15,6 @@ import {
   IconVideoClip,
   IconAudio,
   IconGamecontroller,
-  IconSushi,
   IconChat,
 } from "../icons";
 import type { IconProps } from "../icons/IconBase";
@@ -31,6 +30,14 @@ function getBookmarks(): Bookmark[] {
       return defaults;
     }
     const bookmarks: Bookmark[] = JSON.parse(raw);
+    const legacyWatchIndex = bookmarks.findIndex(
+      (bookmark) =>
+        bookmark.name.toLowerCase() === "anime" && /^lyra:\/\/anime\/?$/i.test(bookmark.url),
+    );
+    if (legacyWatchIndex !== -1) {
+      bookmarks[legacyWatchIndex] = { name: "watch", url: "lyra://watch" };
+      saveBookmarks(bookmarks);
+    }
     const soundcloudIndex = bookmarks.findIndex(
       (bookmark) =>
         bookmark.name.toLowerCase() === "soundcloud" &&
@@ -38,11 +45,11 @@ function getBookmarks(): Bookmark[] {
     );
     if (soundcloudIndex !== -1) {
       if (
-        bookmarks.some((bookmark) => isInternalBookmark(bookmark.url, "anime"))
+        bookmarks.some((bookmark) => isInternalBookmark(bookmark.url, "watch"))
       ) {
         bookmarks.splice(soundcloudIndex, 1);
       } else {
-        bookmarks[soundcloudIndex] = { name: "anime", url: "lyra://anime" };
+        bookmarks[soundcloudIndex] = { name: "watch", url: "lyra://watch" };
       }
       if (
         bookmarks.length < 5 &&
@@ -57,10 +64,10 @@ function getBookmarks(): Bookmark[] {
         bookmarks.length < 5 &&
         !bookmarks.some((bookmark) => isInternalBookmark(bookmark.url, "chat"))
       ) {
-        const animeIndex = bookmarks.findIndex((bookmark) =>
-          isInternalBookmark(bookmark.url, "anime"),
+        const watchIndex = bookmarks.findIndex((bookmark) =>
+          isInternalBookmark(bookmark.url, "watch"),
         );
-        bookmarks.splice(animeIndex === -1 ? bookmarks.length : animeIndex + 1, 0, {
+        bookmarks.splice(watchIndex === -1 ? bookmarks.length : watchIndex + 1, 0, {
           name: "chat",
           url: "lyra://chat",
         });
@@ -74,9 +81,10 @@ function getBookmarks(): Bookmark[] {
   }
 }
 
-function isInternalBookmark(url: string, page?: "anime" | "games" | "chat"): boolean {
-  const match = url.match(/^lyra:\/\/(anime|games|chat)\/?$/i);
-  return !!match && (!page || match[1]!.toLowerCase() === page);
+function isInternalBookmark(url: string, page?: "watch" | "games" | "chat"): boolean {
+  const match = url.match(/^lyra:\/\/(anime|watch|games|chat)\/?$/i);
+  const target = match?.[1]?.toLowerCase() === "anime" ? "watch" : match?.[1]?.toLowerCase();
+  return !!match && (!page || target === page);
 }
 
 function saveBookmarks(bookmarks: Bookmark[]) {
@@ -139,10 +147,10 @@ const BookmarkIcon = memo(function BookmarkIcon({
     }
   }
 
-  if (isInternalBookmark(bookmark.url, "anime")) {
+  if (isInternalBookmark(bookmark.url, "watch")) {
     return (
       <div class="bookmark-icon">
-        <IconSushi size={22} solid />
+        <IconVideoClip size={22} solid />
       </div>
     );
   }
@@ -301,8 +309,8 @@ export default function Bookmarks() {
                 class="bookmark-link"
                 onClick={(e) => {
                   e.preventDefault();
-                  if (isInternalBookmark(bookmark.url, "anime")) {
-                    window.showAnimeMenu?.();
+                  if (isInternalBookmark(bookmark.url, "watch")) {
+                    window.showWatchMenu?.();
                   } else if (isInternalBookmark(bookmark.url, "games")) {
                     window.showGameMenu?.();
                   } else if (isInternalBookmark(bookmark.url, "chat")) {

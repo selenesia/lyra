@@ -9,7 +9,7 @@ use hyper::{header::SEC_WEBSOCKET_PROTOCOL, HeaderMap};
 use moka::sync::Cache;
 use sha2::{Digest, Sha256};
 
-pub const TICKET_PREFIX: &str = "lyra-nuru.";
+pub const TICKET_PREFIX: &str = "auth.";
 const KEY_PERIOD_SECS: u64 = 3600;
 const MAX_TTL_SECS: u64 = 60;
 

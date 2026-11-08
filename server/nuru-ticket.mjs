@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 
-const NURU_TICKET_PREFIX = "lyra-nuru.";
+const NURU_TICKET_PREFIX = "auth.";
 const TICKET_SECONDS = 30;
 const KEY_PERIOD_SECONDS = 3600;
 

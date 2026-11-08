@@ -41,6 +41,7 @@ export interface InstallChromeApiOptions {
   senderUrl?: string | undefined;
   senderFrameId?: number | undefined;
   senderDocumentId?: string | undefined;
+  installNetwork?: boolean;
 }
 
 export interface ChromeApiBindings {
@@ -78,6 +79,7 @@ export function createChromeApi(
     senderUrl,
     senderFrameId,
     senderDocumentId,
+    installNetwork = true,
   } = options;
   const ext = registry.get(extId);
   if (!ext) {
@@ -86,9 +88,11 @@ export function createChromeApi(
     );
   }
 
-  installExtensionNetwork(realm, senderUrl, () =>
-    host.extensionResponseTimeoutMs?.(extId),
-  );
+  if (installNetwork) {
+    installExtensionNetwork(realm, senderUrl, () =>
+      host.extensionResponseTimeoutMs?.(extId),
+    );
+  }
   const events = createRealmEvents();
   const frameId = senderFrameId ?? (tabId === null ? undefined : 0);
   const documentId =
