@@ -168,6 +168,10 @@ export class Gate {
       return Promise.resolve();
     }
     this.#waits += 1;
+    if (this.#waiting.length >= this.#limit * 4) {
+      this.#rejected += 1;
+      return Promise.reject(new LoadFailure("capacity"));
+    }
     return new Promise((resolve, reject) => {
       const grant = () => {
         clearTimeout(timer);

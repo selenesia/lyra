@@ -5,8 +5,6 @@ const RETRY_MS = 60_000;
 const WORKER_PRIORITY = 10;
 export const UNAVAILABLE = { unavailable: true };
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
-
 export function createModelWorker({ kind, script, models, timeoutMs, idleMs, maxPending }) {
   const pending = new Map();
   let child;
@@ -15,8 +13,11 @@ export function createModelWorker({ kind, script, models, timeoutMs, idleMs, max
   let idleTimer;
   let failedAt = -Infinity;
   let nextId = 0;
+  let requests = 0;
+  let generation = 0;
 
   function stop() {
+    generation += 1;
     clearTimeout(idleTimer);
     idleTimer = undefined;
     const current = child;
@@ -39,7 +40,7 @@ export function createModelWorker({ kind, script, models, timeoutMs, idleMs, max
 
   function idleLater() {
     clearTimeout(idleTimer);
-    if (!child || pending.size) return;
+    if (!child || requests || pending.size) return;
     idleTimer = setTimeout(() => pending.size || stop(), idleMs);
     idleTimer.unref?.();
   }
@@ -53,8 +54,9 @@ export function createModelWorker({ kind, script, models, timeoutMs, idleMs, max
     idleLater();
   }
 
-  async function launch() {
+  async function launch(version) {
     const paths = await models();
+    if (version !== generation) return;
     let started;
     await new Promise((resolve, reject) => {
       started = Bun.spawn([process.execPath, script], {
@@ -87,26 +89,48 @@ export function createModelWorker({ kind, script, models, timeoutMs, idleMs, max
   }
 
   function warm() {
-    if (!loading && Date.now() - failedAt >= RETRY_MS) loading = launch().catch((error) => fail(error, { backoff: true }));
+    if (!loading && Date.now() - failedAt >= RETRY_MS) {
+      const version = generation;
+      loading = launch(version).catch((error) => {
+        if (version === generation) fail(error, { backoff: true });
+      });
+    }
     return loading;
   }
 
   async function request(message) {
-    if (pending.size >= maxPending) return UNAVAILABLE;
-    clearTimeout(idleTimer);
-    await Promise.race([warm(), delay(timeoutMs)]);
-    const target = ready ? child : undefined;
-    if (!target) return UNAVAILABLE;
-    const id = ++nextId;
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        resolve(UNAVAILABLE);
-        fail(new Error(negativeMessage(`${kind} check timed out`)));
-      }, timeoutMs);
-      pending.set(id, { resolve, timer });
-      target.send({ ...message, type: "check", id });
-    });
+    if (requests >= maxPending) return UNAVAILABLE;
+    requests += 1;
+    const version = generation;
+    let warmTimer;
+    try {
+      clearTimeout(idleTimer);
+      await Promise.race([warm(), new Promise((resolve) => {
+        warmTimer = setTimeout(resolve, timeoutMs);
+        warmTimer.unref?.();
+      })]);
+      clearTimeout(warmTimer);
+      const target = ready && version === generation ? child : undefined;
+      if (!target) return UNAVAILABLE;
+      const id = ++nextId;
+      return await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          resolve(UNAVAILABLE);
+          fail(new Error(negativeMessage(`${kind} check timed out`)));
+        }, timeoutMs);
+        pending.set(id, { resolve, timer });
+        try {
+          target.send({ ...message, type: "check", id });
+        } catch (error) {
+          fail(error, { backoff: true });
+        }
+      });
+    } finally {
+      clearTimeout(warmTimer);
+      requests -= 1;
+      idleLater();
+    }
   }
 
   return { request, warm, close: stop, loaded: () => ready };

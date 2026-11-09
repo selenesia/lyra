@@ -10,7 +10,7 @@ import {
   parseIdentityRequest,
 } from "./identity.ts";
 import { TitleRequestError, createTitleMetadata, parseTitleQuery } from "./titles.ts";
-import { type FetchLike, integer, record } from "./upstream.ts";
+import { type FetchLike, integer, readLimited, record } from "./upstream.ts";
 
 const ANILIST_HEDGE_DELAY_MS = 1_500;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -48,10 +48,7 @@ function positiveId(value: string | undefined | null): number | null {
 }
 
 async function readJsonBody(request: Request): Promise<unknown> {
-  const length = Number(request.headers.get("content-length") || 0);
-  if (length > MAX_BODY_BYTES) throw new LoadFailure("too_large");
-  const body = await request.text();
-  if (body.length > MAX_BODY_BYTES) throw new LoadFailure("too_large");
+  const body = await readLimited(request, MAX_BODY_BYTES);
   try {
     return JSON.parse(body);
   } catch {
@@ -69,9 +66,9 @@ export interface IsaoOptions {
 export function createIsao({ fetch: fetchImpl = fetch, sources, upstreamLimit, memoryMb = 512 }: IsaoOptions = {}) {
   const anime = sources ?? createAnimeSources(fetchImpl);
   const resolver = createIdentityResolver(fetchImpl, anime);
-  const titles = createTitleMetadata(fetchImpl);
   const metadataEntries = Math.min(100_000, Math.max(2_000, memoryMb * 2));
   const gate = new Gate(upstreamLimit ?? Math.min(256, Math.max(4, navigator.hardwareConcurrency * 2)));
+  const titles = createTitleMetadata(fetchImpl, gate);
   const episodeLists = new TtlCache<number, EpisodeList>({
     ttlMs: 10 * 60_000,
     maxWeight: Math.min(64, Math.max(8, memoryMb / 256)) * 1024 * 1024,
@@ -256,7 +253,7 @@ export function createIsao({ fetch: fetchImpl = fetch, sources, upstreamLimit, m
       return json({ error: negativeMessage("invalid watch metadata request"), code: "WATCH_REQUEST_INVALID" }, 422);
     }
     try {
-      const value = await gate.run(10_000, () => titles.load(query));
+      const value = await titles.load(query);
       return json(value, 200, { "cache-control": METADATA_CACHE_CONTROL });
     } catch (error) {
       if (error instanceof LoadFailure && (error.reason === "not_found" || error.reason === "mismatch")) {

@@ -28,6 +28,7 @@ export function createCloudsyncIdentity({
   now = Date.now,
 } = {}) {
   const cache = new Map();
+  const pending = new Map();
 
   return async function identify(request, ip) {
     const token = sessionToken(request.headers.get("cookie"));
@@ -36,34 +37,41 @@ export function createCloudsyncIdentity({
     const cached = cache.get(key);
     if (cached && cached.expires > now()) return cached.user;
 
-    let response;
-    try {
-      response = await fetchImpl(`${origin}/api/auth/me`, {
-        headers: {
-          cookie: `${SESSION_COOKIE}=${token}`,
-          ...(ip && { "x-forwarded-for": ip }),
-        },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error) {
-      console.warn("chat could not reach cloudsync:", error?.name, NEGATIVE);
-      throw new ChatAuthUnavailable();
-    }
-    let user = null;
-    if (response.ok) {
-      const body = await response.json().catch(() => null);
-      const id = Number(body?.user?.id);
-      const username = body?.user?.username;
-      const createdAt = Number(body?.user?.created_at);
-      if (Number.isSafeInteger(id) && id > 0 && typeof username === "string" && username) {
-        user = { id, username, ...(Number.isSafeInteger(createdAt) && createdAt > 0 && { createdAt }) };
+    const existing = pending.get(key);
+    if (existing) return existing;
+    const lookup = (async () => {
+      let response;
+      try {
+        response = await fetchImpl(`${origin}/api/auth/me`, {
+          headers: {
+            cookie: `${SESSION_COOKIE}=${token}`,
+            ...(ip && { "x-forwarded-for": ip }),
+          },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        console.warn("chat could not reach cloudsync:", error?.name, NEGATIVE);
+        throw new ChatAuthUnavailable();
       }
-    } else if (response.status !== 401 && response.status !== 403) {
-      console.warn("chat session check failed with status", response.status, NEGATIVE);
-      throw new ChatAuthUnavailable();
-    }
-    if (cache.size >= CACHE_LIMIT) cache.clear();
-    cache.set(key, { user, expires: now() + (user ? ttlMs : missTtlMs) });
-    return user;
+      let user = null;
+      if (response.ok) {
+        const body = await response.json().catch(() => null);
+        const id = Number(body?.user?.id);
+        const username = body?.user?.username;
+        const createdAt = Number(body?.user?.created_at);
+        if (Number.isSafeInteger(id) && id > 0 && typeof username === "string" && username) {
+          user = { id, username, ...(Number.isSafeInteger(createdAt) && createdAt > 0 && { createdAt }) };
+        }
+      } else if (response.status !== 401 && response.status !== 403) {
+        console.warn("chat session check failed with status", response.status, NEGATIVE);
+        throw new ChatAuthUnavailable();
+      }
+      cache.delete(key);
+      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
+      cache.set(key, { user, expires: now() + (user ? ttlMs : missTtlMs) });
+      return user;
+    })().finally(() => pending.delete(key));
+    pending.set(key, lookup);
+    return lookup;
   };
 }

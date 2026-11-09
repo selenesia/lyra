@@ -1,4 +1,4 @@
-import { LoadFailure, TtlCache, jsonWeight } from "./cache.ts";
+import { Gate, LoadFailure, TtlCache, jsonWeight } from "./cache.ts";
 import { BROWSER_USER_AGENT, type FetchLike, finite, integer, list, record, requestJson, text } from "./upstream.ts";
 
 export const FRAMEX_APIS = ["https://api.framextv.tech", "https://api.framextv.xyz"] as const;
@@ -437,7 +437,7 @@ export function parseTitleQuery(pathname: string, params: URLSearchParams): Titl
   throw new TitleRequestError("WATCH_ROUTE_NOT_FOUND");
 }
 
-export function createTitleMetadata(fetchImpl: FetchLike) {
+export function createTitleMetadata(fetchImpl: FetchLike, gate: Gate) {
   const responses = new TtlCache<string, { value: unknown; expiresAt: number }>({
     ttlMs: 10 * 60_000,
     maxWeight: 24 * 1024 * 1024,
@@ -477,7 +477,7 @@ export function createTitleMetadata(fetchImpl: FetchLike) {
       if (failed) throw new LoadFailure(failed);
       try {
         const entry = await responses.load(query.cacheKey, async () => ({
-          value: query.normalize(await fetchUpstream(query.upstreamPath)),
+          value: query.normalize(await gate.run(10_000, () => fetchUpstream(query.upstreamPath))),
           expiresAt: Date.now() + query.ttlMs,
         }));
         if (entry.expiresAt <= Date.now()) {
@@ -487,7 +487,7 @@ export function createTitleMetadata(fetchImpl: FetchLike) {
         return entry.value;
       } catch (error) {
         const reason = error instanceof LoadFailure ? error.reason : "invalid_payload";
-        failures.set(query.cacheKey, reason);
+        if (reason !== "capacity") failures.set(query.cacheKey, reason);
         throw new LoadFailure(reason);
       }
     },

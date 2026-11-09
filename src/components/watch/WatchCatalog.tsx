@@ -126,19 +126,20 @@ function uniqueTitles(...lists: TitleCard[][]): TitleCard[] {
   return result;
 }
 
-async function loadTitleFeed(type: TitleType): Promise<TitleCard[]> {
-  const [home, trending, popular, rated] = await Promise.allSettled([
-    fetchTitleHome(),
-    discoverTitles(type, "trending"),
-    discoverTitles(type, "popular"),
-    discoverTitles(type, "top_rated"),
+async function loadTitleFeed(type: TitleType, onUpdate: (titles: TitleCard[]) => void): Promise<TitleCard[]> {
+  const feeds: TitleCard[][] = [[], [], [], []];
+  const update = (index: number, titles: TitleCard[]) => {
+    feeds[index] = titles;
+    const available = uniqueTitles(...feeds);
+    if (available.length > 0) onUpdate(available);
+  };
+  await Promise.allSettled([
+    fetchTitleHome().then((home) => update(1, home.filter((rail) => rail.type === type).flatMap((rail) => rail.results))),
+    discoverTitles(type, "trending").then((page) => update(0, page.results)),
+    discoverTitles(type, "popular").then((page) => update(2, page.results)),
+    discoverTitles(type, "top_rated").then((page) => update(3, page.results)),
   ]);
-  const results = (value: PromiseSettledResult<{ results: TitleCard[] }>) =>
-    value.status === "fulfilled" ? value.value.results : [];
-  const rails = home.status === "fulfilled"
-    ? home.value.filter((rail) => rail.type === type).flatMap((rail) => rail.results)
-    : [];
-  const titles = uniqueTitles(results(trending), rails, results(popular), results(rated));
+  const titles = uniqueTitles(...feeds);
   if (titles.length === 0) throw new Error("watch feed unavailable... /ᐠ - ˕ -マ");
   return titles;
 }
@@ -230,7 +231,9 @@ export default function WatchCatalog({
     if (titlesPendingRef.current) return;
     titlesPendingRef.current = true;
     setTitlesError(false);
-    void Promise.allSettled([loadTitleFeed("movie"), loadTitleFeed("tv")])
+    const load = (type: TitleType) =>
+      loadTitleFeed(type, (titles) => setTitleFeed((current) => ({ ...current, [type]: titles })));
+    void Promise.allSettled([load("movie"), load("tv")])
       .then(([movie, tv]) => {
         setTitleFeed({
           movie: movie.status === "fulfilled" ? movie.value : [],

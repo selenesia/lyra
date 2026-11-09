@@ -64,9 +64,21 @@ export interface TitleSeason {
 }
 
 const MEMORY_TTL_MS = 10 * 60 * 1000;
+const MEMORY_LIMIT = 128;
+const REQUEST_TIMEOUT_MS = 30_000;
 const SESSION_PREFIX = "lyra-watch-metadata-";
 const memory = new Map<string, { expiresAt: number; value: unknown }>();
-const pending = new Map<string, Promise<unknown>>();
+const pending = new Map<string, {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  consumers: number;
+}>();
+
+function remember(key: string, value: unknown, expiresAt: number): void {
+  memory.delete(key);
+  memory.set(key, { expiresAt, value });
+  if (memory.size > MEMORY_LIMIT) memory.delete(memory.keys().next().value!);
+}
 
 export function isTitleType(value: unknown): value is TitleType {
   return value === "movie" || value === "tv";
@@ -220,6 +232,7 @@ async function load<T>(
   normalize: (value: unknown) => T,
   signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const query = new URLSearchParams(params).toString();
   const key = `${path}?${query}`;
   const cached = memory.get(key);
@@ -227,13 +240,18 @@ async function load<T>(
   const stored = readSession(key);
   if (stored !== undefined) {
     const value = normalize(stored);
-    memory.set(key, { expiresAt: Date.now() + MEMORY_TTL_MS, value });
+    remember(key, value, Date.now() + MEMORY_TTL_MS);
     return value;
   }
-  let request = pending.get(key) as Promise<T> | undefined;
+  let request = pending.get(key);
   if (!request) {
-    request = (async () => {
-      const response = await fetch(`/api/watch/${path}?${query}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new RequestError("movie and show metadata timed out", {
+      code: "WATCH_METADATA_TIMEOUT",
+    })), REQUEST_TIMEOUT_MS);
+    const entry = { promise: Promise.resolve<unknown>(undefined), controller, consumers: 0 };
+    entry.promise = (async () => {
+      const response = await fetch(`/api/watch/${path}?${query}`, { signal: controller.signal });
       if (!response.ok) {
         throw new RequestError("movie and show metadata is unavailable", {
           code: response.status === 404 ? "WATCH_TITLE_NOT_FOUND" : "WATCH_METADATA_UNAVAILABLE",
@@ -241,20 +259,45 @@ async function load<T>(
         });
       }
       const raw = (await response.json()) as unknown;
+      controller.signal.throwIfAborted();
       const value = normalize(raw);
       const expiresAt = Date.now() + MEMORY_TTL_MS;
-      memory.set(key, { expiresAt, value });
-      writeSession(key, raw, expiresAt);
+      remember(key, value, expiresAt);
+      if (path !== "search") writeSession(key, raw, expiresAt);
       return value;
-    })().finally(() => pending.delete(key));
-    pending.set(key, request);
+    })().finally(() => {
+      clearTimeout(timeout);
+      if (pending.get(key) === entry) pending.delete(key);
+    });
+    request = entry;
+    pending.set(key, entry);
   }
-  if (!signal) return request;
-  signal.throwIfAborted();
+  const entry = request;
+  entry.consumers += 1;
   return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason);
-    signal.addEventListener("abort", abort, { once: true });
-    request.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal?.removeEventListener("abort", abort);
+      entry.consumers -= 1;
+      if (!entry.consumers && pending.get(key) === entry) {
+        pending.delete(key);
+        entry.controller.abort();
+      }
+    };
+    const abort = () => {
+      reject(signal?.reason);
+      release();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    entry.promise.then((value) => {
+      resolve(value as T);
+      release();
+    }, (error: unknown) => {
+      reject(error);
+      release();
+    });
   });
 }
 
@@ -302,6 +345,7 @@ export function nextSeasonNumber(seasons: readonly TitleSeasonSummary[], current
 }
 
 export function resetTitleCache(): void {
+  for (const request of pending.values()) request.controller.abort();
   memory.clear();
   pending.clear();
   try {

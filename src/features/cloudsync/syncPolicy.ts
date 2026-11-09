@@ -16,6 +16,7 @@ const LOCAL_STORAGE_PREFIXES = [
   "lyra-anime-feed-entries-",
   "lyra-anime-search-entries-",
   "lyra-anime-episode-count-",
+  "lyra-watch-metadata-",
 ];
 const LOCAL_STORAGE_KEYS = new Set([
   "lyraVersion",

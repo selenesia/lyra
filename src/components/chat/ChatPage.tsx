@@ -241,7 +241,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!list) return;
+    if (!visible || !ready || !list) return;
     const anchor = anchorRef.current;
     if (anchor) {
       anchorRef.current = null;
@@ -249,7 +249,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       return;
     }
     if (stickToBottomRef.current) list.scrollTop = list.scrollHeight;
-  }, [entries, visible, channel, ready, mode, draft, hint, notice]);
+  }, [entries, visible, channel, ready]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -486,72 +486,77 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         ? "connecting..."
         : `this is the start of #${channel}, say hi`;
 
-  const rows = [];
-  if (entries.length && exhausted[channel]) {
-    rows.push(
-      <p class="chat-history-edge" key="edge">
-        this is the start of #{channel}
-      </p>,
-    );
-  }
-  let previous: ChatEntry | undefined;
-  for (const entry of entries) {
-    const day = dayLabel(entry.at);
-    if (!previous || dayLabel(previous.at) !== day) {
+  const editingId = mode?.kind === "edit" ? mode.entry.id : undefined;
+  const historyExhausted = exhausted[channel];
+  const rows = useMemo(() => {
+    const rows = [];
+    if (entries.length && historyExhausted) {
       rows.push(
-        <div class="chat-divider" key={`day-${entry.id}`}>
-          <span>{day}</span>
-        </div>,
+        <p class="chat-history-edge" key="edge">
+          this is the start of #{channel}
+        </p>,
       );
-      previous = undefined;
     }
-    if (blockedAuthors.has(entry.author)) {
+    let previous: ChatEntry | undefined;
+    for (const entry of entries) {
+      const day = dayLabel(entry.at);
+      if (!previous || dayLabel(previous.at) !== day) {
+        rows.push(
+          <div class="chat-divider" key={`day-${entry.id}`}>
+            <span>{day}</span>
+          </div>,
+        );
+        previous = undefined;
+      }
+      if (blockedAuthors.has(entry.author)) {
+        rows.push(
+          <div class="chat-message chat-blocked" key={entry.id}>
+            message from someone you blocked ·{" "}
+            <span
+              class="link"
+              role="button"
+              tabIndex={0}
+              onClick={() => room.toggleBlocked(entry)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                room.toggleBlocked(entry);
+              }}
+            >
+              unblock {displayName(entry)}
+            </span>
+          </div>,
+        );
+        previous = undefined;
+        continue;
+      }
+      const mine = !!viewer && entry.author === viewer.author;
+      const grouped =
+        !!previous &&
+        previous.author === entry.author &&
+        previous.name === entry.name &&
+        entry.at - previous.at < GROUP_WINDOW_MS;
       rows.push(
-        <div class="chat-message chat-blocked" key={entry.id}>
-          message from someone you blocked ·{" "}
-          <span
-            class="link"
-            role="button"
-            tabIndex={0}
-            onClick={() => room.toggleBlocked(entry)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              room.toggleBlocked(entry);
-            }}
-          >
-            unblock {displayName(entry)}
-          </span>
-        </div>,
+        <ChatMessage
+          key={entry.nonce && entry.pending ? `local-${entry.nonce}` : entry.id}
+          entry={entry}
+          grouped={grouped}
+          mine={mine}
+          canPost={!locked}
+          canDelete={mine || (!!viewer && canDeleteAny(viewer.role) && outranks(viewer.role, entry.role))}
+          author={viewer?.author ?? ""}
+          selfName={viewer?.name ?? ""}
+          mentionMembers={mentionMembers}
+          mentioned={!mine && !!viewer && (mentionsName(entry.text, viewer.name) || entry.reply?.author === viewer.author)}
+          selected={selectedId === entry.id}
+          editing={editingId === entry.id}
+          actions={actions}
+        />,
       );
-      previous = undefined;
-      continue;
+      previous = entry;
     }
-    const mine = !!viewer && entry.author === viewer.author;
-    const grouped =
-      !!previous &&
-      previous.author === entry.author &&
-      previous.name === entry.name &&
-      entry.at - previous.at < GROUP_WINDOW_MS;
-    rows.push(
-      <ChatMessage
-        key={entry.nonce && entry.pending ? `local-${entry.nonce}` : entry.id}
-        entry={entry}
-        grouped={grouped}
-        mine={mine}
-        canPost={!locked}
-        canDelete={mine || (!!viewer && canDeleteAny(viewer.role) && outranks(viewer.role, entry.role))}
-        author={viewer?.author ?? ""}
-        selfName={viewer?.name ?? ""}
-        mentionMembers={mentionMembers}
-        mentioned={!mine && !!viewer && (mentionsName(entry.text, viewer.name) || entry.reply?.author === viewer.author)}
-        selected={selectedId === entry.id}
-        editing={mode?.kind === "edit" && mode.entry.id === entry.id}
-        actions={actions}
-      />,
-    );
-    previous = entry;
-  }
+    return rows;
+  }, [actions, blockedAuthors, channel, editingId, entries, historyExhausted, locked, mentionMembers, room.toggleBlocked, selectedId, viewer]);
 
   return (
     <section id="chat-page" class={`chat-page${visible ? " is-visible" : ""}${ready ? "" : " is-gated"}`} aria-hidden={!visible}>

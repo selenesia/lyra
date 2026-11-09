@@ -20,25 +20,32 @@ export interface JsonResult<T = unknown> {
   headers: Headers;
 }
 
-async function readLimited(response: Response): Promise<string> {
+export async function readLimited(response: Pick<Response, "headers" | "body">, limit = MAX_JSON_BYTES): Promise<string> {
   const declared = Number(response.headers.get("content-length") || 0);
-  if (declared > MAX_JSON_BYTES) throw new LoadFailure("too_large");
+  if (declared > limit) {
+    void response.body?.cancel().catch(() => {});
+    throw new LoadFailure("too_large");
+  }
   const reader = response.body?.getReader();
   if (!reader) return "";
   const decoder = new TextDecoder();
   let size = 0;
   let text = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_JSON_BYTES) {
-      await reader.cancel().catch(() => {});
-      throw new LoadFailure("too_large");
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        void reader.cancel().catch(() => {});
+        throw new LoadFailure("too_large");
+      }
+      text += decoder.decode(value, { stream: true });
     }
-    text += decoder.decode(value, { stream: true });
+    return text + decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
-  return text + decoder.decode();
 }
 
 export async function requestJson<T = unknown>(

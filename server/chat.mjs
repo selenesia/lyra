@@ -483,6 +483,7 @@ export function createChatRoom({
           user: streamUser(row),
           send(bytes) {
             if (controller.desiredSize > 0) controller.enqueue(bytes);
+            else close();
           },
           close: () => close(),
         };

@@ -28,7 +28,7 @@ export function staticRoute(pathname, method) {
     if (/^\/api\/(?:dns|presence|search\/suggestions)$/.test(pathname)) return true;
     if (/^\/api\/anime\/(?:episodes(?:\/\d+)?|relations\/\d+|alttitles\/\d+)$/.test(pathname)) return true;
     if (/^\/api\/watch\/(?:home|discover|search|details|season)$/.test(pathname)) return true;
-    if (/^\/stream\/(?:info|anikoto(?:\/(?:variant|resource|track))?|s-2\/[^/]+)$/.test(pathname)) return true;
+    if (/^\/stream\/(?:info|anikoto(?:\/(?:variant|resource|track))?|watch\/(?:playlist|variant|resource|track)|s-2\/[^/]+)$/.test(pathname)) return true;
     if (pathname === "/!!folio/capabilities" || /^\/!cover!\/.+$/.test(pathname)) return true;
   }
   if (method === "POST" && /^\/api\/(?:notice|anime\/(?:identity\/resolve|resolve-stream))$/.test(pathname)) return true;
