@@ -53,6 +53,7 @@ const forbiddenText = [
   "/b/rv/background.js",
   "/b/rivet/ublock.crx",
   "/b/rivet/ublock.state.gz",
+  "/b/rivet/ublock.firefox.state.gz",
   "games-view",
   "anime-view",
   "rivet-toolbar",
@@ -95,7 +96,7 @@ function fail(message, values = []) {
 const packageMetadata = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
-if (packageMetadata.name !== "lyra" || packageMetadata.version !== "0.1.6") {
+if (packageMetadata.name !== "lyra" || packageMetadata.version !== "0.1.7") {
   fail("application metadata does not match the lyra release");
 }
 

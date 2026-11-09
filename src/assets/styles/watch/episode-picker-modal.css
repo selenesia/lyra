@@ -34,33 +34,67 @@
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  position: relative;
+  isolation: isolate;
+}
+
+.episode-season-pill {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  width: var(--pill-w, 0);
+  height: var(--pill-h, 0);
+  border-radius: var(--radius-item);
+  background-color: var(--active-bg);
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform;
+  transform: translate(var(--pill-x, 0), var(--pill-y, 0));
+}
+
+.episode-season-tabs.is-placed .episode-season-pill {
+  opacity: 1;
+  transition: transform var(--motion-slide) var(--motion-ease-slide);
 }
 
 .episode-season-tab {
+  position: relative;
   padding: 6px 10px;
   border: none;
   border-radius: var(--radius-item);
-  background-color: var(--bg-surface-2);
+  background: none;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 400;
   cursor: pointer;
+  transition: color var(--motion-control) var(--motion-ease);
+}
+
+.episode-season-chip {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-item);
+  background-color: var(--bg-surface-2);
   transition:
-    background var(--motion-control) var(--motion-ease),
-    transform var(--motion-control) var(--motion-ease),
-    color var(--motion-control) var(--motion-ease);
+    background-color var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease);
 }
 
-.episode-season-tab:hover {
-  background-color: var(--hover-bg);
-  color: var(--text-primary);
-  transform: scale(var(--motion-hover-scale, 1.05));
+.episode-season-label {
+  position: relative;
+  z-index: 2;
+  display: block;
 }
 
+.episode-season-tab:hover,
 .episode-season-tab.is-active {
-  background-color: var(--active-bg);
   color: var(--text-primary);
-  transform: scale(1);
+}
+
+.episode-season-tab:hover .episode-season-chip {
+  background-color: var(--hover-bg);
+  transform: scale(var(--motion-hover-scale, 1.05));
 }
 
 @media (max-width: 700px) {

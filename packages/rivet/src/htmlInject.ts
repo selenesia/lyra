@@ -36,14 +36,19 @@ function defineNavigatorValue(
   } catch {}
 }
 
-function installChromiumUserAgent(win: Window): void {
-  const nativeUserAgent = win.navigator.userAgent;
-  if (/\bChrom(?:e|ium)\/\d+/.test(nativeUserAgent)) return;
+export function extensionUserAgent(nativeUserAgent: string): string {
+  if (/\bChrom(?:e|ium)\/\d+/.test(nativeUserAgent)) return nativeUserAgent;
   const platform =
     /^Mozilla\/5\.0 \(([^)]*)\)/
       .exec(nativeUserAgent)?.[1]
       ?.replace(/;\s*rv:[^;)]+/, "") ?? "X11; Linux x86_64";
-  const userAgent = `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36`;
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36`;
+}
+
+function installChromiumUserAgent(win: Window): void {
+  const nativeUserAgent = win.navigator.userAgent;
+  const userAgent = extensionUserAgent(nativeUserAgent);
+  if (userAgent === nativeUserAgent) return;
   defineNavigatorValue(win, "userAgent", userAgent);
   defineNavigatorValue(win, "appVersion", userAgent.replace(/^Mozilla\//, ""));
   defineNavigatorValue(win, "vendor", "Google Inc.");

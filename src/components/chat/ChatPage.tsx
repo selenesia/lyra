@@ -653,6 +653,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                 <div class="light"></div>
                 <EditableField
                   id="chatInput"
+                  multiline
                   fieldRef={fieldRef}
                   label={`message #${channel}`}
                   placeholder={placeholder}

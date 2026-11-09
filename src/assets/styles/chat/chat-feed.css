@@ -157,6 +157,7 @@
 }
 
 .chat-message-text {
+  white-space: pre-wrap;
   color: var(--text-secondary);
   font-size: 14px;
   font-weight: 300;

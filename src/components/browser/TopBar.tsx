@@ -135,7 +135,7 @@ export default function TopBar() {
             href="#"
             id="chat-btn"
             class="icon-btn"
-            data-tooltip={chatView ? "search" : "chat"}
+            data-tooltip={chatView ? "search" : "chats"}
             onPointerEnter={preloadChat}
             onFocus={preloadChat}
             onClick={handleChatClick}

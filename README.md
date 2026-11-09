@@ -1,7 +1,7 @@
 # lyra :3
 a really cool web-proxy
 
-[![join our discord](https://invidget.switchblade.xyz/4GeWaGPh6c)](https://discord.gg/4GeWaGPh6c)
+discord.gg/cisco
 
 <h5>
 leave a star or give credits if you like, fork, or take any ideas from this project pls pls!!
@@ -10,7 +10,8 @@ leave a star or give credits if you like, fork, or take any ideas from this proj
 ## features
 - nice ui
 - thousands of games aggregated from multiple sources
-- free high quality movie, show, and anime streaming
+- fully free high quality movies, shows, and anime streaming
+- chat rooms
 - cloud syncing
 - functional chrome extensions support
 - extremely fast

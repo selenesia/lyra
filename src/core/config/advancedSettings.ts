@@ -7,7 +7,7 @@ export const ADVANCED_SETTING_KEYS = {
 
 const DEFAULT_ADVANCED_SETTINGS = {
   saveHistory: true,
-  preloadProxy: false,
+  preloadProxy: true,
   fallingLeaves: true,
   motion: "system",
 } as const;

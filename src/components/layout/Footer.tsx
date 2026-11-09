@@ -100,9 +100,6 @@ export default function Footer() {
         {clients === 1 ? "active client" : "active clients"}
       </span>
       <div id="cute">
-        <a class="link" href="https://yayo.dev/" target="_blank">
-          yayo.dev
-        </a>
         <a class="link" href="https://discord.gg/4GeWaGPh6c/" target="_blank">
           discord
         </a>

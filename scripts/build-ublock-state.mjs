@@ -6,13 +6,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import JSZip from "jszip";
+import { extensionUserAgent } from "../packages/rivet/src/htmlInject.ts";
 
 const NEGATIVE = "... /ᐠ - ˕ -マ";
 const POSITIVE = "!! (˵◝ ⩊  ◜˵マ";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const extensionsDir = path.join(root, "packages", "rivet", "extensions");
 const crxPath = path.join(extensionsDir, "ublock.crx");
-const statePath = path.join(extensionsDir, "ublock.state.gz");
+const stateProfiles = [
+  { name: "chromium", filename: "ublock.state.gz" },
+  {
+    name: "firefox",
+    filename: "ublock.firefox.state.gz",
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+  },
+];
 const appUrl = new URL(process.env.LYRA_APP_URL || "http://localhost:4444/");
 const MOCHI_KEY = "q7Zx!9pL";
 const LIST_MIRRORS = [
@@ -143,7 +151,7 @@ async function waitFor(check, timeoutMs, message) {
   throw failure(message);
 }
 
-async function launchChrome(profileDir) {
+async function launchChrome(profileDir, userAgent) {
   const executable = CHROME_PATHS.find((candidate) => candidate && existsSync(candidate));
   if (!executable) throw failure("chrome was not found, set CHROME_PATH");
   const chrome = spawn(
@@ -158,6 +166,7 @@ async function launchChrome(profileDir) {
       "--lang=en-US",
       "--window-size=1280,800",
       "--disable-features=DocumentIsolationPolicy",
+      ...(userAgent ? [`--user-agent=${userAgent}`] : []),
       "about:blank",
     ],
     { stdio: "ignore" },
@@ -286,22 +295,15 @@ const EXPORT_STORAGE = `(async () => {
   return window.__lyraUblockState.length;
 })()`;
 
-async function buildState() {
-  const bundled = await readBundledUblock();
-  try {
-    await fetch(appUrl, { signal: AbortSignal.timeout(5_000) });
-  } catch {
-    throw failure(`lyra is not reachable at ${appUrl.href}, start it with bun run dev:web`);
-  }
-  const responses = await prefetchAssets(bundled.assets, bundled.zip);
+async function compileState(profile, bundled, responses) {
   const profileDir = await mkdtemp(path.join(tmpdir(), "lyra-ublock-state-"));
-  const { chrome, endpoint } = await launchChrome(profileDir);
+  const { chrome, endpoint } = await launchChrome(profileDir, profile.userAgent);
   let devtools;
   try {
     devtools = await connect(endpoint);
     const { send, on } = devtools;
     const { userAgent: headlessAgent } = await send("Browser.getVersion");
-    const userAgent = headlessAgent.replace("HeadlessChrome", "Chrome");
+    const userAgent = profile.userAgent ?? headlessAgent.replace("HeadlessChrome", "Chrome");
     const { targetId } = await send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     const evaluate = async (expression) => {
@@ -318,7 +320,7 @@ async function buildState() {
     const unprepared = new Set();
     on("Fetch.requestPaused", ({ requestId, request }) => {
       const url = new URL(request.url);
-      if (url.pathname.endsWith("/ublock.state.gz")) {
+      if (stateProfiles.some(({ filename }) => url.pathname.endsWith(`/${filename}`))) {
         void send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" }).catch(() => {});
         return;
       }
@@ -346,7 +348,10 @@ async function buildState() {
     await send("Fetch.enable", {
       patterns: [
         { urlPattern: "*/!!/*", requestStage: "Request" },
-        { urlPattern: "*/ublock.state.gz*", requestStage: "Request" },
+        ...stateProfiles.map(({ filename }) => ({
+          urlPattern: `*/${filename}*`,
+          requestStage: "Request",
+        })),
       ],
     });
     await send("Emulation.setUserAgentOverride", { userAgent, acceptLanguage: "en-US,en" }, sessionId);
@@ -358,7 +363,7 @@ async function buildState() {
       30_000,
       "lyra did not finish loading",
     );
-    console.log("installing ublock origin");
+    console.log(`compiling ublock origin for ${profile.name}`);
     await evaluate(`document.getElementById("searchInput").dispatchEvent(new MouseEvent("mouseenter"))`);
     await waitFor(
       () => evaluate(`Boolean(${BACKGROUND_WINDOW}?.µBlock.readyToFilter)`),
@@ -399,27 +404,44 @@ async function buildState() {
     ]) {
       if (!(key in exported.storage)) throw failure(`exported ublock origin state is missing ${key}`);
     }
-    if (!exported.flavor.includes("chromium"))
-      throw failure("ublock origin did not run as chromium");
+    const expectedFlavor = ["ublock", "webext", "ipaddress", "native_css_has", "chromium"];
+    if (exported.flavor.toSorted().join() !== expectedFlavor.toSorted().join())
+      throw failure(`ublock origin did not compile for the ${profile.name} runtime`);
 
     const state = {
       version: bundled.version,
       createdAt: Date.now(),
       flavor: exported.flavor,
       language: exported.language,
-      ...regionalSelectors(bundled.assets, userAgent),
+      ...regionalSelectors(bundled.assets, extensionUserAgent(userAgent)),
       storage: exported.storage,
     };
     const compressed = gzipSync(JSON.stringify(state), { level: 9 });
-    await writeFile(statePath, compressed);
-    console.log(
-      `ublock origin ${bundled.version} state saved with ${selected.length} lists (${(compressed.length / 1e6).toFixed(1)} mb)${POSITIVE}`,
-    );
+    return { profile, compressed, listCount: selected.length };
   } finally {
     devtools?.socket.close();
     chrome.kill();
     await new Promise((resolve) => (chrome.exitCode !== null ? resolve() : chrome.once("exit", resolve)));
     await rm(profileDir, { recursive: true, force: true });
+  }
+}
+
+async function buildState() {
+  const bundled = await readBundledUblock();
+  try {
+    await fetch(appUrl, { signal: AbortSignal.timeout(5_000) });
+  } catch {
+    throw failure(`lyra is not reachable at ${appUrl.href}, start it with bun run dev:web`);
+  }
+  const responses = await prefetchAssets(bundled.assets, bundled.zip);
+  const states = [];
+  for (const profile of stateProfiles)
+    states.push(await compileState(profile, bundled, responses));
+  for (const { profile, compressed, listCount } of states) {
+    await writeFile(path.join(extensionsDir, profile.filename), compressed);
+    console.log(
+      `ublock origin ${bundled.version} ${profile.name} state saved with ${listCount} lists (${(compressed.length / 1e6).toFixed(1)} mb)${POSITIVE}`,
+    );
   }
 }
 

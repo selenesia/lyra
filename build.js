@@ -206,6 +206,10 @@ const RUNTIME_ASSETS = [
     logicalPath: "/b/rivet/ublock.state.gz",
     source: ["packages", "rivet", "extensions", "ublock.state.gz"],
   },
+  {
+    logicalPath: "/b/rivet/ublock.firefox.state.gz",
+    source: ["packages", "rivet", "extensions", "ublock.firefox.state.gz"],
+  },
 ];
 
 const SW_MODULES = [

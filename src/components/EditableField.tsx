@@ -7,6 +7,7 @@ interface EditableFieldProps {
   placeholder: string;
   value?: string;
   disabled?: boolean;
+  multiline?: boolean;
   fieldRef?: RefObject<HTMLDivElement>;
   onChange?: (value: string) => void;
   onKeyDown?: (event: KeyboardEvent) => void;
@@ -18,6 +19,7 @@ export default function EditableField({
   placeholder,
   value,
   disabled = false,
+  multiline = false,
   fieldRef,
   onChange,
   onKeyDown,
@@ -44,7 +46,7 @@ export default function EditableField({
       contentEditable={disabled ? false : "plaintext-only"}
       role="textbox"
       aria-label={label}
-      aria-multiline="false"
+      aria-multiline={multiline ? "true" : "false"}
       aria-disabled={disabled || undefined}
       data-placeholder={placeholder}
       tabIndex={disabled ? -1 : 0}
@@ -60,12 +62,16 @@ export default function EditableField({
         if (event.key === "Enter") {
           event.preventDefault();
           if (event.repeat) return;
+          if (multiline && event.shiftKey) {
+            document.execCommand("insertText", false, "\n");
+            return;
+          }
         }
         onKeyDown?.(event);
       }}
       onBeforeInput={(event) => {
         const { inputType } = event as InputEvent;
-        if (disabled || inputType === "insertParagraph" || inputType === "insertLineBreak") {
+        if (disabled || (!multiline && (inputType === "insertParagraph" || inputType === "insertLineBreak"))) {
           event.preventDefault();
         }
       }}
@@ -73,7 +79,7 @@ export default function EditableField({
         event.preventDefault();
         if (disabled) return;
         const text = event.clipboardData?.getData("text/plain") ?? "";
-        document.execCommand("insertText", false, text.replace(/[\r\n]/g, ""));
+        document.execCommand("insertText", false, multiline ? text.replace(/\r\n?/g, "\n") : text.replace(/[\r\n]/g, ""));
       }}
     />
   );

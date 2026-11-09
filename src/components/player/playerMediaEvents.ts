@@ -273,7 +273,6 @@ export function attachMediaEvents({
     if (hlsRef.current) return;
     if (
       (code === 2 || code === 3 || code === 4) &&
-      !Hls.isSupported() &&
       retryCountRef.current < 1 &&
       videoSrc
     ) {

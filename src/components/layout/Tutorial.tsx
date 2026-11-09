@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { isStatic } from "../../core/runtime/hosting.ts";
+import { showHomeView } from "../../state/store.ts";
 import "../../assets/styles/tutorial.css";
 
 const STORAGE_KEY = "lyra-tutorial-seen";
@@ -40,7 +41,14 @@ export default function Tutorial() {
   };
 
   useEffect(() => {
-    const replay = () => { setStep(0); setOpen(true); };
+    const replay = () => {
+      window.hideGameMenu?.();
+      window.hideWatchMenu?.();
+      window.hideChatPage?.();
+      showHomeView();
+      setStep(0);
+      setOpen(true);
+    };
     document.addEventListener("show-tutorial", replay);
     return () => document.removeEventListener("show-tutorial", replay);
   }, []);

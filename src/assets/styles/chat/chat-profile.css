@@ -61,6 +61,7 @@
 .chat-card-head {
   align-items: flex-end;
   display: flex;
+  height: 84px;
   margin: -46px 0 12px;
   pointer-events: none;
   position: relative;
@@ -196,15 +197,14 @@
 }
 
 .chat-card-status {
-  align-self: center;
+  align-self: flex-start;
   background-color: var(--chat-card-raised);
   border-radius: var(--radius-dialog);
   color: var(--text-primary);
-  filter: drop-shadow(0 2px 8px rgb(0 0 0 / 0.3));
   font-size: 13px;
   font-weight: 300;
   line-height: 1.35;
-  margin: 0 12px 0 28px;
+  margin: 20px 12px 0 28px;
   max-width: 130px;
   min-width: 0;
   overflow-wrap: anywhere;

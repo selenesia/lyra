@@ -26,6 +26,7 @@ import { useManagedModal } from "../../core/ui/modal.ts";
 import { negativeMessage } from "../../core/runtime/messages.ts";
 import { svgIcon } from "../../core/ui/svgIcon.ts";
 import { useVirtualGrid } from "../../hooks/useVirtualGrid.ts";
+import { SeasonTabs } from "../watch/SeasonTabs.tsx";
 import "../../assets/styles/watch/episode-selector.css";
 import "../../assets/styles/watch/episode-picker-modal.css";
 
@@ -545,32 +546,22 @@ const EpisodePickerModal = memo(function EpisodePickerModal({
           </span>
         )}
         {seasonOptions.length > 1 && (
-          <div class="episode-season-tabs" role="tablist">
-            {seasonOptions.map((season, index) => {
-              const isActive = String(season.id) === String(activeSeasonId);
-              return (
-                <button
-                  key={String(season.id)}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  class={`episode-season-tab${isActive ? " is-active" : ""}`}
-                  onClick={() => {
-                    if (String(season.id) === String(activeSeasonId)) return;
-                    setSelectedSeasonId(season.id);
-                    setAnikotoEpisodes([]);
-                    setMaxEpisode(0);
-                    setEpisodeDataKey(null);
-                    setLoadingEpisodes(true);
-                    autoPlayedRef.current = 0;
-                  }}
-                >
-                  season {season.number || index + 1}
-                  {season.year ? ` · ${season.year}` : ""}
-                </button>
-              );
-            })}
-          </div>
+          <SeasonTabs
+            options={seasonOptions.map((season, index) => ({
+              key: String(season.id),
+              label: `season ${season.number || index + 1}${season.year ? ` · ${season.year}` : ""}`,
+              active: String(season.id) === String(activeSeasonId),
+              onSelect: () => {
+                if (String(season.id) === String(activeSeasonId)) return;
+                setSelectedSeasonId(season.id);
+                setAnikotoEpisodes([]);
+                setMaxEpisode(0);
+                setEpisodeDataKey(null);
+                setLoadingEpisodes(true);
+                autoPlayedRef.current = 0;
+              },
+            }))}
+          />
         )}
         <span class="episode-picker-modal-label">
           {seasonsLoading && episodeNumbers.length === 0

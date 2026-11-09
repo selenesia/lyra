@@ -215,7 +215,7 @@ pub(super) async fn select_source(
     client: &reqwest::Client,
     key: &EpisodeKey,
 ) -> Result<Arc<ResolvedSource>, ResolveError> {
-    if !key.prefer_4k && !key.auto_4k {
+    if key.title.is_some() || (!key.prefer_4k && !key.auto_4k) {
         return default_source(client, key).await;
     }
     let mut normal_key = key.clone();

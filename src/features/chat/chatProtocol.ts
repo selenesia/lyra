@@ -93,8 +93,10 @@ export function isChatReaction(value: unknown): value is string {
 export function cleanChatText(value: unknown): string {
   if (typeof value !== "string") return "";
   const text = value
-    .replace(INVISIBLE, (char) => (char === ZWJ || char === VARIATION ? char : " "))
-    .replace(/\s+/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(INVISIBLE, (char) => (char === ZWJ || char === VARIATION ? char : " ")).replace(/\s+/g, " ").trim())
+    .join("\n")
     .trim();
   return text.length <= CHAT_LIMITS.text ? text : "";
 }

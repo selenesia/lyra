@@ -10,7 +10,7 @@ const rivetRoot = path.join(root, "packages", "rivet");
 const routerOut = path.join(root, "public", "b", "rv");
 const extensionOut = path.join(root, "public", "b", "rivet");
 const ublockOriginSource = path.join(rivetRoot, "extensions", "ublock.crx");
-const ublockOriginStateSource = path.join(rivetRoot, "extensions", "ublock.state.gz");
+const ublockStateFiles = ["ublock.state.gz", "ublock.firefox.state.gz"];
 
 async function buildRouterScript(entry, naming, label) {
   const result = await Bun.build({
@@ -43,8 +43,10 @@ async function buildUblockOrigin() {
   await rm(extensionOut, { recursive: true, force: true });
   await mkdir(extensionOut, { recursive: true });
   await copyFile(ublockOriginSource, path.join(extensionOut, "ublock.crx"));
-  if (existsSync(ublockOriginStateSource))
-    await copyFile(ublockOriginStateSource, path.join(extensionOut, "ublock.state.gz"));
+  for (const filename of ublockStateFiles) {
+    const source = path.join(rivetRoot, "extensions", filename);
+    if (existsSync(source)) await copyFile(source, path.join(extensionOut, filename));
+  }
 }
 
 await buildRouter();

@@ -24,13 +24,11 @@ import { registerRivetBridge } from "./rivetBridge.ts";
 import { applyRivetAppearance } from "./rivetAppearance.ts";
 import {
   ensureUblockOrigin,
-  hasCurrentUblock,
   isStartingUblock,
   UBLOCK_FILTERING_READY_EVENT,
 } from "./rivetUblock.ts";
 import { resolveRivetDns } from "./rivetDns.ts";
-import { NEGATIVE } from "../runtime/messages.ts";
-import { scheduleIdleTask } from "../runtime/scheduler.ts";
+import { NEGATIVE, negativeMessage } from "../runtime/messages.ts";
 
 type LyraTab = (typeof store.tabs)[number];
 
@@ -38,16 +36,12 @@ export type RivetFacade = Rivet;
 
 let instance: RivetFacade | null = null;
 let ready: Promise<RivetFacade> | null = null;
-interface UblockFilteringHold {
-  ready: Promise<void>;
-  holdMs: number;
+interface UblockFiltering {
+  waitUntilReady(): Promise<boolean>;
 }
 
-let ublockFiltering: UblockFilteringHold | null = null;
-const UBLOCK_FILTERING_TIMEOUT_MS = 10_000;
-const UBLOCK_PREBUILT_HOLD_MS = 1_500;
-const UBLOCK_INSTALL_IDLE_TIMEOUT_MS = 2_000;
-const UBLOCK_INSTALL_QUIET_MS = 750;
+let ublockFiltering: UblockFiltering | null = null;
+const UBLOCK_FILTERING_TIMEOUT_MS = 30_000;
 const UBLOCK_STARTUP_RESPONSE_TIMEOUT_MS = 1_500;
 let commandListenerInstalled = false;
 let contextMenuElement: HTMLDivElement | null = null;
@@ -465,111 +459,49 @@ async function mountNewTabOverride(
   }
 }
 
-function afterFirstTabPageLoad(): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(fallback);
-      document.removeEventListener("load", onLoad, true);
-      scheduleIdleTask(resolve, UBLOCK_INSTALL_IDLE_TIMEOUT_MS);
-    };
-    const onLoad = (event: Event) => {
-      if (
-        event.target instanceof HTMLIFrameElement &&
-        event.target.dataset.tabId
-      )
-        finish();
-    };
-    const fallback = setTimeout(finish, UBLOCK_FILTERING_TIMEOUT_MS);
-    document.addEventListener("load", onLoad, true);
-  });
-}
-
-async function afterTabPagesSettle(): Promise<void> {
-  await new Promise<void>((resolve) =>
-    scheduleIdleTask(resolve, UBLOCK_INSTALL_IDLE_TIMEOUT_MS),
-  );
-  if (store.tabs.some((tab) => tab.isLoading)) await afterFirstTabPageLoad();
-}
-
-function afterUserGoesQuiet(): Promise<void> {
-  return new Promise((resolve) => {
-    const activity = ["keydown", "pointerdown", "pointermove", "wheel"];
-    const watched: Window[] = [];
-    let quietTimer = setTimeout(finish, UBLOCK_INSTALL_QUIET_MS);
-    const onActivity = () => {
-      clearTimeout(quietTimer);
-      quietTimer = setTimeout(finish, UBLOCK_INSTALL_QUIET_MS);
-    };
-    function finish() {
-      for (const win of watched)
-        for (const type of activity)
-          win.removeEventListener(type, onActivity, true);
-      resolve();
-    }
-    for (const win of [window, ...store.tabs.map((tab) => tab.iframe.contentWindow)]) {
-      try {
-        for (const type of activity)
-          win?.addEventListener(type, onActivity, {
-            capture: true,
-            passive: true,
-          });
-        if (win) watched.push(win);
-      } catch {}
-    }
-  });
-}
-
-async function beforeUblockStarts(): Promise<void> {
-  await afterUserGoesQuiet();
-  await afterTabPagesSettle();
-}
-
-async function untilUblockFilters(
-  rivet: Rivet,
-  install: Promise<string>,
-): Promise<void> {
-  try {
-    const listening = await rivet.registry.waitForWebRequestListener(
-      await install,
-      UBLOCK_FILTERING_READY_EVENT,
-      UBLOCK_FILTERING_TIMEOUT_MS,
-    );
-    if (!listening)
-      console.warn(
-        "[rivet] ublock origin filtering startup timed out",
-        NEGATIVE,
-      );
-  } catch (error) {
-    console.error(
-      "[rivet] failed to install ublock origin:",
-      error,
-      NEGATIVE,
-    );
-  }
-}
-
-function waitForUblockFiltering(rivet: Rivet): UblockFilteringHold {
-  if (hasCurrentUblock(rivet)) {
-    return {
-      ready: untilUblockFilters(rivet, ensureUblockOrigin(rivet)),
-      holdMs: UBLOCK_FILTERING_TIMEOUT_MS,
-    };
-  }
-  let compiling!: () => void;
-  const compileInstall = new Promise<void>((resolve) => (compiling = resolve));
-  const install = ensureUblockOrigin(rivet, {
-    beforeInstall: async (prebuilt) => {
-      if (prebuilt) return;
-      compiling();
-      await beforeUblockStarts();
-    },
-  });
+function waitForUblockFiltering(rivet: Rivet): UblockFiltering {
+  let install: Promise<string | null> | null = null;
+  const startInstall = () =>
+    (install ??= ensureUblockOrigin(rivet).catch((error) => {
+      console.error("[rivet] failed to install ublock origin:", error, NEGATIVE);
+      return null;
+    }));
+  void startInstall();
+  let pending: Promise<boolean> | null = null;
+  let filteringReady = false;
   return {
-    ready: Promise.race([compileInstall, untilUblockFilters(rivet, install)]),
-    holdMs: UBLOCK_PREBUILT_HOLD_MS,
+    waitUntilReady() {
+      if (filteringReady) return Promise.resolve(true);
+      return (pending ??= (async () => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const started = Date.now();
+        try {
+          const listening = await Promise.race([
+            startInstall().then((extId) => {
+              if (extId === null) {
+                install = null;
+                return false;
+              }
+              return rivet.registry.waitForWebRequestListener(
+                extId,
+                UBLOCK_FILTERING_READY_EVENT,
+                Math.max(0, UBLOCK_FILTERING_TIMEOUT_MS - (Date.now() - started)),
+              );
+            }),
+            new Promise<boolean>((resolve) => {
+              timer = setTimeout(() => resolve(false), UBLOCK_FILTERING_TIMEOUT_MS);
+            }),
+          ]);
+          filteringReady = listening;
+          if (!listening)
+            console.warn("[rivet] content filtering is unavailable", NEGATIVE);
+          return listening;
+        } finally {
+          clearTimeout(timer);
+          pending = null;
+        }
+      })());
+    },
   };
 }
 
@@ -679,7 +611,7 @@ function createDnrPlugin(
   ManagedPlugin: FolioManagedPluginConstructor,
   rivet: Rivet,
   tabId: number,
-  filtering?: UblockFilteringHold | null,
+  filtering?: UblockFiltering | null,
 ): InstanceType<FolioManagedPluginConstructor> {
   const folio = (
     window as typeof window & {
@@ -741,20 +673,20 @@ function createDnrPlugin(
       new Response(null, { status: 302, headers: { Location: url } }),
     );
 
+  const filteringUnavailableResponse = () =>
+    folio?.BareResponse?.fromNativeResponse(
+      new Response(
+        negativeMessage("content filtering is unavailable. reload this page"),
+        { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } },
+      ),
+    );
+
   let filteringSettled = !filtering;
-  void filtering?.ready.then(() => {
-    filteringSettled = true;
-  });
-  let filteringHold: Promise<void> | null = null;
-  const untilFilteringReady = (): Promise<void> =>
-    (filteringHold ??= filtering
-      ? Promise.race([
-          filtering.ready,
-          new Promise<void>((resolve) => setTimeout(resolve, filtering.holdMs)),
-        ]).then(() => {
-          filteringSettled = true;
-        })
-      : Promise.resolve());
+  const untilFilteringReady = async (): Promise<boolean> => {
+    if (filteringSettled) return true;
+    filteringSettled = await filtering!.waitUntilReady();
+    return filteringSettled;
+  };
   const deferredDocuments = new WeakMap<object, WebRequestHeader[]>();
 
   const deferredDocumentResponse = async (
@@ -802,7 +734,10 @@ function createDnrPlugin(
             );
             return;
           }
-          await untilFilteringReady();
+          if (!(await untilFilteringReady())) {
+            props.earlyResponse = filteringUnavailableResponse();
+            return;
+          }
         }
         const beforeRequestListeners =
           rivet.registry.hasWebRequestListeners("onBeforeRequest");
@@ -891,7 +826,10 @@ function createDnrPlugin(
             : undefined;
           if (deferredHeaders) {
             deferredDocuments.delete(context.request);
-            await untilFilteringReady();
+            if (!(await untilFilteringReady())) {
+              props.response = filteringUnavailableResponse();
+              return;
+            }
             const replacement = await deferredDocumentResponse(
               context,
               requestUrl,

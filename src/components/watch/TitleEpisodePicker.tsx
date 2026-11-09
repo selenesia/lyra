@@ -12,6 +12,7 @@ import {
   type TitleSeasonSummary,
 } from "../../features/watch/titles.ts";
 import { buildTitlePlaybackUrl } from "../../features/watch/watchPlayback.ts";
+import { SeasonTabs } from "./SeasonTabs.tsx";
 import "../../assets/styles/watch/episode-selector.css";
 import "../../assets/styles/watch/episode-picker-modal.css";
 
@@ -183,23 +184,14 @@ const TitleEpisodePicker = memo(function TitleEpisodePicker({
           </span>
         )}
         {seasons.length > 1 && (
-          <div class="episode-season-tabs" role="tablist">
-            {seasons.map((season) => {
-              const isActive = season.number === selectedSeason;
-              return (
-                <button
-                  key={season.number}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  class={`episode-season-tab${isActive ? " is-active" : ""}`}
-                  onClick={() => setSelectedSeason(season.number)}
-                >
-                  {seasonLabel(season)}
-                </button>
-              );
-            })}
-          </div>
+          <SeasonTabs
+            options={seasons.map((season) => ({
+              key: season.number,
+              label: seasonLabel(season),
+              active: season.number === selectedSeason,
+              onSelect: () => setSelectedSeason(season.number),
+            }))}
+          />
         )}
         <span class="episode-picker-modal-label">
           {seasonsState === "loading" && selectedSeason === null

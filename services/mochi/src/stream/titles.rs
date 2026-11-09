@@ -9,9 +9,12 @@ use reqwest::header::{ACCEPT, REFERER};
 use serde_json::{json, Value};
 use std::{
     collections::{HashSet, VecDeque},
+    future::Future,
     sync::{Arc, LazyLock},
+    task::Poll,
     time::Duration,
 };
+use tokio::sync::mpsc;
 use url::Url;
 
 pub(super) const PAGE_REFERER: &str = "https://framextv.cc/";
@@ -630,7 +633,8 @@ async fn resolve_provider(
     key: &EpisodeKey,
     title: TitleKey,
     provider: String,
-) -> (Vec<String>, Result<ResolvedSource, ResolveError>) {
+    ready: mpsc::UnboundedSender<Result<ResolvedSource, ResolveError>>,
+) -> Vec<String> {
     let payload = match tokio::time::timeout(
         PROVIDER_TIMEOUT,
         provider_response(client, (title, key.episode), &provider),
@@ -638,12 +642,19 @@ async fn resolve_provider(
     .await
     {
         Ok(Ok(payload)) => payload,
-        Ok(Err(error)) => return (Vec::new(), Err(error)),
-        Err(_) => return (Vec::new(), Err(ResolveError::Upstream)),
+        Ok(Err(error)) => {
+            let _ = ready.send(Err(error));
+            return Vec::new();
+        }
+        Err(_) => {
+            let _ = ready.send(Err(ResolveError::Upstream));
+            return Vec::new();
+        }
     };
     let alternatives = alternates(&payload);
     if !playable(&payload) {
-        return (alternatives, Err(payload_failure(&payload)));
+        let _ = ready.send(Err(payload_failure(&payload)));
+        return alternatives;
     }
     let mut sources = plan(&candidates(&payload), key, title, &tracks(&[&payload]));
     sources.sort_by(|left, right| source_rank(right, &key.language).cmp(&source_rank(left, &key.language)));
@@ -654,10 +665,96 @@ async fn resolve_provider(
                 .unwrap_or(Err(ResolveError::Upstream))
         })
         .buffer_unordered(2);
-    (
-        alternatives,
-        best_source(pending, &key.language, CANDIDATE_TIMEOUT).await,
-    )
+    report_sources(pending, ready).await;
+    alternatives
+}
+
+async fn report_sources(
+    sources: impl futures_util::Stream<Item = Result<ResolvedSource, ResolveError>>,
+    ready: mpsc::UnboundedSender<Result<ResolvedSource, ResolveError>>,
+) {
+    futures_util::pin_mut!(sources);
+    let deadline = tokio::time::Instant::now() + CANDIDATE_TIMEOUT;
+    loop {
+        let result = match tokio::time::timeout_at(deadline, sources.next()).await {
+            Ok(Some(result)) => result,
+            Ok(None) => break,
+            Err(_) => {
+                let _ = ready.send(Err(ResolveError::Upstream));
+                break;
+            }
+        };
+        if ready.send(result).is_err() {
+            break;
+        }
+    }
+}
+
+async fn search_sources<F>(
+    providers: impl Future<Output = Arc<Vec<String>>>,
+    mut resolve: impl FnMut(String, mpsc::UnboundedSender<Result<ResolvedSource, ResolveError>>) -> F,
+    requested: &str,
+) -> Result<ResolvedSource, ResolveError>
+where
+    F: Future<Output = Vec<String>>,
+{
+    let (ready, mut sources) = mpsc::unbounded_channel();
+    let discovery = async {
+        let registry = tokio::time::timeout(REGISTRY_TIMEOUT, providers);
+        tokio::pin!(registry);
+        let mut registry_done = false;
+        let mut queue = VecDeque::from([String::new()]);
+        let mut tried = HashSet::new();
+        let mut pending = FuturesUnordered::new();
+        loop {
+            while (registry_done || tried.is_empty())
+                && pending.len() < CONCURRENT_PROVIDERS
+                && tried.len() < MAX_PROVIDERS
+            {
+                let Some(provider) = queue.pop_front() else {
+                    break;
+                };
+                if tried.insert(provider.clone()) {
+                    pending.push(resolve(provider, ready.clone()));
+                }
+            }
+            if pending.is_empty() && registry_done {
+                break;
+            }
+            let alternatives = tokio::select! {
+                providers = &mut registry, if !registry_done => {
+                    registry_done = true;
+                    if let Ok(providers) = providers {
+                        for provider in providers.iter().rev() {
+                            if !tried.contains(provider) {
+                                queue.retain(|queued| queued != provider);
+                                queue.push_front(provider.clone());
+                            }
+                        }
+                    }
+                    Vec::new()
+                }
+                result = pending.next(), if !pending.is_empty() => result.unwrap_or_default(),
+            };
+            for provider in alternatives {
+                if !tried.contains(&provider) && !queue.contains(&provider) {
+                    queue.push_back(provider);
+                }
+            }
+        }
+    };
+    tokio::pin!(discovery);
+    let mut discovery_done = false;
+    let candidates = futures_util::stream::poll_fn(|context| {
+        if !discovery_done && discovery.as_mut().poll(context).is_ready() {
+            discovery_done = true;
+        }
+        match sources.poll_recv(context) {
+            Poll::Pending if discovery_done => Poll::Ready(None),
+            result => result,
+        }
+    });
+    best_source(candidates, requested, QUALITY_SEARCH_BUDGET).await
 }
 
 async fn resolve_sources(
@@ -665,44 +762,12 @@ async fn resolve_sources(
     key: &EpisodeKey,
     title: TitleKey,
 ) -> Result<ResolvedSource, ResolveError> {
-    let mut deadline = tokio::time::Instant::now() + QUALITY_SEARCH_BUDGET;
-    let mut queue = VecDeque::from([String::new()]);
-    if let Ok(providers) = tokio::time::timeout(REGISTRY_TIMEOUT, registry(client)).await {
-        queue.extend(providers.iter().cloned());
-    }
-    let mut tried = HashSet::<String>::new();
-    let mut pending = FuturesUnordered::new();
-    let mut best = None;
-    let mut failure = ResolveError::NotFound;
-    loop {
-        while pending.len() < CONCURRENT_PROVIDERS && tried.len() < MAX_PROVIDERS {
-            let Some(provider) = queue.pop_front() else {
-                break;
-            };
-            if tried.insert(provider.clone()) {
-                pending.push(resolve_provider(client, key, title, provider));
-            }
-        }
-        let (alternatives, result) = match tokio::time::timeout_at(deadline, pending.next()).await {
-            Ok(Some(result)) => result,
-            Ok(None) => break,
-            Err(_) => {
-                failure = worse(failure, ResolveError::Upstream);
-                break;
-            }
-        };
-        for provider in alternatives {
-            if !tried.contains(&provider) && !queue.contains(&provider) {
-                queue.push_back(provider);
-            }
-        }
-        match result {
-            Ok(source) => keep_best(&mut best, source, &key.language),
-            Err(error) => failure = worse(failure, error),
-        }
-        settle_deadline(&best, &key.language, &mut deadline);
-    }
-    best.ok_or(failure)
+    search_sources(
+        registry(client),
+        |provider, ready| resolve_provider(client, key, title, provider, ready),
+        &key.language,
+    )
+    .await
 }
 
 pub(super) async fn resolve(

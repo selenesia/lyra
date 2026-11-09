@@ -1,4 +1,5 @@
 import Hls from "hls.js";
+import { HLS_PLAYBACK_CONFIG } from "./hlsConfig.ts";
 import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import {
   type SubtitleTrack,
@@ -130,12 +131,37 @@ export function attachPlayerSource({
           : undefined,
       ),
   };
+  const nativeHls = Boolean(video.canPlayType("application/vnd.apple.mpegurl"));
+  const attachNative = () => {
+    setQualityOptions([]);
+    setSelectedQuality(-1);
+    setActiveQuality(-1);
+    setAutoQuality(-1);
+    setAudioTracksReady(false);
+    setEmbeddedSubtitles([]);
+    const detachTracks = attachPlaybackTracks({
+      video,
+      isCurrent: () =>
+        hlsSession === hlsSessionRef.current &&
+        sourceContext === sourceContextRef.current,
+      ...trackCallbacks,
+    });
+    video.src = videoSrc;
+    video.load();
+    return () => {
+      if (hlsSessionRef.current === hlsSession) hlsSessionRef.current += 1;
+      detachTracks();
+      video.removeAttribute("src");
+      video.load();
+    };
+  };
   if (Hls.isSupported()) {
     let networkRecoveries = 0;
     let mediaRecoveries = 0;
     let recoveryTimer: number | null = null;
+    let detachNative: (() => void) | undefined;
     const hls = new Hls({
-      enableWorker: true,
+      ...HLS_PLAYBACK_CONFIG,
       startFragPrefetch: true,
       backBufferLength: 30,
       maxBufferLength: 30,
@@ -175,16 +201,24 @@ export function attachPlayerSource({
       isCurrent: isCurrentHls,
       ...trackCallbacks,
     });
+    let destroyed = false;
+    const destroyHls = () => {
+      if (destroyed) return;
+      destroyed = true;
+      if (hlsRef.current === hls) hlsRef.current = null;
+      sourceRecovery.dispose();
+      video.removeEventListener("timeupdate", onPlaybackProgress);
+      if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
+      detachTracks();
+      hls.destroy();
+    };
     hls.subtitleDisplay = false;
     hls.subtitleTrack = -1;
     hls.on(Hls.Events.MEDIA_ATTACHED, () => {
       if (isCurrentHls()) hls.loadSource(videoSrc);
     });
-    hls.on(Hls.Events.MANIFEST_PARSED, (_event, manifest) => {
-      if (!isCurrentHls()) return;
-      networkRecoveries = 0;
-      syncMediaState({ sourceReady: true, error: null });
-      const levels = manifest.levels
+    const syncQualityOptions = (sourceLevels: Hls["levels"]) => {
+      const levels = sourceLevels
         .map((level, index) => {
           const width = Number(level.width || 0);
           const height = Number(level.height || 0);
@@ -202,6 +236,21 @@ export function attachPlayerSource({
             right.height - left.height || right.bitrate - left.bitrate,
         );
       setQualityOptions(levels);
+      return levels;
+    };
+    hls.on(Hls.Events.LEVELS_UPDATED, (_event, update) => {
+      if (!isCurrentHls()) return;
+      const levels = syncQualityOptions(update.levels);
+      const validLevel = (index: number) => levels.some((level) => level.index === index) ? index : -1;
+      setSelectedQuality(validLevel(hls.manualLevel));
+      setActiveQuality(validLevel(hls.currentLevel));
+      setAutoQuality(hls.autoLevelEnabled ? validLevel(hls.nextAutoLevel) : -1);
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, (_event, manifest) => {
+      if (!isCurrentHls()) return;
+      networkRecoveries = 0;
+      syncMediaState({ sourceReady: true, error: null });
+      const levels = syncQualityOptions(manifest.levels);
       const preferredLevel = preferredQualityLevel(
         request4k ? "2160p" : readAnimeQuality(),
         levels,
@@ -288,6 +337,26 @@ export function attachPlayerSource({
       if (sourceRecovery.recover(hlsError)) return;
       if (!hlsError.fatal) return;
       if (
+        hlsError.details === Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR ||
+        hlsError.details === Hls.ErrorDetails.BUFFER_INCOMPATIBLE_CODECS_ERROR ||
+        (hlsError.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR &&
+          hlsError.error?.name === "NotSupportedError")
+      ) {
+        if (nativeHls) {
+          pendingSeekRef.current ??= video.currentTime;
+          destroyHls();
+          syncMediaState({ error: null, buffering: true, sourceReady: false });
+          detachNative = attachNative();
+          return;
+        }
+        if (fallbackFrom4k()) return;
+        syncMediaState({
+          error: negativeMessage("this stream's format is not supported in this browser"),
+          buffering: false,
+        });
+        return;
+      }
+      if (
         hlsError.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
         hlsError.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT
       ) {
@@ -325,32 +394,12 @@ export function attachPlayerSource({
     });
     hls.attachMedia(video);
     return () => {
-      sourceRecovery.dispose();
-      video.removeEventListener("timeupdate", onPlaybackProgress);
-      if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
       if (hlsSessionRef.current === hlsSession) hlsSessionRef.current += 1;
-      detachTracks();
-      hls.destroy();
-      if (hlsRef.current === hls) hlsRef.current = null;
+      destroyHls();
+      detachNative?.();
     };
   }
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    const detachTracks = attachPlaybackTracks({
-      video,
-      isCurrent: () =>
-        hlsSession === hlsSessionRef.current &&
-        sourceContext === sourceContextRef.current,
-      ...trackCallbacks,
-    });
-    video.src = videoSrc;
-    video.load();
-    return () => {
-      if (hlsSessionRef.current === hlsSession) hlsSessionRef.current += 1;
-      detachTracks();
-      video.removeAttribute("src");
-      video.load();
-    };
-  }
+  if (nativeHls) return attachNative();
   syncMediaState({
     error: negativeMessage("hls playback is not supported in this browser"),
     buffering: false,

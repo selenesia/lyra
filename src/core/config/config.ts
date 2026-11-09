@@ -15,7 +15,7 @@ export const DEFAULT_BOOKMARKS: Bookmark[] = [
   },
   { name: "games", url: "lyra://games" },
   { name: "watch", url: "lyra://watch" },
-  ...(!isStatic ? [{ name: "chat", url: "lyra://chat" }] : []),
+  ...(!isStatic ? [{ name: "chats", url: "lyra://chat" }] : []),
   { name: "youtube", url: "https://youtube.com/" },
 ];
 

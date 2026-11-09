@@ -1,11 +1,13 @@
 import { backgroundTask } from "../runtime/backgroundTask.ts";
 import { NEGATIVE, negativeMessage } from "../runtime/messages.ts";
 import { readUblockState } from "./ublockState.ts";
+import { extensionUserAgent } from "../../../packages/rivet/src/htmlInject.ts";
 
 declare const __LYRA_UBLOCK_VERSION__: string;
 
 const UBLOCK_ORIGIN_EXTENSION_URL = "/b/rivet/ublock.crx";
 const UBLOCK_ORIGIN_STATE_URL = "/b/rivet/ublock.state.gz";
+const UBLOCK_FIREFOX_STATE_URL = "/b/rivet/ublock.firefox.state.gz";
 export const UBLOCK_FILTERING_READY_EVENT = "onSendHeaders";
 const BUNDLED_UBLOCK_VERSION =
   typeof __LYRA_UBLOCK_VERSION__ === "string" ? __LYRA_UBLOCK_VERSION__ : "";
@@ -21,9 +23,8 @@ const readUblockStateInBackground = backgroundTask(
 export interface UblockInstallOptions {
   fetchImpl?: typeof fetch;
   bundledVersion?: string;
-  beforeInstall?: (prebuilt: boolean) => Promise<void>;
   environment?: () => UblockEnvironment;
-  readState?: () => Promise<unknown>;
+  readState?: (url: string) => Promise<unknown>;
 }
 
 export interface UblockEnvironment {
@@ -122,23 +123,16 @@ function isCurrentUblock(
   );
 }
 
-export function hasCurrentUblock(
-  rivet: Pick<RivetExtensionInstaller, "getInstalledExtensions">,
-  bundledVersion = BUNDLED_UBLOCK_VERSION,
-): boolean {
-  const existing = newestInstalledUblock(rivet);
-  return Boolean(existing && isCurrentUblock(existing, bundledVersion));
-}
-
 export function currentUblockEnvironment(): UblockEnvironment {
   const userAgent = navigator.userAgent;
+  const runtimeUserAgent = extensionUserAgent(userAgent);
   const browser = navigator as Navigator & {
     brave?: unknown;
     userAgentData?: { brands?: { brand: string }[] };
   };
   const detected: Record<string, boolean> = {
-    chromium: /\bChrom(?:e|ium)\/\d+/.test(userAgent),
-    mobile: /\bMobile\b/.test(userAgent),
+    chromium: /\bChrom(?:e|ium)\/\d+/.test(runtimeUserAgent),
+    mobile: /\bMobile\b/.test(runtimeUserAgent),
     native_css_has: Boolean(globalThis.CSS?.supports?.("selector(a:has(b))")),
     brave:
       browser.brave instanceof Object ||
@@ -188,7 +182,7 @@ function prebuiltStateFits(
     return false;
   return !state.regionalAgents.some((agent) =>
     new RegExp(`\\b${agent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(
-      environment.userAgent,
+      extensionUserAgent(environment.userAgent),
     ),
   );
 }
@@ -216,20 +210,26 @@ function rebasedStorage(
   };
 }
 
-function readBundledUblockState(): Promise<unknown> {
+function readBundledUblockState(url: string): Promise<unknown> {
   return readUblockStateInBackground(
-    new URL(UBLOCK_ORIGIN_STATE_URL, document.baseURI).href,
+    new URL(url, document.baseURI).href,
   );
 }
 
 async function prebuiltUblockStorage(
   bundledVersion: string,
   environment: () => UblockEnvironment,
-  readState: () => Promise<unknown>,
+  readState: (url: string) => Promise<unknown>,
 ): Promise<Record<string, unknown> | null> {
-  if (!environment().flavor.includes("chromium")) return null;
+  const initial = environment();
+  const url = /\bFirefox\/\d+/.test(initial.userAgent)
+    ? UBLOCK_FIREFOX_STATE_URL
+    : initial.flavor.includes("chromium") && /\bChrom(?:e|ium)\/\d+/.test(initial.userAgent)
+      ? UBLOCK_ORIGIN_STATE_URL
+      : null;
+  if (!url) return null;
   try {
-    const state = await readState();
+    const state = await readState(url);
     if (!isPrebuiltUblockState(state)) return null;
     const current = environment();
     return prebuiltStateFits(state, bundledVersion, current)
@@ -262,7 +262,6 @@ export async function ensureUblockOrigin(
   {
     fetchImpl = globalThis.fetch,
     bundledVersion = BUNDLED_UBLOCK_VERSION,
-    beforeInstall,
     environment = currentUblockEnvironment,
     readState = readBundledUblockState,
   }: UblockInstallOptions = {},
@@ -279,7 +278,6 @@ export async function ensureUblockOrigin(
       ? null
       : prebuiltUblockStorage(bundledVersion, environment, readState),
   ]);
-  await beforeInstall?.(storage !== null);
   return rivet.installExtension(
     crx,
     "ublock.crx",
