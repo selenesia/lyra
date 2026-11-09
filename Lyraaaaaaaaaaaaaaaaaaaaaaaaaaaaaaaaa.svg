@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:html="http://www.w3.org/1999/xhtml" width="1440" height="900" viewBox="0 0 1440 900">
+  <title>Lyra — interactive site wrapper</title>
+  <desc>A browser wrapper that embeds a deployed Lyra site. Enter its URL to load it; the site itself is not bundled in this SVG.</desc>
+  <foreignObject x="0" y="0" width="1440" height="900">
+    <html:div xmlns="http://www.w3.org/1999/xhtml" id="app">
+      <html:style>
+        * { box-sizing: border-box; }
+        html, body, #app { width: 100%; height: 100%; margin: 0; }
+        body { font: 14px/1.45 system-ui, sans-serif; color: #f2f2f7; background: #101117; }
+        #app { display: flex; flex-direction: column; min-height: 0; }
+        header { padding: 12px 16px; background: #1b1c25; border-bottom: 1px solid #343541; }
+        .row { display: flex; align-items: center; gap: 10px; }
+        .brand { font-weight: 700; font-size: 16px; white-space: nowrap; color: #f4a8d1; }
+        form { display: flex; flex: 1; min-width: 0; gap: 8px; }
+        input { flex: 1; min-width: 80px; padding: 9px 11px; color: inherit; background: #101117; border: 1px solid #494b59; border-radius: 7px; font: inherit; }
+        button, .open { padding: 9px 12px; color: inherit; background: #343541; border: 1px solid #4b4d5b; border-radius: 7px; font: inherit; cursor: pointer; white-space: nowrap; }
+        button:hover, .open:hover { background: #454756; }
+        #message { margin: 8px 0 0; color: #c4c5d0; font-size: 12px; }
+        iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #101117; }
+        @media (max-width: 650px) {
+          header { padding: 10px; }
+          .row { flex-wrap: wrap; }
+          form { order: 2; flex-basis: 100%; }
+          .brand { flex: 1; }
+          button, .open { padding: 8px; }
+        }
+      </html:style>
+      <html:header>
+        <html:div class="row">
+          <html:span class="brand">Lyra wrapper</html:span>
+          <html:form id="site-form">
+            <html:input id="site-url" name="siteUrl" type="url" required="required" placeholder="https://your-lyra-deployment.example/" aria-label="Deployed Lyra site URL" />
+            <html:button type="submit">Load site</html:button>
+          </html:form>
+          <html:a id="open-site" class="open" href="about:blank" target="_blank" rel="noopener noreferrer" aria-disabled="true">Open in new tab</html:a>
+          <html:button id="fullscreen" type="button">Fullscreen</html:button>
+        </html:div>
+        <html:p id="message" role="status">Enter the URL of a deployed Lyra site. This SVG is a wrapper, not a copy of the app; standalone files cannot provide the site or its backend.</html:p>
+      </html:header>
+      <html:iframe id="site-frame" title="Deployed Lyra site" src="about:blank"></html:iframe>
+      <html:script><![CDATA[
+        (() => {
+          const form = document.getElementById("site-form");
+          const input = document.getElementById("site-url");
+          const frame = document.getElementById("site-frame");
+          const openLink = document.getElementById("open-site");
+          const message = document.getElementById("message");
+
+          form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            if (!input.reportValidity()) return;
+
+            let target;
+            try {
+              target = new URL(input.value.trim());
+            } catch {
+              message.textContent = "Enter a valid deployed Lyra URL.";
+              return;
+            }
+            if (target.protocol !== "https:" && target.protocol !== "http:") {
+              message.textContent = "Only HTTP or HTTPS site URLs can be loaded.";
+              return;
+            }
+
+            target.hash = "";
+            input.value = target.href;
+            frame.src = target.href;
+            openLink.href = target.href;
+            openLink.setAttribute("aria-disabled", "false");
+            message.textContent = "Loading the deployed site. Embedding may be blocked by that site's frame policy; use Open in new tab if needed.";
+          });
+
+          frame.addEventListener("load", () => {
+            if (frame.src !== "about:blank") {
+              message.textContent = "The page loaded in the frame. Cross-origin browser rules prevent this wrapper from confirming app readiness.";
+            }
+          });
+
+          document.getElementById("fullscreen").addEventListener("click", async () => {
+            try {
+              if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+              else await document.exitFullscreen();
+            } catch {
+              message.textContent = "Fullscreen is unavailable in this browser or viewing context.";
+            }
+          });
+
+          openLink.addEventListener("click", (event) => {
+            if (openLink.getAttribute("aria-disabled") === "true") event.preventDefault();
+          });
+        })();
+      ]]></html:script>
+    </html:div>
+  </foreignObject>
+</svg>
