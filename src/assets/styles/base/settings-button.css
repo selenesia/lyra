@@ -1,0 +1,54 @@
+.settings-page-button {
+  align-items: center;
+  align-self: flex-start;
+  background: var(--btn-secondary-bg);
+  border: none;
+  border-radius: var(--radius-control);
+  box-sizing: border-box;
+  color: var(--btn-secondary-text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 8px 12px;
+  transition:
+    background-color var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease),
+    opacity var(--motion-control) var(--motion-ease);
+}
+
+.settings-page-button:hover {
+  background: var(--btn-secondary-bg-hover);
+  transform: scale(var(--motion-hover-scale, 1.05));
+}
+
+.settings-page-button.is-primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+}
+
+.settings-page-button.is-primary:hover {
+  background: var(--btn-primary-bg-hover);
+}
+
+.settings-page-button:active {
+  transform: scale(1);
+}
+
+.settings-page-button:disabled,
+.settings-page-button:has(input:disabled) {
+  cursor: default;
+  opacity: 0.5;
+  transform: none;
+}
+
+.settings-page-button input {
+  display: none;
+}
+
+.settings-page-button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

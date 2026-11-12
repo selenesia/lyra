@@ -24,7 +24,7 @@ const MASKABLE = [
   "nigger", "niggers", "nigga", "niggas", "faggot", "faggots", "fag", "fags", "tranny", "retard", "retarded", "chink",
   "spic", "kike", "coon", "kill", "kys", "kms", "yourself", "urself", "myself", "suicide", "die", "rape", "raped",
   "dick", "cock", "pussy", "cunt", "fuck", "fucking", "shit", "bitch", "nudes", "sex", "cum", "porn", "whore", "slut",
-  "nazi", "hitler",
+  "nazi", "hitler", "csam", "csem",
 ];
 
 export interface ModerationText {
@@ -110,6 +110,12 @@ function tokenize(folded: string): string[] {
     .replace(LEET_RUN, readLeetRun)
     .replace(MASKED, unmask);
   return mergeSpelledOut(leet.split(/[^a-z]+/).filter(Boolean));
+}
+
+export function modelTextVariants(text: string): string[] {
+  const original = text.normalize("NFKC").replace(/[\p{Cf}]+/gu, "");
+  const normalized = foldText(text).replace(LEET_RUN, readLeetRun).replace(MASKED, unmask);
+  return normalized === original.toLowerCase() ? [original] : [original, normalized];
 }
 
 export function readModerationText(text: string): ModerationText {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { appPath } from "../../core/runtime/hosting.ts";
 import { negativeMessage } from "../../core/runtime/messages.ts";
-import { blockedNotice, isModerationCategory } from "./moderation.ts";
+import { blockedNotice, isModerationCategory, type ModerationCategory } from "./moderationNotice.ts";
 import type { ChatRole } from "./chatRoles.ts";
 import { mentionsName } from "./chatText.ts";
 import {
@@ -15,6 +15,7 @@ import {
   type ChatTyping,
   type ChatViewer,
   isChatMediaKind,
+  canReadChannel,
 } from "./chatProtocol.ts";
 
 export interface ChatEntry extends ChatMessage {
@@ -216,10 +217,20 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
   const syncedRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const foreground = useForegroundTab();
+  const updateViewer = useCallback((next: ChatViewer) => {
+    viewRef.current.viewer = next;
+    setViewer(next);
+    setHistory((current) => {
+      const hidden = CHAT_CHANNELS.filter((key) => !canReadChannel(next.role, key) && current[key].length);
+      return hidden.length ? { ...current, ...Object.fromEntries(hidden.map((key) => [key, []])) } : current;
+    });
+    setUnread((current) => Object.fromEntries(Object.entries(current).filter(([key]) => canReadChannel(next.role, key as ChatChannel))));
+    setTyping((current) => current.filter((entry) => canReadChannel(next.role, entry.channel)));
+  }, []);
 
-  const post = useCallback(async (path: string, payload: BodyInit, type: string): Promise<ChatResult> => {
+  const post = useCallback(async (path: string, payload: BodyInit, type?: string): Promise<ChatResult> => {
     try {
-      const response = await fetch(appPath(path), { method: "POST", headers: { "Content-Type": type }, body: payload });
+      const response = await fetch(appPath(path), { method: "POST", headers: type ? { "Content-Type": type } : {}, body: payload });
       const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (response.ok) {
         return {
@@ -254,7 +265,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
       .then(async (response) => {
         const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
         if (cancelled) return;
-        if (response.ok) setViewer(body.viewer as ChatViewer);
+        if (response.ok) updateViewer(body.viewer as ChatViewer);
         setAccess(accessFrom(response.status, body));
       })
       .catch(() => {
@@ -263,7 +274,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
     return () => {
       cancelled = true;
     };
-  }, [attempt]);
+  }, [attempt, updateViewer]);
 
   const ready = access.state === "ready";
 
@@ -278,7 +289,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
       const self = view.viewer;
       if (!self) return;
       const waiting = messages.filter(
-        (message) => message.author !== self.author && !(view.visible && view.channel === message.channel),
+        (message) => canReadChannel(self.role, message.channel) && message.author !== self.author && !(view.visible && view.channel === message.channel),
       );
       if (!waiting.length) return;
       setUnread((current) => {
@@ -298,7 +309,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         (event) => {
           retryDelay = 1_000;
           setStatus("live");
-          setViewer(parse<ChatViewer>(event));
+          updateViewer(parse<ChatViewer>(event));
         },
       ],
       [
@@ -319,6 +330,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
           setHistory((current) => {
             const next = emptyHistory();
             for (const key of CHAT_CHANNELS) {
+              if (!canReadChannel(viewRef.current.viewer?.role ?? "member", key)) continue;
               const confirmed = new Set((snapshot[key] ?? []).map((message) => message.nonce).filter(Boolean));
               const pending = current[key].filter((entry) => entry.pending && !confirmed.has(entry.nonce));
               next[key] = [...(snapshot[key] ?? []), ...pending];
@@ -331,6 +343,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         "message",
         (event) => {
           const message = parse<ChatMessage>(event);
+          if (!canReadChannel(viewRef.current.viewer?.role ?? "member", message.channel)) return;
           setHistory((current) => patchChannel(current, message.channel, (entries) => upsert(entries, message)));
           setTyping((current) => current.filter((entry) => entry.author !== message.author));
           markUnread([message]);
@@ -340,6 +353,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         "update",
         (event) => {
           const message = parse<ChatMessage>(event);
+          if (!canReadChannel(viewRef.current.viewer?.role ?? "member", message.channel)) return;
           setHistory((current) =>
             patchChannel(current, message.channel, (entries) =>
               entries.some((entry) => entry.id === message.id) ? upsert(entries, message) : entries,
@@ -358,6 +372,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         "typing",
         (event) => {
           const entry = parse<ChatTyping>(event);
+          if (!canReadChannel(viewRef.current.viewer?.role ?? "member", entry.channel)) return;
           if (entry.author === viewRef.current.viewer?.author) return;
           setTyping((current) => [
             ...current.filter((existing) => existing.author !== entry.author),
@@ -377,11 +392,15 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
           setHistory((current) => {
             let next: ChatHistory | undefined;
             for (const key of CHAT_CHANNELS) {
-              if (!current[key].some((entry) => entry.author === card.author)) continue;
+              if (!current[key].some((entry) => entry.author === card.author || entry.reactors?.[card.author])) continue;
               next ??= { ...current };
-              next[key] = current[key].map((entry) =>
-                entry.author === card.author ? withCard(entry, card, ["display", "avatar"]) : entry,
-              );
+              next[key] = current[key].map((entry) => {
+                const shown = entry.author === card.author ? withCard(entry, card, ["display", "avatar"]) : entry;
+                const reactor = shown.reactors?.[card.author];
+                if (!reactor) return shown;
+                const face = { name: reactor.name, ...(card.display && { display: card.display }), ...(card.avatar && { avatar: card.avatar }) };
+                return { ...shown, reactors: { ...shown.reactors, [card.author]: face } };
+              });
             }
             return next ?? current;
           });
@@ -449,7 +468,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
       clearTimeout(retry);
       close();
     };
-  }, [foreground, ready, recheck]);
+  }, [foreground, ready, recheck, updateViewer]);
 
   useEffect(() => {
     if (!typing.length) return;
@@ -471,7 +490,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
   }, [channel, unread, visible]);
 
   const send = useCallback(
-    async (target: ChatChannel, text: string, replyTo?: string): Promise<ChatResult> => {
+    async (target: ChatChannel, text: string, replyTo?: string, image?: Blob): Promise<ChatResult> => {
       if (!viewer) return { failure: describeFailure("CHAT_LOGIN_REQUIRED", {}) };
       const nonce = crypto.randomUUID();
       const localId = `local-${nonce}`;
@@ -488,21 +507,35 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         nonce,
         pending: true,
       };
-      setHistory((current) => patchChannel(current, target, (entries) => upsert(entries, pending)));
-      const result = await request({ type: "send", channel: target, text, nonce, ...(replyTo && { replyTo }) });
+      if (!image) setHistory((current) => patchChannel(current, target, (entries) => upsert(entries, pending)));
+      let result: ChatResult;
+      if (image) {
+        const form = new FormData();
+        form.set("channel", target);
+        form.set("text", text);
+        form.set("nonce", nonce);
+        if (replyTo) form.set("replyTo", replyTo);
+        form.set("image", image, "upload");
+        result = await post("/api/chat/message", form);
+      } else {
+        result = await request({ type: "send", channel: target, text, nonce, ...(replyTo && { replyTo }) });
+      }
       setHistory((current) =>
         patchChannel(current, target, (entries) =>
-          result.message ? upsert(entries, result.message) : entries.filter((entry) => entry.id !== localId),
+          !canReadChannel(viewRef.current.viewer?.role ?? "member", target) ? []
+            : result.message ? upsert(entries, result.message) : entries.filter((entry) => entry.id !== localId),
         ),
       );
       return result;
     },
-    [request, viewer],
+    [post, request, viewer],
   );
 
   const applyUpdate = useCallback((result: ChatResult) => {
     const message = result.message;
-    if (message) setHistory((current) => patchChannel(current, message.channel, (entries) => upsert(entries, message)));
+    if (message && canReadChannel(viewRef.current.viewer?.role ?? "member", message.channel)) {
+      setHistory((current) => patchChannel(current, message.channel, (entries) => upsert(entries, message)));
+    }
     return result;
   }, []);
 
@@ -519,6 +552,21 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
   const remove = useCallback((id: string) => request({ type: "delete", id }), [request]);
 
   const announceTyping = useCallback((target: ChatChannel) => void request({ type: "typing", channel: target }), [request]);
+
+  const checkDraft = useCallback(async (text: string): Promise<ModerationCategory | null | undefined> => {
+    try {
+      const response = await fetch(appPath("/api/chat/message"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "draft", text }),
+      });
+      if (!response.ok) return undefined;
+      const body = (await response.json()) as Record<string, unknown>;
+      return isModerationCategory(body.category) ? body.category : null;
+    } catch {
+      return undefined;
+    }
+  }, []);
 
   const moderateUser = useCallback(
     (type: ChatModeration, target: string, extra: Record<string, unknown> = {}) => request({ type, target, ...extra }),
@@ -552,6 +600,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
         );
         if (!response.ok) return 0;
         const { messages } = (await response.json()) as { messages: ChatMessage[] };
+        if (!canReadChannel(viewRef.current.viewer?.role ?? "member", target)) return 0;
         if (messages.length < CHAT_LIMITS.page) setExhausted((current) => ({ ...current, [target]: true }));
         setHistory((current) =>
           patchChannel(current, target, (entries) => {
@@ -607,6 +656,7 @@ export function useChatRoom({ channel, visible }: ChatRoomOptions) {
     react,
     remove,
     announceTyping,
+    checkDraft,
     moderateUser,
     assignRole,
     saveProfile,

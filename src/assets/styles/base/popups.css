@@ -59,9 +59,7 @@
 }
 
 .popup.modal-visible,
-.popup.modal-closing,
-.settings-modal.modal-visible,
-.settings-modal.modal-closing {
+.popup.modal-closing {
   opacity: 1;
 }
 
@@ -75,18 +73,11 @@
   display: block !important;
 }
 
-.settings-modal.modal-visible,
-.settings-modal.modal-closing {
-  display: flex !important;
-}
-
-.popup.modal-visible,
-.settings-modal.modal-visible {
+.popup.modal-visible {
   animation: modalIn var(--motion-enter) var(--motion-ease-enter) forwards;
 }
 
-.popup.modal-closing,
-.settings-modal.modal-closing {
+.popup.modal-closing {
   animation: modalOut var(--motion-exit) var(--motion-ease-exit) forwards;
   pointer-events: none;
 }

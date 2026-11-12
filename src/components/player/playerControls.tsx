@@ -6,10 +6,12 @@ import {
   IconVolumeHalf,
   IconVolumeFull,
 } from "../icons/index.tsx";
+import { VOLUME_SLIDER_MAX, volumeLevelToSlider } from "./volumeBoost.ts";
 
 interface VolumeControlContext {
   muted: boolean;
-  volume: number;
+  volumeLevel: number;
+  boostable: boolean;
   toggleMute: () => void;
   volumeSliderRef: MutableRef<HTMLInputElement | null>;
   handleVolume: (event: Event) => void;
@@ -18,36 +20,46 @@ interface VolumeControlContext {
 }
 
 export function renderVolumeControl({
-  muted, volume, toggleMute, volumeSliderRef, handleVolume, volumeDraggingRef,
-  resetTimer,
+  muted, volumeLevel, boostable, toggleMute, volumeSliderRef, handleVolume,
+  volumeDraggingRef, resetTimer,
 }: VolumeControlContext) {
+  const silent = muted || volumeLevel === 0;
+  const boosted = !silent && volumeLevel > 100;
+  const sliderMax = boostable ? VOLUME_SLIDER_MAX : 100;
+  const sliderValue = silent
+    ? 0
+    : boostable
+      ? volumeLevelToSlider(volumeLevel)
+      : volumeLevel;
+  const percent = silent ? 0 : Math.round(volumeLevel);
   return (
-    <div class="volume-wrapper">
+    <div class={`volume-wrapper${boosted ? " is-boosted" : ""}`}>
       <button
         class="player-btn"
-        aria-label={muted || volume === 0 ? "unmute" : "mute"}
+        aria-label={silent ? "unmute" : "mute"}
         onClick={toggleMute}
       >
-        {muted || volume === 0 ? (
+        {silent ? (
           <IconVolumeOff size={24} />
-        ) : volume <= 33 ? (
+        ) : volumeLevel <= 33 ? (
           <IconVolumeMinimum size={24} />
-        ) : volume <= 66 ? (
+        ) : volumeLevel <= 66 ? (
           <IconVolumeHalf size={24} />
         ) : (
           <IconVolumeFull size={24} />
         )}
       </button>
       <div
-        class="volume-slider-wrap"
-        style={{ "--vol-pct": `${muted ? 0 : volume}%` } as any}
+        class={`volume-slider-wrap${boostable ? " is-boostable" : ""}`}
+        style={{ "--vol-pct": `${(sliderValue / sliderMax) * 100}%` } as any}
       >
         <input
           type="range"
           class="volume-slider"
           min="0"
-          max="100"
-          value={muted ? 0 : volume}
+          max={sliderMax}
+          aria-valuetext={`${percent}%`}
+          value={sliderValue}
           ref={volumeSliderRef}
           onInput={handleVolume}
           onPointerDown={() => {
@@ -69,6 +81,11 @@ export function renderVolumeControl({
           aria-label="volume"
         />
       </div>
+      {boosted && (
+        <span class="volume-boost-label" aria-hidden="true">
+          {percent}%
+        </span>
+      )}
     </div>
   );
 }

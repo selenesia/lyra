@@ -24,13 +24,15 @@ export function preloadWatchCatalog() {
 export const loadNewTabModal = () =>
   import("../components/browser/NewTabModal.tsx");
 
-export const loadSettingsModal = () =>
-  import("../components/settings/SettingsModal.tsx");
+export const loadSettingsPage = () =>
+  import("../components/settings/SettingsPage.tsx");
 
 export const loadFallingLeaves = () =>
   import("../components/layout/FallingLeaves.tsx");
 
 export const loadChatPage = () => import("../components/chat/ChatPage.tsx");
+
+export const loadTutorial = () => import("../components/layout/Tutorial.tsx");
 
 export const loadCloudSync = () =>
   Promise.all([

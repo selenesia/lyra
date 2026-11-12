@@ -30,7 +30,6 @@ declare global {
       checkVersion(force?: boolean): Promise<void>;
       updating: boolean;
     };
-    toggleSettingsModal?: () => void;
     hideBookmarkModal?: (calledByOther: boolean) => void;
     __lyraUpdatePollerStarted?: boolean;
   }
@@ -177,12 +176,6 @@ export function initializeLoad(): void {
         this.overlay.dataset["lyraUpdateOverlayBound"] = "true";
       }
 
-      if (
-        window.toggleSettingsModal &&
-        document.getElementById("settings-modal")?.classList.contains("open")
-      ) {
-        window.toggleSettingsModal();
-      }
       if (
         window.hideBookmarkModal &&
         (document

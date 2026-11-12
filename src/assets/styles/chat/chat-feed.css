@@ -11,7 +11,8 @@
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior-y: auto;
+  overscroll-behavior-y: contain;
+  scroll-behavior: smooth;
   padding: 24px 0 8px;
   mask-image: linear-gradient(to bottom, transparent 0, #000 32px);
 }
@@ -49,12 +50,13 @@
   transition: background-color var(--motion-control) var(--motion-ease);
 }
 
-.chat-message:not(.grouped, .chat-blocked) {
+.chat-message:not(.grouped, .chat-blocked, .chat-notice) {
   box-sizing: border-box;
   min-height: 52px;
 }
 
-.chat-message.chat-blocked {
+.chat-message.chat-blocked,
+.chat-message.chat-notice {
   padding-left: 10px;
 }
 
@@ -93,7 +95,7 @@
 }
 
 @media (hover: hover) {
-  .chat-message:not(.chat-blocked):hover {
+  .chat-message:not(.chat-blocked, .chat-notice):hover {
     background-color: var(--bg-surface-3);
   }
 
@@ -111,7 +113,8 @@
   display: flex;
 }
 
-.chat-blocked {
+.chat-blocked,
+.chat-notice {
   color: var(--color-sublabel);
   font-size: 12px;
 }
@@ -163,6 +166,24 @@
   font-weight: 300;
   line-height: 1.45;
   user-select: text;
+}
+
+.chat-attachment {
+  display: block;
+  margin-top: 6px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.chat-attachment img {
+  border-radius: var(--radius-control);
+  display: block;
+  height: auto;
+  max-height: 360px;
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left;
+  width: auto;
 }
 
 .chat-message-text strong {
@@ -286,21 +307,24 @@ button.chat-mention:focus-visible {
 .chat-reaction {
   align-items: center;
   background-color: var(--bg-surface-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
+  border: none;
+  border-radius: var(--radius-control);
   color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   font-family: inherit;
   font-size: 13px;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 4px 9px;
   transition:
-    border-color var(--motion-control) var(--motion-ease),
+    background-color var(--motion-control) var(--motion-ease),
+    color var(--motion-control) var(--motion-ease),
     transform var(--motion-control) var(--motion-ease);
 }
 
-.chat-reaction:hover {
+.chat-reaction:is(:hover, :focus-visible) {
+  background-color: var(--hover-bg);
+  color: var(--text-primary);
   transform: scale(var(--motion-hover-scale, 1.05));
 }
 
@@ -309,8 +333,20 @@ button.chat-mention:focus-visible {
 }
 
 .chat-reaction.mine {
-  border-color: color-mix(in srgb, var(--accent-color) 60%, transparent);
-  background-color: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  background-color: var(--active-bg);
+  color: var(--text-primary);
+}
+
+.chat-reaction-faces {
+  display: flex;
+}
+
+.chat-reaction-faces:empty {
+  display: none;
+}
+
+.chat-reaction-faces .chat-avatar + .chat-avatar {
+  margin-left: -6px;
 }
 
 .chat-reaction-count {

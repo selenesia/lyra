@@ -18,7 +18,7 @@ body.chat-view .footer {
 }
 
 body.chat-view .main-container,
-body.chat-view #bookmarks-container,
+body.chat-view .bookmarks-container,
 body.chat-view .games-page,
 body.chat-view .watch-page {
   display: none !important;
@@ -45,12 +45,12 @@ body.chat-view .watch-page {
   display: none;
   flex-shrink: 0;
   gap: 24px;
-  grid-template-columns: 180px minmax(0, 1fr) 190px;
+  grid-template-columns: 164px minmax(0, 1fr) 190px;
   height: 100%;
   margin: 0 auto;
   max-width: 1200px;
   min-height: 480px;
-  padding: 100px clamp(16px, 3vw, 32px) 24px;
+  padding: 100px clamp(16px, 3vw, 32px) 12px;
   text-transform: none;
   width: 100%;
 }
@@ -77,6 +77,10 @@ body.chat-view .chat-page.is-visible {
   user-select: none;
 }
 
+.chat-channels {
+  padding-top: 12px;
+}
+
 .chat-category {
   display: flex;
   flex-direction: column;
@@ -84,7 +88,7 @@ body.chat-view .chat-page.is-visible {
 }
 
 .chat-category + .chat-category {
-  margin-top: 20px;
+  margin-top: 8px;
 }
 
 .chat-category-title {
@@ -96,9 +100,9 @@ body.chat-view .chat-page.is-visible {
   cursor: pointer;
   display: flex;
   font-family: inherit;
-  font-size: 12px;
+  font-size: 11px;
   gap: 4px;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   padding: 0 0 0 4px;
   transition: color var(--motion-control) var(--motion-ease);
   user-select: none;
@@ -146,6 +150,12 @@ body.chat-view .chat-page.is-visible {
   border-radius: var(--radius-control);
 }
 
+.chat-channel {
+  font-size: 13px;
+  gap: 6px;
+  padding: 5px 8px;
+}
+
 .chat-channel:hover,
 .chat-member:hover {
   background-color: var(--hover-bg);
@@ -174,7 +184,7 @@ body.chat-view .chat-page.is-visible {
 
 .chat-channel-hash {
   text-align: center;
-  width: 18px;
+  width: 16px;
 }
 
 .chat-channel.active .chat-channel-icon,

@@ -35,6 +35,7 @@ import {
   type TitleType,
 } from "../../features/watch/titles.ts";
 import { buildTitlePlaybackUrl } from "../../features/watch/watchPlayback.ts";
+import { prewarmTitlePlayback } from "../../features/watch/watchPrewarm.ts";
 import {
   WATCH_PROGRESS_EVENT,
   WATCH_PROGRESS_KEY,
@@ -262,6 +263,7 @@ export default function WatchCatalog({
     hideOtherViews: () => {
       window.hideGameMenu?.();
       window.hideChatPage?.();
+      window.hideSettingsPage?.();
     },
     onShowFrame: loadIfNeeded,
     showOnMount: openOnMount,
@@ -296,6 +298,7 @@ export default function WatchCatalog({
       setEpisodePickerVisible(false);
       setShowPickerVisible(false);
       hide();
+      prewarmTitlePlayback(url);
       app().handleSearch?.(url, title, poster);
     },
     [hide],

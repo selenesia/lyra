@@ -7,16 +7,7 @@ export const IMAGE_RULES = [
   { score: "hate", category: "hate", limit: 0.005 },
 ];
 
-export const IMAGE_COVERAGE = { screen: "safety", screenCrops: 96, diverseCrops: 12, flaggedCrops: 24, flag: 0.15 };
-
-export function flaggedFrames(screened, boxes) {
-  const frames = [];
-  for (let frame = 0; frame * boxes < screened.length; frame += 1) {
-    const readings = screened.slice(frame * boxes, (frame + 1) * boxes);
-    if (readings.some((reading) => Math.max(reading.NSFW, reading.NSFL) >= IMAGE_COVERAGE.flag)) frames.push(frame);
-  }
-  return frames;
-}
+export const IMAGE_COVERAGE = { screen: "safety", screenCrops: 96 };
 
 function cropScores({ clip, nsfw, safety }) {
   const explicit = nsfw.hentai + nsfw.porn;

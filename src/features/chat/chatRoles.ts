@@ -39,7 +39,7 @@ export function canTimeout(actor: ChatRole, target: ChatRole): boolean {
 }
 
 export function canBan(actor: ChatRole, target: ChatRole): boolean {
-  return RANK[actor] >= RANK.admin && outranks(actor, target);
+  return RANK[actor] >= RANK.mod && outranks(actor, target);
 }
 
 export function assignableRoles(actor: ChatRole, target: ChatRole): ChatRole[] {

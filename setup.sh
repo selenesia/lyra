@@ -1552,6 +1552,18 @@ http://127.0.0.1:4001 {
         header_up X-Real-IP {lyra_client_ip}
     }
 
+    handle /api/chat/* {
+        reverse_proxy 127.0.0.1:4444 {
+            header_up X-Real-IP {lyra_client_ip}
+            flush_interval -1
+            transport http {
+                keepalive 120s
+                dial_timeout 5s
+                response_header_timeout 120s
+            }
+        }
+    }
+
     handle /api/auth/* {
         reverse_proxy 127.0.0.1:4005 {
             header_up X-Real-IP {lyra_client_ip}

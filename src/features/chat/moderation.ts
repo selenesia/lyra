@@ -1,15 +1,7 @@
 import { readModerationText, squeeze, type ModerationText } from "./moderationText.ts";
+import type { ModerationCategory } from "./moderationNotice.ts";
 
-export type ModerationCategory =
-  | "slur"
-  | "threat"
-  | "self_harm"
-  | "crisis"
-  | "sexual"
-  | "doxxing"
-  | "hate"
-  | "harassment"
-  | "gore";
+export { blockedNotice, isModerationCategory, type ModerationCategory } from "./moderationNotice.ts";
 
 export interface ModerationVerdict {
   allowed: boolean;
@@ -32,29 +24,6 @@ export interface ModerationReading {
 
 interface RuleHit extends ModerationSuspect {
   suspect?: boolean;
-}
-
-const CATEGORY_LABELS: Record<ModerationCategory, string> = {
-  slur: "slurs",
-  threat: "threats",
-  self_harm: "encouraging self-harm",
-  crisis: "self-harm",
-  sexual: "sexual content",
-  doxxing: "sharing personal info",
-  hate: "hate speech",
-  harassment: "harassment",
-  gore: "gore or shock content",
-};
-
-export function isModerationCategory(value: unknown): value is ModerationCategory {
-  return typeof value === "string" && Object.hasOwn(CATEGORY_LABELS, value);
-}
-
-export function blockedNotice(subject: string, category: ModerationCategory, tense: "was" | "would be" = "was"): string {
-  if (category === "crisis") {
-    return `that ${subject} ${tense === "was" ? "was not" : "will not be"} posted.  findahelpline.com can connect you with someone to talk to`;
-  }
-  return `that ${subject} ${tense} blocked for ${CATEGORY_LABELS[category]}`;
 }
 
 const ALLOWED: ModerationVerdict = { allowed: true, strikes: 0 };
@@ -93,6 +62,19 @@ const WORD_SLUR = new RegExp(`^(?:${WORD_SLURS.map(stemPattern).join("|")})${SLU
 const EMBEDDED_SLUR = new RegExp(EMBEDDED_SLURS.map(stemPattern).join("|"));
 const REVERSED_SLUR = new RegExp(`^(?:${REVERSED_SLURS.map(stemPattern).join("|")})$`);
 const EMBEDDED_EXCEPTIONS = /^sniggers?$|^snigger(?:ed|ing)$/;
+const INSERTION_SLURS = ["nigger", "nigga", "faggot", "wetback", "raghead", "towelhead", "jigaboo", "zipperhead"].map(squeeze);
+
+function hasInsertedSlur(token: string): boolean {
+  if (EMBEDDED_EXCEPTIONS.test(token)) return false;
+  const words = [...new Set([squeeze(token), squeeze(token.replace(/(?:es|ed|ah|az|s|z)$/, ""))])];
+  return words.some((word) => INSERTION_SLURS.some((slur) => {
+    if (word.length !== slur.length + 1) return false;
+    for (let index = 1; index < word.length - 1; index += 1) {
+      if (word.slice(0, index) + word.slice(index + 1) === slur) return true;
+    }
+    return false;
+  }));
+}
 
 function phrase(words: string): string {
   return words
@@ -414,6 +396,17 @@ const MINOR_SEXUAL = phrases([
 const CP_TRADE = new RegExp(
   ` ${alt(["send", "sending", "sell", "selling", "buy", "buying", "trade", "trading", "share", "sharing", "drop", "got", "have"])} ${GAP(1)}cp | cp ${alt(["link", "links", "vids", "videos", "pics", "folder", "for sale"])} `,
 );
+const ABUSE_CONTENT = compactList(["csam", "csem"]);
+const ABUSE_PROMOTION = finder([
+  "like", "love", "enjoy", "want", "need", "into", "send", "share", "sharing", "trade", "trading", "sell", "selling",
+  "buy", "buying", "watch", "watching", "download", "get", "find", "have", "got", "make", "making", "collect",
+]);
+const ABUSE_REPORTING = phrases([
+  "report", "reporting", "reported", "remove", "removing", "removed", "block", "blocking", "blocked", "illegal",
+  "harmful", "wrong", "disgusting", "against", "prevent", "preventing", "stop", "stopping", "moderation", "what is",
+  "what does", "means", "meaning", "stands for",
+]);
+const ABUSE_PREVENTION = /^(?:to |help |help to )?(?:report|remove|block|prevent|stop)(?: |$)/;
 const MINOR_AGE =
   /\b(?:[1-9]|1[0-7])\s*(?:yo|y\/o|yrs? old|years? old)\b|\b(?:im|i'm|i am|shes|she's|she is|hes|he's|he is|youre|you're|you are|ur)\s+(?:only\s+|just\s+)?(?:[1-9]|1[0-7])\b(?!\s*(?:am|pm|min|mins|minutes|hours|hrs|days|weeks|%|k\b|m\b|ft|feet|inches|cm|kg|lbs|dollars|bucks|kills|wins|points|:|\.\d))/;
 const SEX_EDUCATION = / sex (?:ed|education) /g;
@@ -504,13 +497,14 @@ function hasPersonalInfo(folded: string): boolean {
 
 function hasSlur(text: ModerationText): boolean {
   const variants = (token: string) => [token, token.replace(/q/g, "g"), token.replace(/ph/g, "f")];
-  if (text.tokens.some((token) => variants(token).some((variant) => WORD_SLUR.test(variant)))) return true;
-  if (text.tokens.some((token) => REVERSED_SLUR.test(token))) return true;
-  const squashed = text.tokens.some((token) => EMBEDDED_EXCEPTIONS.test(token))
-    ? text.tokens.filter((token) => !EMBEDDED_EXCEPTIONS.test(token)).join("")
-    : text.squashed;
-  if (EMBEDDED_SLUR.test(squashed) || EMBEDDED_SLUR.test(squashed.replace(/q/g, "g"))) return true;
-  return SLUR_PHRASES.test(text.plain);
+  const withoutDigits = text.folded.replace(/(?<=[a-z])[0-9]+(?=[a-z])/g, "");
+  const readings = withoutDigits === text.folded ? [text] : [text, readModerationText(withoutDigits)];
+  return readings.some((reading) => {
+    if (reading.tokens.some((token) => variants(token).some((variant) => WORD_SLUR.test(variant) || hasInsertedSlur(variant)))) return true;
+    if (reading.tokens.some((token) => REVERSED_SLUR.test(token))) return true;
+    const squashed = reading.tokens.filter((token) => !EMBEDDED_EXCEPTIONS.test(token)).join("");
+    return EMBEDDED_SLUR.test(squashed) || EMBEDDED_SLUR.test(squashed.replace(/q/g, "g")) || SLUR_PHRASES.test(reading.plain);
+  });
 }
 
 function selfHarmHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
@@ -580,6 +574,15 @@ function harassmentHit(text: ModerationText): RuleHit | null {
 function sexualHit(text: ModerationText): RuleHit | null {
   const plain = text.plain.replace(SEX_EDUCATION, " ");
   const explicit = EXPLICIT.test(plain);
+  if (compactHas(text, ABUSE_CONTENT)) {
+    const mentions = [...plain.matchAll(ABUSE_PROMOTION)];
+    const promotion = mentions.some((match) => {
+      if (negated(plain, match.index)) return false;
+      const following = plain.slice(match.index + match[0].length).trim().split(" ").slice(0, 3).join(" ");
+      return !ABUSE_PREVENTION.test(following);
+    });
+    if (promotion || (!mentions.length && !ABUSE_REPORTING.test(plain))) return blocked("sexual", 3);
+  }
   if (MINOR_SEXUAL.test(plain) || CP_TRADE.test(plain)) return blocked("sexual", 3);
   if (explicit && (MINORS.test(plain) || MINOR_AGE.test(text.folded))) return blocked("sexual", 3);
   if (SEXUAL.test(plain) || SEND_BODY.test(plain) || CUM.test(plain) || RULE_34.test(text.folded)) return blocked("sexual", 2);

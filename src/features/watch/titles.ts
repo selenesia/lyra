@@ -84,10 +84,6 @@ export function isTitleType(value: unknown): value is TitleType {
   return value === "movie" || value === "tv";
 }
 
-export function titleKey(type: TitleType, id: string): string {
-  return `${type}:tmdb:${id}`;
-}
-
 export function coverUrl(url: string | undefined): string | undefined {
   return url ? `/!cover!/${encodeMochiUrl(url)}/` : undefined;
 }

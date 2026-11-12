@@ -365,6 +365,8 @@ pub(super) async fn invalidate_source(
         framex::invalidate(key).await;
     } else if source.provider == StreamProvider::Title {
         titles::invalidate(key).await;
+    } else if source.provider == StreamProvider::Movy {
+        movy::invalidate(key).await;
     }
     let quality_key = provider_cache_key(StreamProvider::Megaplay, key).1;
     if QUALITY_DISCOVERY
@@ -404,6 +406,9 @@ pub(super) async fn reject_source(
     playlist_urls: &[&str],
 ) {
     FAILED_SOURCES.insert(source.playlist_url.clone(), ()).await;
+    if source.provider == StreamProvider::Movy {
+        movy::reject(key, source).await;
+    }
     invalidate_source(key, source, playlist_urls).await;
 }
 

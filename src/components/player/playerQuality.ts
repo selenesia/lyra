@@ -104,7 +104,7 @@ export function pickQuality({
     if (index < 0) refreshAutoQuality();
     setOpenSelector(null);
     if (changed && videoRef.current?.paused) {
-      showToast("success", "please unpause for quality change to apply");
+      showToast("success", "unpause video for quality change to apply");
     }
   }
 

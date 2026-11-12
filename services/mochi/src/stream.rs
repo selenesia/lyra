@@ -26,6 +26,7 @@ use url::Url;
 mod framex;
 mod megaplay;
 mod megavid;
+mod movy;
 mod playlist;
 mod prefetch;
 mod providers;
@@ -65,10 +66,11 @@ enum StreamProvider {
     Framex,
     Framex4k(framex::MovieServer),
     Title,
+    Movy,
 }
 
 impl StreamProvider {
-    const ALL: [Self; 4] = [Self::Framex, Self::Megaplay, Self::Megavid, Self::Title];
+    const ALL: [Self; 5] = [Self::Framex, Self::Megaplay, Self::Megavid, Self::Title, Self::Movy];
 
     fn id(self) -> &'static str {
         match self {
@@ -76,7 +78,29 @@ impl StreamProvider {
             Self::Megavid => "megavid",
             Self::Framex | Self::Framex4k(_) => "framex",
             Self::Title => "framex-title",
+            Self::Movy => "movy",
         }
+    }
+
+    fn public_id(self) -> &'static str {
+        match self {
+            Self::Megaplay => "luna",
+            Self::Megavid => "nova",
+            Self::Framex | Self::Framex4k(_) => "orion",
+            Self::Title => "vega",
+            Self::Movy => "mira",
+        }
+    }
+
+    fn from_id(id: &str) -> Option<Self> {
+        let id = match id {
+            "vela" => "luna",
+            "cygnus" => "nova",
+            "ara" => "vega",
+            "pyxis" => "mira",
+            _ => id,
+        };
+        Self::ALL.into_iter().find(|provider| provider.public_id() == id || provider.id() == id)
     }
 
     fn referer(self) -> &'static str {
@@ -86,6 +110,7 @@ impl StreamProvider {
             Self::Framex => "https://krussdomi.com/",
             Self::Framex4k(server) => server.referer(),
             Self::Title => titles::PAGE_REFERER,
+            Self::Movy => movy::REFERER_URL,
         }
     }
 
@@ -101,11 +126,16 @@ impl StreamProvider {
             );
         } else if self == Self::Title {
             headers.insert("origin", HeaderValue::from_static(titles::PAGE_ORIGIN));
+        } else if self == Self::Movy {
+            headers.insert("origin", HeaderValue::from_static(movy::ORIGIN));
         }
         headers
     }
 
     fn supports(self, key: &EpisodeKey) -> bool {
+        if self == Self::Movy {
+            return key.title.is_some() || key.anilist_id > 0 || key.mal_id > 0;
+        }
         if self == Self::Title || key.title.is_some() {
             return self == Self::Title && key.title.is_some();
         }
@@ -114,7 +144,7 @@ impl StreamProvider {
             Self::Megavid => key.anilist_id > 0 || key.mal_id > 0,
             Self::Framex => key.anilist_id > 0,
             Self::Framex4k(_) => key.anilist_id > 0 && key.episode == 1,
-            Self::Title => false,
+            Self::Title | Self::Movy => false,
         }
     }
 
@@ -129,6 +159,7 @@ impl StreamProvider {
             Self::Framex => framex::resolve(client, key).await,
             Self::Framex4k(server) => framex::resolve_4k(client, key, server).await,
             Self::Title => titles::resolve(client, key).await,
+            Self::Movy => Box::pin(movy::resolve(client, key)).await,
         }
     }
 }
@@ -223,6 +254,7 @@ struct EpisodeKey {
     session: String,
     prefer_4k: bool,
     auto_4k: bool,
+    provider: Option<StreamProvider>,
 }
 
 #[derive(Debug, Clone)]
@@ -316,9 +348,11 @@ where
         let request = request.map_err(|_| ResolveError::Invalid)?;
         crate::safe_dns::validate_public_target(request.url())
             .map_err(|_| ResolveError::Invalid)?;
+        movy::admit_request(request.url())?;
         let safe_to_retry = crate::proxy::safe_to_retry(request.method());
         match tokio::time::timeout(remaining, client.execute(request)).await {
             Ok(Ok(response)) => {
+                movy::observe_response(&response)?;
                 let retryable = response.status() == StatusCode::TOO_MANY_REQUESTS
                     || response.status() == StatusCode::BAD_GATEWAY
                     || response.status() == StatusCode::SERVICE_UNAVAILABLE
@@ -700,7 +734,7 @@ pub async fn stream_info_handler(
                 return Err(ResolveError::Busy);
             }
             let available = has_4k(&selected.source)
-                || discover_4k(&state.asset_client, &key, Some(selected.source.provider))
+                || key.provider.is_none() && discover_4k(&state.asset_client, &key, Some(selected.source.provider))
                     .await?
                     .is_some();
             return Ok(Json(serde_json::json!({ "available_4k": available })).into_response());
@@ -761,12 +795,17 @@ pub async fn stream_info_handler(
                 "quality_fallback": key.prefer_4k && !has_4k(&source),
                 "tracks": tracks,
                 "source": {
-                    "provider": source.provider.id(),
-                    "id": source.internal_id,
+                    "provider": source.provider.public_id(),
+                    "id": source.generation.to_string(),
                     "generation": source.generation,
-                    "server": source.metadata.server,
+                    "server": source.provider.public_id(),
                     "language": source.language,
                 },
+                "providers": StreamProvider::ALL
+                    .into_iter()
+                    .filter(|provider| provider.supports(&key))
+                    .map(StreamProvider::public_id)
+                    .collect::<Vec<_>>(),
                 "media": key.title.map(|title| title.kind.id()).unwrap_or("anime"),
                 "languages": source.metadata.languages,
                 "duration": source.metadata.duration,
@@ -869,8 +908,8 @@ pub async fn stream_metrics_handler(State(state): State<Arc<AppState>>) -> Respo
     let rewrite_capacity = state.html_rewrite_permit.snapshot();
     let providers = PROVIDER_HEALTH.lock().unwrap_or_else(|error| error.into_inner())
         .iter().map(|(provider, health)| serde_json::json!({
-            "provider": provider.id(),
-            "adapter": format!("{provider:?}"),
+            "provider": provider.public_id(),
+            "adapter": provider.public_id(),
             "successes": health.successes, "missing": health.missing, "errors": health.errors,
             "skipped": health.skipped, "total_ms": health.elapsed_ms,
             "open": health.open_until.is_some_and(|until| Instant::now() < until),
@@ -967,6 +1006,7 @@ pub async fn reclaim_caches() {
     tokio::join!(
         framex::reclaim_caches(),
         titles::reclaim_caches(),
+        movy::reclaim_caches(),
         SOURCE_CACHE.run_pending_tasks(),
         PROVIDER_FAILURES.run_pending_tasks(),
         QUALITY_DISCOVERY.run_pending_tasks(),

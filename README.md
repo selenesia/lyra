@@ -1,7 +1,6 @@
 <h3>
-	<img src="https://raw.githubusercontent.com/selenesia/lyra/prod/src/assets/images/peaks/natsu.png" width="100"/><br/>
+<img src="https://raw.githubusercontent.com/selenesia/lyra/prod/src/assets/images/peaks/natsu.png" width="100"/><br/>
 lyra :3
-a really cool web-proxy
 </h3>
 
 discord.gg/cisco

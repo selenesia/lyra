@@ -40,6 +40,7 @@ export default function GamesCatalog({
     hideOtherViews: () => {
       window.hideWatchMenu?.();
       window.hideChatPage?.();
+      window.hideSettingsPage?.();
     },
     showOnMount: openOnMount,
   });

@@ -1,3 +1,5 @@
+@import "../base/settings-button.css";
+
 ::-moz-selection {
   background-color: var(--selection-bg);
   color: var(--selection-text);
@@ -55,6 +57,77 @@
   font-size: clamp(16px, 2.2vw, 28px);
   line-height: 1.4;
   text-shadow: 0 1px 2px #000;
+}
+.player-captions {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+  color: var(--caption-color, #fff);
+  font-family: "Lexend", sans-serif;
+  font-size: calc(var(--caption-base, 20px) * var(--caption-scale, 1));
+  line-height: 1.45;
+}
+.player-caption-free {
+  position: absolute;
+  inset: 0;
+}
+.player-caption-free .player-caption-cue {
+  position: absolute;
+  left: 0;
+}
+.player-caption-stack {
+  position: absolute;
+  right: 0;
+  bottom: 16px;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  padding: 0 4%;
+  box-sizing: border-box;
+  transition: transform var(--motion-control) var(--motion-ease);
+}
+.player-caption-cue {
+  box-sizing: border-box;
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+.player-caption-text {
+  padding: 0.1em 0.45em;
+  border-radius: 0.25em;
+  background: var(--caption-background, #000b);
+  text-shadow: var(--caption-shadow, 0 1px 2px #000);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.player-caption-text .white {
+  color: #fff;
+}
+.player-caption-text .lime {
+  color: #0f0;
+}
+.player-caption-text .cyan {
+  color: #0ff;
+}
+.player-caption-text .red {
+  color: #f00;
+}
+.player-caption-text .yellow {
+  color: #ff0;
+}
+.player-caption-text .magenta {
+  color: #f0f;
+}
+.player-caption-text .blue {
+  color: #00f;
+}
+.player-caption-text .black {
+  color: #000;
 }
 
 .video-loading {
@@ -429,7 +502,7 @@
     transform var(--motion-control) var(--motion-ease);
 }
 .player-selector-options
-  button:not(.episode-selector-button):not(.episode-season-tab) {
+  button:not(.episode-selector-button):not(.episode-season-tab):not(:where(.settings-page-button)) {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -450,11 +523,11 @@
     color var(--motion-control) var(--motion-ease);
 }
 .player-selector-options
-  button:not(.episode-selector-button):not(.episode-season-tab):hover,
+  button:not(.episode-selector-button):not(.episode-season-tab):not(:where(.settings-page-button)):hover,
 .player-selector-options:not(.player-subtitle-options):not(.player-audio-options):not(
     .player-quality-options
   )
-  button:not(.episode-selector-button):not(.episode-season-tab).is-active {
+  button:not(.episode-selector-button):not(.episode-season-tab):not(:where(.settings-page-button)).is-active {
   background: var(--bg-surface-active);
   color: var(--text-primary);
 }
@@ -521,6 +594,53 @@
 .player-option-check {
   flex: 0 0 auto;
   color: var(--text-white);
+}
+.player-menu-divider {
+  height: 1px;
+  margin: 3px 10px;
+  background: var(--border-faint);
+}
+.player-caption-open-icon,
+.player-caption-back-icon {
+  flex: 0 0 auto;
+  color: var(--color-icon-muted);
+  transform: rotate(-90deg);
+}
+.player-caption-back-icon {
+  transform: rotate(90deg);
+}
+.player-selector-options.player-subtitle-options button.player-caption-back {
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--text-primary);
+}
+.player-caption-style {
+  display: flex;
+  flex-direction: column;
+  width: min(310px, calc(100vw - 48px));
+  max-width: 100%;
+}
+.player-caption-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.player-caption-label {
+  color: var(--color-sublabel);
+  font-size: 13px;
+}
+.player-caption-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.player-caption-choices .settings-page-button {
+  flex: 1 1 56px;
+  min-width: 0;
+}
+.player-caption-reset {
+  margin: 8px 10px;
 }
 .time-display {
   font-size: 13px;
@@ -590,6 +710,66 @@
   opacity: 1;
   pointer-events: auto;
 }
+.volume-slider-wrap.is-boostable {
+  --volume-boost-color: color-mix(
+    in srgb,
+    var(--accent-color) 45%,
+    var(--text-white)
+  );
+}
+.volume-slider-wrap.is-boostable .volume-slider {
+  width: 112px;
+}
+.volume-wrapper:hover .volume-slider-wrap.is-boostable,
+.volume-wrapper:has(:focus-visible, .volume-slider:active)
+  .volume-slider-wrap.is-boostable {
+  width: 112px;
+}
+.volume-slider-wrap.is-boostable
+  .volume-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--accent-color) min(var(--vol-pct, 0%), 50%),
+    var(--volume-boost-color) min(var(--vol-pct, 0%), 50%),
+    var(--volume-boost-color) var(--vol-pct, 0%),
+    var(--border-faint) var(--vol-pct, 0%)
+  );
+}
+.volume-slider-wrap.is-boostable .volume-slider::-moz-range-track {
+  background: linear-gradient(
+    to right,
+    var(--accent-color) min(var(--vol-pct, 0%), 50%),
+    var(--volume-boost-color) min(var(--vol-pct, 0%), 50%),
+    var(--volume-boost-color) var(--vol-pct, 0%),
+    var(--border-faint) var(--vol-pct, 0%)
+  );
+}
+.volume-slider-wrap.is-boostable::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 10px;
+  margin: -5px 0 0 -1px;
+  border-radius: 1px;
+  background: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-control) var(--motion-ease);
+}
+.volume-wrapper:hover .volume-slider-wrap.is-boostable::after,
+.volume-wrapper:has(:focus-visible, .volume-slider:active)
+  .volume-slider-wrap.is-boostable::after {
+  opacity: 0.7;
+}
+.volume-boost-label {
+  margin-left: 8px;
+  color: var(--text-white);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   margin-top: -5px;
@@ -625,6 +805,21 @@
 }
 
 @media (max-width: 700px) {
+  .controls-row:has(.player-caption-options) {
+    position: relative;
+  }
+  .player-subtitle-control:has(.player-caption-options) {
+    position: static;
+  }
+  .player-caption-options {
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
+  }
+  .player-caption-style {
+    width: auto;
+  }
   .player-controls {
     padding: 36px max(12px, env(safe-area-inset-right))
       max(10px, env(safe-area-inset-bottom))
@@ -698,6 +893,16 @@
     width: 64px;
     opacity: 1;
     pointer-events: auto;
+  }
+  .volume-slider-wrap.is-boostable,
+  .volume-wrapper:hover .volume-slider-wrap.is-boostable,
+  .volume-wrapper:has(:focus-visible, .volume-slider:active)
+    .volume-slider-wrap.is-boostable,
+  .volume-slider-wrap.is-boostable .volume-slider {
+    width: 88px;
+  }
+  .volume-slider-wrap.is-boostable::after {
+    opacity: 0.7;
   }
   .seek-bar-thumb {
     opacity: 1;

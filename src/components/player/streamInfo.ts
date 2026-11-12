@@ -19,6 +19,7 @@ export interface StreamInfoResponse {
   tracks?: unknown;
   media?: "anime" | "movie" | "tv";
   languages?: unknown;
+  providers?: unknown;
   source?: {
     provider?: string;
     id?: string;

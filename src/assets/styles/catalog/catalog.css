@@ -34,9 +34,9 @@ body.watch-view .meow {
 }
 
 body.games-view .main-container,
-body.games-view #bookmarks-container,
+body.games-view .bookmarks-container,
 body.watch-view .main-container,
-body.watch-view #bookmarks-container {
+body.watch-view .bookmarks-container {
   display: none !important;
 }
 

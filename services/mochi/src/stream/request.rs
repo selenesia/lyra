@@ -57,6 +57,19 @@ fn parse_title_key(
 }
 
 pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
+    let mut key = parse_episode_identity(uri)?;
+    key.provider = match query_value(uri, "provider").as_deref() {
+        None | Some("" | "auto") => None,
+        Some(id) => Some(
+            StreamProvider::from_id(id)
+                .filter(|provider| provider.supports(&key))
+                .ok_or(ResolveError::Invalid)?,
+        ),
+    };
+    Ok(key)
+}
+
+fn parse_episode_identity(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
     let mut anilist_id = 0;
     let mut mal_id = 0;
     let mut anikoto_episode_id = String::new();
@@ -136,6 +149,7 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
             session,
             prefer_4k,
             auto_4k,
+            provider: None,
         });
     }
     if !tmdb_id.is_empty() {
@@ -166,6 +180,7 @@ pub(super) fn parse_episode_key(uri: &Uri) -> Result<EpisodeKey, ResolveError> {
         session,
         prefer_4k,
         auto_4k,
+        provider: None,
     })
 }
 
@@ -220,6 +235,9 @@ pub(super) fn query_string(
         query.append_pair("preferred_quality", "2160p");
     } else if key.auto_4k {
         query.append_pair("preferred_quality", "auto");
+    }
+    if let Some(provider) = key.provider {
+        query.append_pair("provider", provider.public_id());
     }
     if !key.session.is_empty() {
         query.append_pair("session", &key.session);

@@ -155,8 +155,7 @@ body.chat-view #chat-icon svg path {
 .window-controls a[data-tooltip]:hover::after,
 .omnibox-icon[data-tooltip]:hover::before,
 .omnibox-icon[data-tooltip]:hover::after,
-.chat-tool[data-tooltip]:is(:hover, :focus-visible)::before,
-.chat-tool[data-tooltip]:is(:hover, :focus-visible)::after {
+.chat-tooltip {
   opacity: 0;
 }
 
@@ -164,8 +163,7 @@ body.chat-view #chat-icon svg path {
 .rivet-toolbar-trigger[data-tooltip]:hover::before,
 .nav-controls a[data-tooltip]:hover::before,
 .window-controls a[data-tooltip]:hover::before,
-.omnibox-icon[data-tooltip]:hover::before,
-.chat-tool[data-tooltip]:is(:hover, :focus-visible)::before {
+.omnibox-icon[data-tooltip]:hover::before {
   content: "";
   position: absolute;
   top: calc(100% + 5px);
@@ -185,7 +183,7 @@ body.chat-view #chat-icon svg path {
 .nav-controls a[data-tooltip]:hover::after,
 .window-controls a[data-tooltip]:hover::after,
 .omnibox-icon[data-tooltip]:hover::after,
-.chat-tool[data-tooltip]:is(:hover, :focus-visible)::after {
+.chat-tooltip {
   content: attr(data-tooltip);
   position: absolute;
   top: calc(100% + 9px);

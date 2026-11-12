@@ -6,8 +6,6 @@ const CROP_PIXELS = CROP_SIDE * CROP_SIDE;
 const MAX_CROPS_PER_FRAME = 4;
 const MAX_DECODED_PIXELS = 512 * 1024 * 1024;
 const MAX_STILL_PIXELS = 4096 * 4096;
-const THUMB_CELLS = 8;
-const NOVELTY = 24;
 const PNG_CHANNELS = { 0: 1, 2: 3, 4: 2, 6: 4 };
 
 export class ImageUnreadable extends Error {}
@@ -283,51 +281,6 @@ function onWhite(rgba, at, channel) {
   return (rgba[at + channel] * alpha + 255 * (255 - alpha)) / 255;
 }
 
-function thumbnail(frame) {
-  const cells = new Float32Array(THUMB_CELLS * THUMB_CELLS * 3);
-  const counts = new Uint32Array(THUMB_CELLS * THUMB_CELLS);
-  const columns = Int32Array.from({ length: frame.width }, (_, x) => Math.floor((x * THUMB_CELLS) / frame.width));
-  for (let y = 0; y < frame.height; y += 1) {
-    const row = Math.floor((y * THUMB_CELLS) / frame.height) * THUMB_CELLS;
-    for (let x = 0; x < frame.width; x += 1) {
-      const cell = row + columns[x];
-      const at = (y * frame.width + x) * 4;
-      counts[cell] += 1;
-      for (let channel = 0; channel < 3; channel += 1) cells[cell * 3 + channel] += onWhite(frame.rgba, at, channel);
-    }
-  }
-  for (let cell = 0; cell < counts.length; cell += 1) {
-    for (let channel = 0; channel < 3; channel += 1) cells[cell * 3 + channel] /= counts[cell] || 1;
-  }
-  return cells;
-}
-
-function distance(a, b) {
-  let largest = 0;
-  for (let cell = 0; cell < a.length; cell += 3) {
-    const change = Math.abs(a[cell] - b[cell]) + Math.abs(a[cell + 1] - b[cell + 1]) + Math.abs(a[cell + 2] - b[cell + 2]);
-    largest = Math.max(largest, change / 3);
-  }
-  return largest;
-}
-
-export function pickFrames(thumbnails, limit) {
-  const picked = [0];
-  const nearest = thumbnails.map((thumb) => distance(thumb, thumbnails[0]));
-  while (picked.length < limit) {
-    let best = -1;
-    for (let index = 0; index < nearest.length; index += 1) {
-      if (nearest[index] >= NOVELTY && (best < 0 || nearest[index] > nearest[best])) best = index;
-    }
-    if (best < 0) break;
-    picked.push(best);
-    for (let index = 0; index < nearest.length; index += 1) {
-      nearest[index] = Math.min(nearest[index], distance(thumbnails[index], thumbnails[best]));
-    }
-  }
-  return picked.sort((a, b) => a - b);
-}
-
 export function cropBoxes(width, height) {
   const long = Math.max(width, height);
   const short = Math.min(width, height);
@@ -396,7 +349,7 @@ async function planStill(bytes, screenSide) {
   const boxes = cropBoxes(frame.width, frame.height);
   const screen = new Uint8ClampedArray(boxes.length * 3 * screenSide * screenSide);
   boxes.forEach((box, slot) => writeCrop(frame, box, screen, slot, screenSide));
-  return { boxes: boxes.length, frames: 1, thumbnails: [thumbnail(frame)], screen, render: () => cropFrames([frame], boxes) };
+  return { boxes: boxes.length, frames: 1, screen, render: () => cropFrames([frame], boxes) };
 }
 
 function planGif(bytes, screenSide, screenCrops) {
@@ -408,20 +361,17 @@ function planGif(bytes, screenSide, screenCrops) {
   const screen = new Uint8ClampedArray(Math.min(frames, maxFrames) * boxes.length * cropSize);
   const seen = new Set();
   const playback = [];
-  const thumbnails = [];
   playGif(bytes, (frame, index) => {
     const key = digest(frame);
     if (seen.has(key)) return;
     if (playback.length >= maxFrames) throw new ImageTooVaried(negativeMessage("gif has too many different frames to check"));
     seen.add(key);
     boxes.forEach((box, slot) => writeCrop(frame, box, screen, playback.length * boxes.length + slot, screenSide));
-    thumbnails.push(thumbnail(frame));
     playback.push(index);
   });
   return {
     boxes: boxes.length,
     frames: playback.length,
-    thumbnails,
     screen: screen.subarray(0, playback.length * boxes.length * cropSize),
     render(wanted) {
       const order = new Map(wanted.map((unique, position) => [playback[unique], position]));

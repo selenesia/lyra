@@ -18,7 +18,7 @@ export function createSourceRecovery(
         error.details === Hls.ErrorDetails.SUBTITLE_TRACK_LOAD_TIMEOUT
       ) return false;
       if (timer !== undefined) return true;
-      if (error.response?.code !== 409 || attempts >= 2) return false;
+      if (error.response?.code !== 409 || attempts >= 4) return false;
       attempts += 1;
       played = 0;
       timer = setTimeout(() => {

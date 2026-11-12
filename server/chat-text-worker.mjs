@@ -5,6 +5,7 @@ import { TEXT_CLASSIFIERS, TEXT_WINDOW } from "./chat-text-model.mjs";
 import { scoreText } from "./chat-text-policy.mjs";
 import { createByteLevelTokenizer } from "./chat-text-tokenizer.mjs";
 import { NEGATIVE, negativeMessage } from "../src/core/runtime/messages.ts";
+import { modelTextVariants } from "../src/features/chat/moderationText.ts";
 
 const THREADS = Math.max(1, Math.min(2, Math.floor(os.availableParallelism() / 2)));
 const SESSION_OPTIONS = { intraOpNumThreads: THREADS, interOpNumThreads: 1, executionMode: "sequential", enableCpuMemArena: false };
@@ -86,7 +87,12 @@ async function readText(loaded, text) {
 }
 
 export async function scanText(loaded, text) {
-  const readings = await readText(loaded, text);
+  const readings = { moderation: {}, toxicity: {} };
+  for (const variant of modelTextVariants(text)) {
+    const result = await readText(loaded, variant);
+    keepHighest(readings.moderation, result.moderation);
+    keepHighest(readings.toxicity, result.toxicity);
+  }
   return { scores: scoreText(readings), readings };
 }
 

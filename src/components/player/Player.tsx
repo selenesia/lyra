@@ -47,7 +47,28 @@ import {
   IconDownsize,
 } from "../icons";
 import { attachSeekBar } from "./seekBar.ts";
-import { attachCaptionLayout } from "./captionLayout.ts";
+import {
+  type CaptionRenderer,
+  attachCaptionRenderer,
+} from "./captionRenderer.ts";
+import {
+  type CaptionStyleName,
+  CAPTION_STYLE_KEY,
+  DEFAULT_CAPTION_STYLE,
+  captionStyleVariables,
+  parseCaptionStyle,
+  readCaptionStyle,
+  saveCaptionStyle,
+} from "./captionStyle.ts";
+import {
+  type VolumeBoost,
+  clampVolumeLevel,
+  createVolumeBoost,
+  readStoredVolumeLevel,
+  sliderToVolumeLevel,
+  storeVolumeLevel,
+  volumeBoostSupported,
+} from "./volumeBoost.ts";
 import {
   applySubtitleTrack,
   audioLabels,
@@ -100,6 +121,7 @@ import { attachPlayerShortcuts } from "./playerShortcuts.ts";
 import { attachControlsActivity } from "./playerActivity.ts";
 import { attachMediaEvents } from "./playerMediaEvents.ts";
 import { switchPlayerLanguage, pickAudioTrack } from "./playerLanguage.ts";
+import { readProviderChoice, switchPlayerProvider } from "./playerProvider.ts";
 import {
   loadSidecarSubtitle,
   pickSubtitle,
@@ -127,6 +149,7 @@ import {
   renderSubtitleMenu,
   renderAudioMenu,
   renderLanguageMenu,
+  renderProviderMenu,
   renderEpisodeMenu,
 } from "./playerMenus.tsx";
 import {
@@ -185,6 +208,9 @@ export default function Player() {
           : readAnimeLanguage(),
       );
   const [language, setLanguage] = useState<string>(initialLanguage);
+  const [providerChoice, setProviderChoice] = useState(() => readProviderChoice(params));
+  const [streamProviders, setStreamProviders] = useState<string[]>([]);
+  const [changingProvider, setChangingProvider] = useState(false);
   const trackVersion: "sub" | "dub" = titleMode || language === "dub" ? "dub" : "sub";
   const [streamLanguages, setStreamLanguages] = useState<string[]>([]);
   const [sourceLanguage, setSourceLanguage] = useState("");
@@ -263,7 +289,7 @@ export default function Player() {
   const start4k = auto4k && failed4kContext !== playbackContext;
   const qualityRequest = request4k ? "2160p" : start4k ? "auto" : "";
   const streamParams = useCallback(
-    (nextLanguage: string, quality: string): URLSearchParams | null => {
+    (nextLanguage: string, quality: string, provider = providerChoice): URLSearchParams | null => {
       const query = new URLSearchParams({
         episode: String(sourceEpisodeNumber),
         language: nextLanguage,
@@ -271,18 +297,19 @@ export default function Player() {
       });
       if (quality) query.set("preferred_quality", quality);
       if (titlePlayback) {
-        return appendTitleStreamParams(query, titlePlayback, episodeNumber) ? query : null;
-      }
-      if (
+        if (!appendTitleStreamParams(query, titlePlayback, episodeNumber)) return null;
+      } else if (
         !(episodeNumber > 0 || playbackIds.anikotoEpisode) ||
         !hasMegaPlayIdentifier(playbackIds)
       ) {
         return null;
+      } else {
+        appendMegaPlayParams(query, playbackIds);
       }
-      appendMegaPlayParams(query, playbackIds);
+      if (provider) query.set("provider", provider);
       return query;
     },
-    [sourceEpisodeNumber, titlePlayback, episodeNumber, playbackIds],
+    [sourceEpisodeNumber, titlePlayback, episodeNumber, playbackIds, providerChoice],
   );
   const streamQuery = streamParams(language, qualityRequest);
   const streamQueryKey = streamQuery?.toString() || "";
@@ -323,6 +350,7 @@ export default function Player() {
     playbackIds.mal || 0,
     playbackIds.anikotoEpisode || "",
     qualityRequest,
+    providerChoice,
   ].join("|");
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -361,19 +389,24 @@ export default function Player() {
   const scrubbingRef = useRef(false);
   const volumeDraggingRef = useRef(false);
   const lastVolumeRef = useRef(1);
+  const boostable = useMemo(volumeBoostSupported, []);
+  const initialVolumeLevel = useMemo(
+    () => readStoredVolumeLevel(boostable),
+    [boostable],
+  );
+  const [boostLevel, setBoostLevel] = useState(() =>
+    Math.max(100, initialVolumeLevel),
+  );
+  const volumeBoostRef = useRef<VolumeBoost | null>(null);
   const languageRequestRef = useRef<AbortController | null>(null);
+  const providerRequestRef = useRef<AbortController | null>(null);
   const languageStreamInfoRef = useRef<{
     params: string;
     info: StreamInfoResponse;
   } | null>(null);
   const controlsFrameRef = useRef<number | null>(null);
   const [mediaState, setMediaState] = useState<MediaState>(() => {
-    const storedVolumeValue = readPlayerStorage("lyra-anime-volume");
-    const storedVolume =
-      storedVolumeValue === null ? Number.NaN : Number(storedVolumeValue);
-    const initialVolume = Number.isFinite(storedVolume)
-      ? Math.max(0, Math.min(100, storedVolume))
-      : 100;
+    const initialVolume = Math.min(100, initialVolumeLevel);
     return {
       status: "loading",
       sourceReady: false,
@@ -584,7 +617,9 @@ export default function Player() {
   }, [request4k, start4k, episodeContext, language, titleMode]);
 
   const unavailableMessage = useCallback((status?: number) => negativeMessage(
-    status === 404
+    status === 404 && providerChoice
+      ? "this server is unavailable for this title; try another server"
+      : status === 404
       ? titleKind === "movie"
         ? "this movie is unavailable from all providers"
         : isAnimeMovieFormat(format)
@@ -593,13 +628,16 @@ export default function Player() {
       : titleKind === "movie"
         ? "unable to load this movie; please try again"
         : "unable to load this episode; please try again",
-  ), [format, titleKind]);
+  ), [format, titleKind, providerChoice]);
   const displayDuration = mediaState.duration ?? 0;
   const buffering = mediaState.buffering;
   const loading = mediaState.status === "loading";
   const loadError = mediaState.error || "";
   const volume = mediaState.volume;
   const muted = mediaState.muted;
+  const volumeLevel = volume >= 100 ? boostLevel : volume;
+  const volumeLevelRef = useRef(volumeLevel);
+  volumeLevelRef.current = volumeLevel;
   const durationLabel =
     displayDuration > 0 ? formatTime(displayDuration) : "--:--";
   const displayDurationRef = useRef(displayDuration);
@@ -703,6 +741,7 @@ export default function Player() {
         autoNextTimerRef.current = null;
       }
       languageRequestRef.current?.abort();
+      providerRequestRef.current?.abort();
       if (controlsFrameRef.current !== null) {
         cancelAnimationFrame(controlsFrameRef.current);
       }
@@ -760,12 +799,14 @@ export default function Player() {
   useEffect(() => {
     if (!openSelector) return;
     const close = (event: MouseEvent) => {
-      if (
-        !(event.target instanceof Element) ||
-        !event.target.closest(".player-control-popover")
-      ) {
-        setOpenSelector(null);
-      }
+      const insideMenu = event
+        .composedPath()
+        .some(
+          (node) =>
+            node instanceof Element &&
+            node.classList.contains("player-control-popover"),
+        );
+      if (!insideMenu) setOpenSelector(null);
     };
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
@@ -855,33 +896,63 @@ export default function Player() {
     });
   }, [videoSrc, seekTo, renderPlaybackTime, resetTimer]);
 
-  const handleVolume = useCallback(
-    (event: Event) => {
-      const volume = Number((event.target as HTMLInputElement).value);
+  const applyVolumeLevel = useCallback(
+    (level: number) => {
       const video = videoRef.current;
-      if (!video || !Number.isFinite(volume)) return;
-      video.volume = Math.max(0, Math.min(1, volume / 100));
+      if (!video) return;
+      const next = clampVolumeLevel(level, boostable);
+      video.volume = Math.min(1, next / 100);
       video.muted = false;
       if (video.volume > 0) lastVolumeRef.current = video.volume;
+      volumeLevelRef.current = next;
+      setBoostLevel(Math.max(100, next));
+      volumeBoostRef.current?.setLevel(next);
       syncMediaState();
     },
-    [syncMediaState],
+    [boostable, syncMediaState],
+  );
+
+  const handleVolume = useCallback(
+    (event: Event) => {
+      const position = Number((event.target as HTMLInputElement).value);
+      if (!Number.isFinite(position)) return;
+      applyVolumeLevel(boostable ? sliderToVolumeLevel(position) : position);
+    },
+    [applyVolumeLevel, boostable],
+  );
+
+  const stepVolume = useCallback(
+    (delta: number) => {
+      const next = clampVolumeLevel(
+        (mediaStateRef.current.muted ? 0 : volumeLevelRef.current) + delta,
+        boostable,
+      );
+      applyVolumeLevel(next);
+      storeVolumeLevel(next);
+    },
+    [applyVolumeLevel, boostable],
   );
 
   const volumeSliderRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     const slider = volumeSliderRef.current;
     if (!slider) return;
-    const persistVolume = () => {
-      const volume = Number(slider.value);
-      if (!Number.isFinite(volume)) return;
-      try {
-        localStorage.setItem("lyra-anime-volume", String(volume));
-      } catch {}
-    };
+    const persistVolume = () => storeVolumeLevel(volumeLevelRef.current);
     slider.addEventListener("change", persistVolume);
     return () => slider.removeEventListener("change", persistVolume);
   }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !boostable) return;
+    const boost = createVolumeBoost(video);
+    volumeBoostRef.current = boost;
+    boost.setLevel(initialVolumeLevel);
+    return () => {
+      volumeBoostRef.current = null;
+      boost.destroy();
+    };
+  }, [boostable, initialVolumeLevel]);
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current;
@@ -1053,7 +1124,9 @@ export default function Player() {
         session: streamSessionRef.current,
       });
       if (quality) query.set("preferred_quality", quality);
-      return appendTitleStreamParams(query, titlePlayback, episodeNumber + 1) ? `/stream/watch/playlist?${query}` : "";
+      if (!appendTitleStreamParams(query, titlePlayback, episodeNumber + 1)) return "";
+      if (providerChoice) query.set("provider", providerChoice);
+      return `/stream/watch/playlist?${query}`;
     }
     return buildNextEpisodeStreamUrl(
       episodeNumber + 1,
@@ -1062,8 +1135,9 @@ export default function Player() {
       language === "dub" ? "dub" : "sub",
       streamSessionRef.current,
       quality,
+      providerChoice,
     );
-  }, [episodeNumber, episodeCount, format, auto4k, titlePlayback, language, episodeParts, identityIds]);
+  }, [episodeNumber, episodeCount, format, auto4k, titlePlayback, language, episodeParts, identityIds, providerChoice]);
 
   useEffect(() => preloadNextEpisode({
     preloadSource, videoSrc, nextVideoSrc,
@@ -1145,7 +1219,7 @@ export default function Player() {
     streamQuery, titleMode, setStreamLanguages, setSourceLanguage,
     setLoadingStreamInfo, sourceGenerationRef, sourceContextRef,
     manifestDurationRef, setIntroMarker, setOutroMarker, language,
-    languageStreamInfoRef, syncMediaState, setStreamProvider,
+    languageStreamInfoRef, syncMediaState, setStreamProvider, setStreamProviders,
     fallbackPendingRef, requested4kContext, playbackContext, request4k,
     notify4kFallback, setSubtitleTracks, notifyPreference, mediaStateRef,
     unavailableMessage,
@@ -1265,6 +1339,17 @@ export default function Player() {
     ],
   );
 
+  const changeProvider = useCallback(
+    (nextProvider: string) => switchPlayerProvider({
+    setOpenSelector, providerChoice, changingProvider, language, qualityRequest,
+    streamParams, providerRequestRef, setChangingProvider, videoRef,
+    sourceContextRef, sourceContextGenerationRef, sourceSwitchTimeRef,
+    pendingSeekRef, playAfterSeekRef, playIntentRef, persistProgress,
+    mediaStateRef, languageStreamInfoRef, setProviderChoice,
+  }, nextProvider),
+    [providerChoice, changingProvider, language, qualityRequest, streamParams, persistProgress],
+  );
+
   useEffect(() => attachMediaEvents({
     videoRef, mediaSessionRef, sourceContextKey, sourceContextRef,
     mediaStateRef, manifestDurationRef, pendingSeekRef, renderPlaybackTime,
@@ -1289,7 +1374,7 @@ export default function Player() {
 
   useEffect(() => attachPlayerShortcuts({
     selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
-    displayDurationRef, seekTo, togglePlay, pendingSeekRef, syncMediaState,
+    displayDurationRef, seekTo, togglePlay, pendingSeekRef, stepVolume,
     toggleMute, toggleFullscreen, toggleCaptions, setSpeed,
   }), [
     togglePlay,
@@ -1297,7 +1382,7 @@ export default function Player() {
     toggleFullscreen,
     toggleCaptions,
     seekTo,
-    syncMediaState,
+    stepVolume,
     setSpeed,
     resetTimer,
   ]);
@@ -1374,13 +1459,57 @@ export default function Player() {
     Boolean(loadError) ||
     openSelector !== null ||
     !playbackStarted;
+  const [captionStyle, setCaptionStyle] = useState(readCaptionStyle);
+  const captionVariables = useMemo(
+    () => captionStyleVariables(captionStyle),
+    [captionStyle],
+  );
+  const chooseCaptionStyle = useCallback(
+    (name: CaptionStyleName, value: string) => {
+      setCaptionStyle((current) => {
+        const next = parseCaptionStyle(
+          JSON.stringify({ ...current, [name]: value }),
+        );
+        saveCaptionStyle(next);
+        return next;
+      });
+    },
+    [],
+  );
+  const resetCaptionStyle = useCallback(() => {
+    saveCaptionStyle(DEFAULT_CAPTION_STYLE);
+    setCaptionStyle({ ...DEFAULT_CAPTION_STYLE });
+  }, []);
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === CAPTION_STYLE_KEY) setCaptionStyle(readCaptionStyle());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const captionLayerRef = useRef<HTMLDivElement | null>(null);
+  const captionRendererRef = useRef<CaptionRenderer | null>(null);
   useLayoutEffect(() => {
     const video = videoRef.current;
+    const layer = captionLayerRef.current;
     const controls =
       containerRef.current?.querySelector<HTMLElement>(".player-controls");
-    if (video && controls)
-      return attachCaptionLayout(video, controls, controlsVisible);
-  }, [controlsVisible, subtitleTracks, selectedSubtitle, loadedSubtitle]);
+    if (!video || !layer || !controls) return;
+    const renderer = attachCaptionRenderer(video, layer, controls);
+    captionRendererRef.current = renderer;
+    return () => {
+      captionRendererRef.current = null;
+      renderer.destroy();
+    };
+  }, []);
+  const captionSample =
+    openSelector === "captionStyle" ? "this is how your subtitles look" : null;
+  useLayoutEffect(() => {
+    captionRendererRef.current?.update({
+      controlsVisible,
+      sample: captionSample,
+    });
+  }, [controlsVisible, captionSample]);
   const playControlActive = !mediaState.paused && !mediaState.ended;
   const requestedQuality =
     selectedQuality >= 0
@@ -1399,7 +1528,7 @@ export default function Player() {
     selectedQuality >= 0 && selectedQuality !== activeQuality,
   );
   const audioMenuLabels = useMemo(
-    () => audioLabels(audioTracks, streamProvider === "framex"),
+    () => audioLabels(audioTracks, streamProvider === "orion"),
     [audioTracks, streamProvider],
   );
   const selectedAudioTrack = audioTracks[activeAudioTrack]
@@ -1421,7 +1550,7 @@ export default function Player() {
   const languageMenu = useMemo(() => {
     if (!titleMode) {
       return {
-        visible: streamProvider !== null && streamProvider !== "framex",
+        visible: streamProvider !== null && streamProvider !== "orion",
         value: language,
         label: language,
         options: (["sub", "dub"] as const).map((option) => ({ value: option, label: option })),
@@ -1499,6 +1628,11 @@ export default function Player() {
               />
             )}
         </video>
+        <div
+          ref={captionLayerRef}
+          class="player-captions"
+          style={captionVariables}
+        />
         {loadError && (
           <div class="video-loading is-error">
             <span class="loading-status">{loadError}</span>
@@ -1565,8 +1699,8 @@ export default function Player() {
               <IconForwards10s size={24} />
             </button>
             {renderVolumeControl({
-              muted, volume, toggleMute, volumeSliderRef, handleVolume,
-              volumeDraggingRef, resetTimer,
+              muted, volumeLevel, boostable, toggleMute, volumeSliderRef,
+              handleVolume, volumeDraggingRef, resetTimer,
             })}
             <div ref={timeDisplayRef} class="time-display">
               --:-- / {durationLabel}
@@ -1593,11 +1727,17 @@ export default function Player() {
             {renderSubtitleMenu({
               openSelector, setOpenSelector, activeSubtitle, subtitleTracks,
               selectedSubtitle, chooseSubtitle, subtitleMenuLabels,
+              captionStyle, chooseCaptionStyle, resetCaptionStyle,
             })}
             {renderQualityMenu({
               qualityOptions, hasRemote4k, openSelector, refreshAutoQuality,
               setOpenSelector, selectedQualityLabel, selectedQuality,
               chooseQuality, autoQualityName, chooseRemote4k,
+            })}
+            {renderProviderMenu({
+              providers: streamProviders, activeProvider: streamProvider,
+              providerChoice, openSelector, setOpenSelector, changingProvider,
+              changeProvider,
             })}
             <button
               class="player-btn"

@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Database } from "bun:sqlite";
+import { CHAT_REACTION_FACES } from "../src/features/chat/chatProtocol.ts";
 
 export const PERMANENT = 8_640_000_000_000_000;
 
@@ -34,10 +35,19 @@ const SCHEMA = `
     reply_id INTEGER,
     reply_user_id INTEGER,
     reply_name TEXT,
-    reply_text TEXT
+    reply_text TEXT,
+    notice TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_chat_messages_channel ON chat_messages(channel, id);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, created_at);
+  CREATE TABLE IF NOT EXISTS chat_attachments (
+    message_id INTEGER PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,
+    type TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    hash TEXT NOT NULL,
+    bytes BLOB NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS chat_reactions (
     message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL,
@@ -76,9 +86,10 @@ const SCHEMA = `
 
 const MESSAGE_COLUMNS = `
   m.id, m.channel, m.user_id, m.text, m.created_at, m.edited_at,
-  m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, u.username, u.role, p.display, p.avatar_hash
+  m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, m.notice, u.username, u.role, p.display, p.avatar_hash,
+  a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
 `;
-const MESSAGE_SOURCE = "chat_messages m JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id";
+const MESSAGE_SOURCE = "chat_messages m JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id LEFT JOIN chat_attachments a ON a.message_id = m.id";
 const USER_COLUMNS = "u.*, p.display, p.pronouns, p.status, p.bio, p.accent, p.avatar_hash, p.banner_hash";
 const USER_SOURCE = "chat_users u LEFT JOIN chat_profiles p ON p.user_id = u.id";
 const PROFILE_FIELDS = ["display", "pronouns", "status", "bio", "accent"];
@@ -92,6 +103,9 @@ export function createChatStore(file) {
   db.exec(SCHEMA);
   if (!db.query("SELECT 1 FROM pragma_table_info('chat_users') WHERE name = 'account_created_at'").get()) {
     db.exec("ALTER TABLE chat_users ADD COLUMN account_created_at INTEGER");
+  }
+  if (!db.query("SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'notice'").get()) {
+    db.exec("ALTER TABLE chat_messages ADD COLUMN notice TEXT");
   }
   if (file !== ":memory:") fs.chmodSync(file, 0o600);
 
@@ -115,6 +129,8 @@ export function createChatStore(file) {
     ),
     removeMedia: db.query("DELETE FROM chat_media WHERE user_id = $id AND kind = $kind"),
     media: db.query("SELECT type, hash, bytes FROM chat_media WHERE user_id = $id AND kind = $kind"),
+    attachment: db.query("SELECT type, hash, bytes FROM chat_attachments WHERE message_id = $id"),
+    putAttachment: db.query("INSERT INTO chat_attachments (message_id, type, width, height, hash, bytes) VALUES ($id, $type, $width, $height, $hash, $bytes)"),
     insertUser: db.query(
       "INSERT INTO chat_users (id, username, joined_at, last_seen) VALUES ($id, $username, $time, $time)",
     ),
@@ -134,8 +150,8 @@ export function createChatStore(file) {
     ),
     staff: db.query(`SELECT ${USER_COLUMNS} FROM ${USER_SOURCE} WHERE u.role != 'member' ORDER BY u.username COLLATE NOCASE`),
     insertMessage: db.query(
-      `INSERT INTO chat_messages (channel, user_id, text, created_at, reply_id, reply_user_id, reply_name, reply_text)
-        VALUES ($channel, $userId, $text, $time, $replyId, $replyUserId, $replyName, $replyText) RETURNING id`,
+      `INSERT INTO chat_messages (channel, user_id, text, created_at, reply_id, reply_user_id, reply_name, reply_text, notice)
+        VALUES ($channel, $userId, $text, $time, $replyId, $replyUserId, $replyName, $replyText, $notice) RETURNING id`,
     ),
     message: db.query(`SELECT ${MESSAGE_COLUMNS} FROM ${MESSAGE_SOURCE} WHERE m.id = $id`),
     recent: db.query(
@@ -144,15 +160,17 @@ export function createChatStore(file) {
     ),
     editMessage: db.query("UPDATE chat_messages SET text = $text, edited_at = $time WHERE id = $id"),
     deleteMessage: db.query("DELETE FROM chat_messages WHERE id = $id"),
-    userMessagesSince: db.query("SELECT id, channel FROM chat_messages WHERE user_id = $id AND created_at >= $since"),
-    deleteUserMessagesSince: db.query("DELETE FROM chat_messages WHERE user_id = $id AND created_at >= $since"),
+    userMessagesSince: db.query("SELECT id, channel FROM chat_messages WHERE user_id = $id AND created_at >= $since AND notice IS NULL"),
+    deleteUserMessagesSince: db.query("DELETE FROM chat_messages WHERE user_id = $id AND created_at >= $since AND notice IS NULL"),
     hasReaction: db.query("SELECT 1 FROM chat_reactions WHERE message_id = $id AND user_id = $userId AND emoji = $emoji"),
     addReaction: db.query(
       "INSERT INTO chat_reactions (message_id, user_id, emoji, created_at) VALUES ($id, $userId, $emoji, $time)",
     ),
     removeReaction: db.query("DELETE FROM chat_reactions WHERE message_id = $id AND user_id = $userId AND emoji = $emoji"),
     reactions: db.query(
-      "SELECT message_id, user_id, emoji FROM chat_reactions WHERE message_id IN (SELECT value FROM json_each($ids)) ORDER BY created_at, rowid",
+      `SELECT r.message_id, r.user_id, r.emoji, u.username, p.display, p.avatar_hash FROM chat_reactions r
+        LEFT JOIN chat_users u ON u.id = r.user_id LEFT JOIN chat_profiles p ON p.user_id = r.user_id
+        WHERE r.message_id IN (SELECT value FROM json_each($ids)) ORDER BY r.created_at, r.rowid`,
     ),
     audit: db.query(
       "INSERT INTO chat_audit (at, actor_id, action, target_id, detail) VALUES ($time, $actorId, $action, $targetId, $detail)",
@@ -167,10 +185,20 @@ export function createChatStore(file) {
   function toMessages(rows) {
     if (!rows.length) return [];
     const reactions = new Map();
+    const reactors = new Map();
     for (const row of statements.reactions.all({ ids: JSON.stringify(rows.map((message) => message.id)) })) {
       const byEmoji = reactions.get(row.message_id) ?? {};
-      (byEmoji[row.emoji] ??= []).push(String(row.user_id));
+      const authors = (byEmoji[row.emoji] ??= []);
+      authors.push(String(row.user_id));
       reactions.set(row.message_id, byEmoji);
+      if (authors.length > CHAT_REACTION_FACES || !row.username) continue;
+      const faces = reactors.get(row.message_id) ?? {};
+      faces[row.user_id] = {
+        name: row.username,
+        ...(row.display && { display: row.display }),
+        ...(row.avatar_hash && { avatar: row.avatar_hash }),
+      };
+      reactors.set(row.message_id, faces);
     }
     return rows.map((row) => ({
       id: String(row.id),
@@ -180,6 +208,7 @@ export function createChatStore(file) {
       role: row.role,
       text: row.text,
       at: row.created_at,
+      ...(row.attachment_type && { attachment: { type: row.attachment_type, width: row.attachment_width, height: row.attachment_height } }),
       ...(row.display && { display: row.display }),
       ...(row.avatar_hash && { avatar: row.avatar_hash }),
       ...(row.edited_at && { editedAt: row.edited_at }),
@@ -187,6 +216,8 @@ export function createChatStore(file) {
         reply: { id: String(row.reply_id), author: String(row.reply_user_id), name: row.reply_name, text: row.reply_text },
       }),
       ...(reactions.has(row.id) && { reactions: reactions.get(row.id) }),
+      ...(reactors.has(row.id) && { reactors: reactors.get(row.id) }),
+      ...(row.notice && { notice: JSON.parse(row.notice) }),
     }));
   }
 
@@ -244,6 +275,22 @@ export function createChatStore(file) {
     return statements.user.get({ id });
   });
 
+  const insertMessage = db.transaction((message) => {
+    const { id } = statements.insertMessage.get({
+      channel: message.channel,
+      userId: message.userId,
+      text: message.text,
+      time: message.time,
+      replyId: message.reply?.id ?? null,
+      replyUserId: message.reply?.userId ?? null,
+      replyName: message.reply?.name ?? null,
+      replyText: message.reply?.text ?? null,
+      notice: message.notice ? JSON.stringify(message.notice) : null,
+    });
+    if (message.attachment) statements.putAttachment.run({ id, ...message.attachment });
+    return id;
+  });
+
   return {
     identify: (user, time) => identify({ id: user.id, username: user.username, createdAt: user.createdAt ?? null, time }),
     user: (id) => statements.user.get({ id }) ?? null,
@@ -252,23 +299,14 @@ export function createChatStore(file) {
     updateProfile: (id, fields, time) => updateProfile({ id, fields, time }),
     putMedia: (id, kind, media, time) => putMedia({ id, kind, ...media, time }),
     media: (id, kind) => statements.media.get({ id, kind }) ?? null,
+    attachment: (id) => statements.attachment.get({ id }) ?? null,
     clearProfile: (id) => clearProfile({ id }),
     setRole: (id, role) => statements.setRole.run({ id, role }),
     setMute: (id, until) => statements.setMute.run({ id, until }),
     setBan: (id, until, reason) => statements.setBan.run({ id, until, reason: reason ?? null }),
     setStrikes: (id, { points, updated, mutes, mutedUntil }) =>
       statements.setStrikes.run({ id, points, updated, mutes, mutedUntil }),
-    insertMessage: (message) =>
-      statements.insertMessage.get({
-        channel: message.channel,
-        userId: message.userId,
-        text: message.text,
-        time: message.time,
-        replyId: message.reply?.id ?? null,
-        replyUserId: message.reply?.userId ?? null,
-        replyName: message.reply?.name ?? null,
-        replyText: message.reply?.text ?? null,
-      }).id,
+    insertMessage,
     message: (id) => toMessages(statements.message.all({ id }))[0] ?? null,
     recent: (channel, limit, before = Number.MAX_SAFE_INTEGER) => toMessages(statements.recent.all({ channel, limit, before })),
     editMessage: (id, text, time) => statements.editMessage.run({ id, text, time }),

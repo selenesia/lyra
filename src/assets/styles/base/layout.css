@@ -24,7 +24,7 @@
 }
 
 body.browser-view .main-container,
-body.browser-view #bookmarks-container,
+body.browser-view .bookmarks-container,
 body.browser-view #top-left-stuff,
 body.browser-view #top-right-stuff,
 body.browser-view #support,

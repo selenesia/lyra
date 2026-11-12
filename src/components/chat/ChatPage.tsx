@@ -6,15 +6,19 @@ import { isManagedModalOpen } from "../../core/ui/modal.ts";
 import { svgIcon } from "../../core/ui/svgIcon.ts";
 import { useMenuView } from "../../hooks/useMenuView.ts";
 import { loadCloudSync } from "../../app/loaders.ts";
-import { blockedNotice, moderate } from "../../features/chat/moderation.ts";
+import { blockedNotice } from "../../features/chat/moderationNotice.ts";
 import { mentionsName } from "../../features/chat/chatText.ts";
+import { encodeChatImage } from "../../features/chat/chatMedia.ts";
 import { canDeleteAny, CHAT_ROLES, isChatRole, outranks, type ChatRole } from "../../features/chat/chatRoles.ts";
 import {
   CHAT_CATEGORIES,
   CHAT_LIMITS,
+  CHAT_ATTACHMENT,
   canPostIn,
+  canReadChannel,
   cleanChatText,
   displayName,
+  noticeText,
   type ChatChannel,
   type ChatMember,
 } from "../../features/chat/chatProtocol.ts";
@@ -22,15 +26,17 @@ import {
   useChatRoom,
   type ChatAccess,
   type ChatEntry,
+  type ChatModeration,
   type ChatResult,
 } from "../../features/chat/chatRoom.ts";
-import { IconChat, IconChevronBottom, IconCrossMedium } from "../icons";
+import { IconChat, IconChevronBottom, IconCrossMedium, IconPlusMedium } from "../icons";
 import IconBase from "../icons/IconBase.tsx";
 import { ICON_PATHS, type CanonicalIconName } from "../icons/paths.ts";
 import EditableField from "../EditableField.tsx";
 import ChatMessage, { type ChatMessageActions } from "./ChatMessage.tsx";
 import ChatProfile, { RoleBadge } from "./ChatProfile.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
+import ChatTooltip from "./ChatTooltip.tsx";
 import "../../assets/styles/chat/chat.css";
 
 const SVG_CHAT = svgIcon("IconChat", { solid: true });
@@ -44,6 +50,7 @@ const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 80;
 const NEAR_TOP_PX = 60;
 const TYPING_SEND_MS = 2_500;
+const DRAFT_CHECK_MS = 300;
 const MENTION_QUERY = /(?:^|[\s([{])@([\p{L}\p{N}._-]*)$/u;
 const ROLE_COMMAND = /^\/role(?=\s|$)/i;
 const ROLE_ARGUMENTS = /^\/role\s+@?(\w+)\s+(\w+)$/i;
@@ -52,12 +59,6 @@ const timeFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "nu
 const ROLE_HEADINGS: Record<ChatRole, string> = { owner: "owner", admin: "admins", mod: "mods", member: "online" };
 
 type ComposerMode = { kind: "reply" | "edit"; entry: ChatEntry } | null;
-
-function checkLocally(value: string): string | null {
-  const verdict = moderate(value);
-  if (verdict.allowed || !verdict.category) return null;
-  return negativeMessage(blockedNotice("message", verdict.category, "would be"));
-}
 
 function dayLabel(at: number): string {
   const day = new Date(at).toDateString();
@@ -135,7 +136,14 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [channel, setChannel] = useState<ChatChannel>("general");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [draft, setDraft] = useState("");
+  const [attachment, setAttachment] = useState<Blob | null>(null);
+  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
+  const [preparingImage, setPreparingImage] = useState(false);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [hint, setHint] = useState<string | null>(null);
+  const [draftWarning, setDraftWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [mode, setMode] = useState<ComposerMode>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -143,9 +151,12 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [profile, setProfile] = useState<ChatMember | null>(null);
   const [now, setNow] = useState(Date.now);
   const listRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef<HTMLElement>(null);
   const channelsRef = useRef<HTMLElement>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const scrollingToBottomRef = useRef(false);
+  const scrollChannelRef = useRef<ChatChannel | null>(null);
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
   const typingSentRef = useRef(0);
   const caretToEndRef = useRef(false);
@@ -156,8 +167,25 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const focusFieldAfterRender = useCallback(() => {
     caretToEndRef.current = true;
   }, []);
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    stickToBottomRef.current = true;
+    anchorRef.current = null;
+    const list = listRef.current;
+    if (list) {
+      scrollingToBottomRef.current = behavior !== "instant" && list.scrollHeight - list.clientHeight - list.scrollTop > 1;
+      list.scrollTo({ top: list.scrollHeight, behavior });
+    }
+  }, []);
+  const interruptScroll = useCallback(() => {
+    if (!scrollingToBottomRef.current) return;
+    scrollingToBottomRef.current = false;
+    stickToBottomRef.current = false;
+    const list = listRef.current;
+    if (list) list.scrollTo({ top: list.scrollTop, behavior: "instant" });
+  }, []);
 
   const cancelMode = useCallback(() => {
+    if (sendingRef.current) return false;
     if (!modeRef.current) return false;
     if (modeRef.current.kind === "edit") setDraft("");
     setMode(null);
@@ -175,6 +203,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     hideOtherViews: () => {
       window.hideGameMenu?.();
       window.hideWatchMenu?.();
+      window.hideSettingsPage?.();
     },
     interceptEscape: cancelMode,
     onShowFrame: focusField,
@@ -198,6 +227,65 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const mutedUntil = viewer?.mutedUntil ?? 0;
   const muted = mutedUntil > now;
   const locked = !!viewer && !canPostIn(viewer.role, channel);
+  useLayoutEffect(() => {
+    if (!viewer || canReadChannel(viewer.role, channel)) return;
+    setChannel("general");
+    setDraft("");
+    setAttachment(null);
+    setMode(null);
+    setSelectedId(null);
+    stickToBottomRef.current = true;
+  }, [channel, viewer?.role]);
+
+  useEffect(() => {
+    const text = cleanChatText(draft);
+    if (!ready || locked || muted || !text || text.startsWith("/")) {
+      setDraftWarning(null);
+      return;
+    }
+    let current = true;
+    const timer = setTimeout(() => {
+      void room.checkDraft(text).then((category) => {
+        if (!current || category === undefined) return;
+        setDraftWarning(category ? negativeMessage(blockedNotice("message", category, "would be")) : null);
+      });
+    }, DRAFT_CHECK_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [draft, locked, muted, ready, room.checkDraft]);
+
+  useEffect(() => {
+    if (!attachment) {
+      setAttachmentUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(attachment);
+    setAttachmentUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachment]);
+
+  const pickImage = async (file: File | undefined) => {
+    if (!file || locked || muted || sendingRef.current || preparingImage || mode?.kind === "edit") return;
+    setPreparingImage(true);
+    try {
+      const result = await encodeChatImage(file, "message");
+      if ("error" in result) {
+        setHint(negativeMessage(result.error === "too_large"
+          ? `that image is too large, gifs must fit within ${CHAT_ATTACHMENT.gif.width}px and ${CHAT_ATTACHMENT.gif.bytes / 1024 / 1024} mb`
+          : "that image could not be read"));
+        return;
+      }
+      setAttachment(result.image);
+      setHint(null);
+      focusFieldAfterRender();
+    } catch {
+      setHint(negativeMessage("that image could not be read"));
+    } finally {
+      setPreparingImage(false);
+    }
+  };
 
   useEffect(() => {
     window.showChatPage = show;
@@ -241,25 +329,33 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
   useLayoutEffect(() => {
     const list = listRef.current;
-    if (!visible || !ready || !list) return;
+    if (!visible || !ready || !list) {
+      scrollChannelRef.current = null;
+      return;
+    }
+    if (scrollChannelRef.current !== channel) {
+      scrollChannelRef.current = channel;
+      scrollToBottom("instant");
+      return;
+    }
     const anchor = anchorRef.current;
     if (anchor) {
       anchorRef.current = null;
-      list.scrollTop = anchor.top + (list.scrollHeight - anchor.height);
+      list.scrollTo({ top: anchor.top + (list.scrollHeight - anchor.height), behavior: "instant" });
       return;
     }
-    if (stickToBottomRef.current) list.scrollTop = list.scrollHeight;
-  }, [entries, visible, channel, ready]);
+    if (stickToBottomRef.current) scrollToBottom();
+  }, [entries, visible, channel, ready, sending, scrollToBottom]);
 
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!visible || !list) return;
     const observer = new ResizeObserver(() => {
-      if (stickToBottomRef.current) list.scrollTop = list.scrollHeight;
+      if (stickToBottomRef.current) scrollToBottom();
     });
     observer.observe(list);
     return () => observer.disconnect();
-  }, [visible, ready]);
+  }, [visible, ready, scrollToBottom]);
 
   const showFailure = useCallback((result: ChatResult) => {
     if (!result.failure) return false;
@@ -269,6 +365,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
   const switchChannel = useCallback(
     (next: ChatChannel) => {
+      if (sendingRef.current) return;
       setChannel(next);
       setMode(null);
       setSelectedId(null);
@@ -302,13 +399,14 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const actions = useMemo<ChatMessageActions>(
     () => ({
       reply: (entry) => {
-        if (locked) return;
+        if (locked || sendingRef.current) return;
         setMode({ kind: "reply", entry });
         setSelectedId(null);
         focusFieldAfterRender();
       },
       edit: (entry) => {
-        if (locked) return;
+        if (locked || sendingRef.current) return;
+        setAttachment(null);
         setMode({ kind: "edit", entry });
         setDraft(entry.text);
         setSelectedId(null);
@@ -344,11 +442,15 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const onScroll = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
+    if (scrollingToBottomRef.current) {
+      if (list.scrollHeight - list.scrollTop - list.clientHeight <= 1) scrollingToBottomRef.current = false;
+      return;
+    }
     stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < NEAR_BOTTOM_PX;
     if (list.scrollTop > NEAR_TOP_PX || exhausted[channel] || !entries.length) return;
     const anchor = { height: list.scrollHeight, top: list.scrollTop };
     void room.loadOlder(channel).then((count) => {
-      if (count) anchorRef.current = anchor;
+      if (count && !stickToBottomRef.current) anchorRef.current = anchor;
     });
   }, [channel, entries.length, exhausted, room.loadOlder]);
 
@@ -387,9 +489,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   );
 
   const submitMessage = useCallback(async () => {
-    if (!ready || muted || !draft.trim()) return;
+    if (!ready || muted || sendingRef.current || preparingImage || (!draft.trim() && !attachment && !mode?.entry.attachment)) return;
     const text = cleanChatText(draft);
-    if (text && mode?.kind !== "edit" && ROLE_COMMAND.test(text)) {
+    if (text && !attachment && mode?.kind !== "edit" && ROLE_COMMAND.test(text)) {
       await runRoleCommand(text);
       return;
     }
@@ -397,32 +499,32 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       setHint(negativeMessage("only staff can post here"));
       return;
     }
-    if (!text) {
+    if (!text && (draft.trim() || (!attachment && !(mode?.kind === "edit" && mode.entry.attachment)))) {
       setHint(negativeMessage(`messages need 1 to ${CHAT_LIMITS.text} characters`));
       return;
     }
-    const blockedText = checkLocally(text);
-    if (blockedText) {
-      setHint(blockedText);
-      return;
-    }
     const current = mode;
-    setDraft("");
     setHint(null);
-    setMode(null);
+    sendingRef.current = true;
+    setSending(true);
     typingSentRef.current = 0;
-    if (current?.kind !== "edit") stickToBottomRef.current = true;
+    if (current?.kind !== "edit") scrollToBottom();
     const result =
       current?.kind === "edit"
         ? text === current.entry.text
           ? {}
           : await room.edit(current.entry.id, text)
-        : await room.send(channel, text, current?.kind === "reply" ? current.entry.id : undefined);
-    if (showFailure(result)) {
-      setMode(current);
-      setDraft((value) => value || text);
+        : await room.send(channel, text, current?.kind === "reply" ? current.entry.id : undefined, attachment ?? undefined);
+    sendingRef.current = false;
+    setSending(false);
+    if (!showFailure(result)) {
+      if (current?.kind !== "edit") scrollToBottom();
+      setDraft("");
+      setMode(null);
+      setAttachment(null);
     }
-  }, [channel, draft, locked, mode, muted, ready, room.edit, room.send, runRoleCommand, showFailure]);
+    focusFieldAfterRender();
+  }, [attachment, channel, draft, focusFieldAfterRender, locked, mode, muted, preparingImage, ready, room.edit, room.send, runRoleCommand, scrollToBottom, showFailure]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -434,7 +536,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         return;
       }
       if (event.key === "ArrowUp" && !draft && !mode && viewer) {
-        const last = [...entries].reverse().find((entry) => entry.author === viewer.author && !entry.pending);
+        const last = [...entries].reverse().find((entry) => entry.author === viewer.author && !entry.pending && !entry.notice);
         if (last) {
           event.preventDefault();
           actions.edit(last);
@@ -459,6 +561,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       room.announceTyping(channel);
     },
     [channel, hint, locked, mode, notice, ready, room.announceTyping],
+  );
+
+  const moderateInChannel = useCallback(
+    (type: ChatModeration, target: string, extra: Record<string, unknown> = {}) => room.moderateUser(type, target, { ...extra, channel }),
+    [channel, room.moderateUser],
   );
 
   const memberGroups = useMemo(
@@ -507,6 +614,15 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           </div>,
         );
         previous = undefined;
+      }
+      if (entry.notice) {
+        rows.push(
+          <div class="chat-message chat-notice" key={entry.id} data-id={entry.id}>
+            {noticeText(displayName(entry), entry.notice, entry.at)}
+          </div>,
+        );
+        previous = undefined;
+        continue;
       }
       if (blockedAuthors.has(entry.author)) {
         rows.push(
@@ -559,13 +675,16 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   }, [actions, blockedAuthors, channel, editingId, entries, historyExhausted, locked, mentionMembers, room.toggleBlocked, selectedId, viewer]);
 
   return (
-    <section id="chat-page" class={`chat-page${visible ? " is-visible" : ""}${ready ? "" : " is-gated"}`} aria-hidden={!visible}>
+    <section id="chat-page" ref={pageRef} class={`chat-page${visible ? " is-visible" : ""}${ready ? "" : " is-gated"}`} aria-hidden={!visible}>
+      {visible && ready && <ChatTooltip containerRef={pageRef} />}
       {!ready ? (
         <AccessGate access={access} onRetry={room.recheck} />
       ) : (
         <>
           <nav class="chat-channels" aria-label="channels" ref={channelsRef}>
             {CHAT_CATEGORIES.map((category) => {
+              const channels = category.channels.filter((option) => canReadChannel(viewer.role, option));
+              if (!channels.length) return null;
               const folded = collapsed.has(category.name);
               return (
                 <div class={`chat-category${folded ? " collapsed" : ""}`} key={category.name}>
@@ -578,7 +697,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                     <IconChevronBottom size={12} class="chat-category-chevron" />
                     <span>{category.name}</span>
                   </button>
-                  {category.channels.map((option) => {
+                  {channels.map((option) => {
                     const waiting = unread[option];
                     const icon = CHANNEL_ICONS[option];
                     return (
@@ -590,7 +709,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                         onClick={() => switchChannel(option)}
                       >
                         {icon ? (
-                          <IconBase icon={ICON_PATHS[icon]} size={18} class="chat-channel-icon" />
+                          <IconBase icon={ICON_PATHS[icon]} size={16} class="chat-channel-icon" />
                         ) : (
                           <span class="chat-channel-icon chat-channel-hash">#</span>
                         )}
@@ -609,7 +728,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           </nav>
 
           <div class="chat-main">
-            <div class="chat-feed" ref={listRef} onScroll={onScroll} role="log" aria-live="polite">
+            <div class="chat-feed" ref={listRef} onScroll={onScroll} onWheel={interruptScroll} onTouchStart={interruptScroll} onPointerDown={interruptScroll} onKeyDown={interruptScroll} onLoadCapture={() => {
+              if (stickToBottomRef.current) scrollToBottom();
+            }} role="log" aria-live="polite">
               {rows.length ? rows : <p class="chat-empty">{emptyText}</p>}
             </div>
             <p class="chat-typing" aria-live="polite">
@@ -652,10 +773,43 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   </button>
                 </div>
               )}
-              <div class={`search-bar chat-bar${muted ? " is-muted" : ""}`} ref={searchBarRef}>
+              {attachmentUrl && !locked && mode?.kind !== "edit" && (
+                <div class="chat-attachment-preview">
+                  <img src={attachmentUrl} alt="attachment preview" />
+                  <button type="button" class="chat-tool" aria-label="remove attachment" disabled={sending} onClick={() => setAttachment(null)}>
+                    <IconCrossMedium size={16} />
+                  </button>
+                </div>
+              )}
+              <div
+                class={`search-bar chat-bar${muted ? " is-muted" : ""}`}
+                ref={searchBarRef}
+                onPasteCapture={(event) => {
+                  const file = event.clipboardData?.files[0];
+                  if (!file) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void pickImage(file);
+                }}
+              >
                 <div class="light-border"></div>
                 <div class="light-inset-bg"></div>
                 <div class="light"></div>
+                <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  void pickImage(file);
+                }} />
+                <button
+                  type="button"
+                  class="chat-tool search-icon chat-attach-button"
+                  aria-label="attach image or gif"
+                  data-tooltip="attach image or gif"
+                  disabled={locked || muted || sending || preparingImage || mode?.kind === "edit"}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <IconPlusMedium size={20} />
+                </button>
                 <EditableField
                   id="chatInput"
                   multiline
@@ -663,13 +817,13 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   label={`message #${channel}`}
                   placeholder={placeholder}
                   value={locked ? "" : draft}
-                  disabled={locked}
+                  disabled={locked || sending}
                   onChange={onDraftChange}
                   onKeyDown={onKeyDown}
                 />
               </div>
-              <p class={`chat-status${hint ? " is-error" : notice ? " is-success" : ""}`} aria-live="polite">
-                {hint ?? notice}
+              <p class={`chat-status${hint || draftWarning ? " is-error" : notice ? " is-success" : ""}`} aria-live="polite">
+                {hint ?? draftWarning ?? (sending ? attachment ? "checking image and sending" : "sending" : preparingImage ? "preparing image" : notice)}
               </p>
             </div>
           </div>
@@ -711,7 +865,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           viewer={viewer}
           blocked={blockedAuthors.has(profile.author)}
           loadProfile={room.loadProfile}
-          moderate={room.moderateUser}
+          moderate={moderateInChannel}
           saveProfile={room.saveProfile}
           uploadMedia={room.uploadMedia}
           onMention={insertMention}

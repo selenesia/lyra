@@ -110,6 +110,7 @@ fn upstream_client(pool_idle_timeout_secs: u64) -> reqwest::ClientBuilder {
         .tcp_nodelay(true)
         .tcp_keepalive(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(10))
+        .http2_adaptive_window(true)
         .http2_keep_alive_interval(Duration::from_secs(15))
         .http2_keep_alive_timeout(Duration::from_secs(20))
 }

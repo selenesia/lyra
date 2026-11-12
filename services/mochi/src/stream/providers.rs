@@ -8,6 +8,7 @@ pub(super) fn provider_cache_key(
     episode.session.clear();
     episode.prefer_4k = false;
     episode.auto_4k = false;
+    episode.provider = None;
     (provider, episode)
 }
 
@@ -45,12 +46,15 @@ pub(super) async fn prefer_ready<T>(
             Ok(source) => Ok(source),
             Err(_) => fallback.await,
         },
-        backup = &mut fallback => match fallback_grace {
-            Some(grace) => tokio::time::timeout(grace, preferred)
-                .await
-                .unwrap_or(Err(ResolveError::NotFound))
-                .or(backup),
-            None => preferred.await.or(backup),
+        backup = &mut fallback => match backup {
+            Err(error) => preferred.await.or(Err(error)),
+            Ok(source) => match fallback_grace {
+                Some(grace) => tokio::time::timeout(grace, preferred)
+                    .await
+                    .unwrap_or(Err(ResolveError::NotFound))
+                    .or(Ok(source)),
+                None => preferred.await.or(Ok(source)),
+            },
         },
     }
 }
@@ -59,15 +63,23 @@ pub(super) async fn default_source(
     client: &reqwest::Client,
     key: &EpisodeKey,
 ) -> Result<Arc<ResolvedSource>, ResolveError> {
-    ordered_source(client, key, StreamProvider::Framex).await
+    let preferred = if key.title.is_some() {
+        StreamProvider::Movy
+    } else {
+        StreamProvider::Framex
+    };
+    ordered_source(client, key, preferred).await
 }
 
-pub(super) async fn first_available<T>(
+pub(super) async fn first_ready_in_order<T>(
     candidates: impl IntoIterator<Item = impl std::future::Future<Output = Result<T, ResolveError>>>,
 ) -> Result<T, ResolveError> {
+    let mut pending = candidates
+        .into_iter()
+        .collect::<futures_util::stream::FuturesOrdered<_>>();
     let mut failure = ResolveError::NotFound;
-    for candidate in candidates {
-        match candidate.await {
+    while let Some(result) = pending.next().await {
+        match result {
             Ok(source) => return Ok(source),
             Err(error) if !matches!(error, ResolveError::NotFound) => failure = error,
             Err(_) => {}
@@ -171,6 +183,7 @@ pub(super) async fn guarded_source(
     let _attempt = (!cached).then_some(ProviderAttempt(provider));
     let budget = match provider {
         StreamProvider::Title => titles::RESOLUTION_BUDGET,
+        StreamProvider::Movy => movy::resolution_budget(key),
         StreamProvider::Framex | StreamProvider::Framex4k(_) => Duration::from_secs(10),
         _ => Duration::from_secs(5),
     };
@@ -201,10 +214,13 @@ pub(super) async fn ordered_source(
     key: &EpisodeKey,
     start: StreamProvider,
 ) -> Result<Arc<ResolvedSource>, ResolveError> {
-    first_available(
-        StreamProvider::ALL
+    let mut providers = StreamProvider::ALL;
+    if let Some(index) = providers.iter().position(|provider| *provider == start) {
+        providers.rotate_left(index);
+    }
+    first_ready_in_order(
+        providers
             .into_iter()
-            .skip_while(|provider| *provider != start)
             .filter(|provider| provider.supports(key))
             .map(|provider| Box::pin(guarded_source(client, provider, key))),
     )
@@ -215,6 +231,9 @@ pub(super) async fn select_source(
     client: &reqwest::Client,
     key: &EpisodeKey,
 ) -> Result<Arc<ResolvedSource>, ResolveError> {
+    if let Some(provider) = key.provider {
+        return guarded_source(client, provider, key).await;
+    }
     if key.title.is_some() || (!key.prefer_4k && !key.auto_4k) {
         return default_source(client, key).await;
     }
@@ -370,7 +389,7 @@ pub(super) async fn ready_source(
                     let source = provider.resolve(client, key).await?;
                     if matches!(
                         provider,
-                        StreamProvider::Framex | StreamProvider::Framex4k(_) | StreamProvider::Title
+                        StreamProvider::Framex | StreamProvider::Framex4k(_) | StreamProvider::Title | StreamProvider::Movy
                     ) && !source.master.is_empty()
                     {
                         return Ok(Arc::new(source));
@@ -436,7 +455,9 @@ pub(super) async fn validate_source(
     client: &reqwest::Client,
     source: &ResolvedSource,
 ) -> Result<Arc<String>, ResolveError> {
-    let master = if source.provider == StreamProvider::Title && !source.master.is_empty() {
+    let master = if matches!(source.provider, StreamProvider::Title | StreamProvider::Movy)
+        && !source.master.is_empty()
+    {
         source.master.clone()
     } else {
         fetch_playlist(client, &source.playlist_url, source.provider).await?
@@ -445,7 +466,10 @@ pub(super) async fn validate_source(
         let variants = hls_variant_references(&source.playlist_url, &master);
         let count = variants.len();
         let provider = source.provider;
-        let settle_all = matches!(provider, StreamProvider::Framex4k(_) | StreamProvider::Title);
+        let settle_all = matches!(
+            provider,
+            StreamProvider::Framex4k(_) | StreamProvider::Title | StreamProvider::Movy
+        );
         let mut checks =
             futures_util::stream::iter(variants.into_iter().enumerate().map(|(index, url)| {
                 let client = client.clone();
@@ -623,7 +647,9 @@ pub(super) async fn get_source(
         if !selected.invalidated.load(Ordering::Acquire) {
             return Ok(selected.source.clone());
         }
-        let source = if (key.prefer_4k || key.auto_4k) && has_4k(&selected.source) {
+        let source = if key.provider.is_some()
+            || ((key.prefer_4k || key.auto_4k) && has_4k(&selected.source))
+        {
             select_source(client, key).await?
         } else {
             ordered_source(client, key, selected.source.provider).await?

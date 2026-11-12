@@ -374,13 +374,13 @@ export function applySubtitleTrack(
   const native = selected?.nativeTrack || element?.track;
   if (hls) {
     const index = selected?.hlsIndex ?? -1;
-    hls.subtitleDisplay = index >= 0;
+    hls.subtitleDisplay = false;
     if (hls.subtitleTrack !== index) hls.subtitleTrack = index;
   }
   if (selected?.hlsIndex === undefined) {
     for (const track of Array.from(video.textTracks)) {
       if (track.kind !== "subtitles" && track.kind !== "captions") continue;
-      const mode = track === native ? "showing" : "disabled";
+      const mode = track === native ? "hidden" : "disabled";
       if (track.mode !== mode) track.mode = mode;
     }
   }

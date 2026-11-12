@@ -1,8 +1,11 @@
 export const TEXT_RULES = [
-  { score: "minors", category: "sexual", limit: 0.85, strikes: 2 },
+  { score: "minors", category: "sexual", limit: 0.65, strikes: 2 },
+  { score: "sexual", category: "sexual", limit: 0.98, strikes: 1 },
+  { score: "sexual", category: "sexual", limit: 0.85, strikes: 1, unless: "playful" },
   { score: "selfHarm", category: "crisis", limit: 0.9, strikes: 0, unless: "hyperbole" },
   { score: "threat", category: "threat", limit: 0.85, strikes: 1, unless: "playful" },
-  { score: "hate", category: "hate", limit: 0.75, strikes: 1 },
+  { score: "threatening", category: "threat", limit: 0.8, strikes: 1, unless: "playful" },
+  { score: "hate", category: "hate", limit: 0.6, strikes: 1 },
 ];
 
 export const TEXT_CONFIRM = {
@@ -17,7 +20,9 @@ export function scoreText({ moderation, toxicity }) {
     hate: Math.min(moderation.hate, toxicity.identity_attack),
     identity: Math.max(moderation.hate, toxicity.identity_attack),
     threat: Math.min(moderation["harassment/threatening"], toxicity.threat),
+    threatening: moderation["harassment/threatening"],
     minors: moderation["sexual/minors"],
+    sexual: moderation.sexual,
     selfHarm: moderation["self-harm/intent"],
   };
 }

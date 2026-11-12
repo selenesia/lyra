@@ -1,17 +1,20 @@
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { httpError } from "./errors.mjs";
 import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
-import { readChatImage } from "./chat-media.mjs";
+import { chatImageType, readChatImage } from "./chat-media.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
-import { blockedNotice, moderate, readModeration } from "../src/features/chat/moderation.ts";
+import { moderate, readModeration } from "../src/features/chat/moderation.ts";
+import { blockedNotice } from "../src/features/chat/moderationNotice.ts";
 import {
   CHAT_CHANNELS,
   CHAT_LIMITS,
   CHAT_MEDIA,
   CHAT_MEDIA_TYPES,
+  CHAT_ATTACHMENT,
   CHAT_PROFILE_TEXT,
   canPostIn,
+  canReadChannel,
   cleanChatText,
   cleanProfileText,
   isChatAccent,
@@ -34,6 +37,7 @@ const PURGE_WINDOW_MS = 24 * 60 * 60_000;
 const MAX_TIMEOUT_MINUTES = 28 * 24 * 60;
 const NAME_CACHE_LIMIT = 2_000;
 const MEDIA_ROUTE = /^media\/(avatar|banner)(?:\/(\d{1,15}))?$/;
+const ATTACHMENT_ROUTE = /^media\/message\/(\d{1,15})$/;
 const PROFILE_LABELS = { display: "display name", pronouns: "pronouns", status: "status", bio: "bio" };
 
 async function readBody(request, limit) {
@@ -97,6 +101,7 @@ export function createChatRoom({
   sourceSendLimit = 30,
   reactLimit = 12,
   typingGapMs = 1_500,
+  draftLimit = 20,
   strikeLimit = 3,
   strikeDecayMs = 5 * 60_000,
   muteMs = 2 * 60_000,
@@ -134,8 +139,15 @@ export function createChatRoom({
     status: row.status,
   });
 
-  function broadcast(bytes) {
-    for (const stream of streams.values()) stream.send(bytes);
+  function broadcast(bytes, channel) {
+    for (const stream of streams.values()) {
+      if (!channel || canReadChannel(stream.user.role, channel)) stream.send(bytes);
+    }
+  }
+
+  function visibleHistory(role) {
+    return Object.fromEntries(CHAT_CHANNELS.filter((channel) => canReadChannel(role, channel))
+      .map((channel) => [channel, store.recent(channel, historySize)]));
   }
 
   function sendTo(userId, bytes) {
@@ -200,11 +212,12 @@ export function createChatRoom({
   function activityOf(userId, time) {
     let entry = activity.get(userId);
     if (!entry) {
-      entry = { sends: [], reacts: [], profiles: [], typedAt: 0, last: undefined };
+      entry = { sends: [], reacts: [], profiles: [], drafts: [], typedAt: 0, last: undefined, draft: undefined };
       activity.set(userId, entry);
     }
     entry.sends = entry.sends.filter((at) => time - at < sendWindowMs);
     entry.reacts = entry.reacts.filter((at) => time - at < sendWindowMs);
+    entry.drafts = entry.drafts.filter((at) => time - at < sendWindowMs);
     entry.profiles = entry.profiles.filter((at) => time - at < profileWindowMs);
     return entry;
   }
@@ -217,7 +230,13 @@ export function createChatRoom({
     return list;
   }
 
-  function strike(stale, points, time) {
+  function announce(channel, target, notice, time) {
+    if (!isChatChannel(channel)) return;
+    const message = store.message(store.insertMessage({ channel, userId: target.id, text: "", time, notice }));
+    broadcast(frame("message", message), channel);
+  }
+
+  function strike(stale, points, time, channel) {
     if (!points) return 0;
     const row = store.user(stale.id) ?? stale;
     const steps = Math.floor((time - row.strike_updated) / strikeDecayMs);
@@ -231,21 +250,27 @@ export function createChatRoom({
       sendTo(row.id, frame("muted", { until: mutedUntil }));
     }
     store.setStrikes(row.id, { points: current, updated: time, mutes, mutedUntil });
+    if (mutes > row.mute_count) announce(channel, row, { action: "timeout", until: mutedUntil }, time);
     return mutedUntil > time ? mutedUntil : 0;
   }
 
-  function rejectContent(row, verdict, time) {
-    const until = strike(row, verdict.strikes, time);
+  function rejectContent(row, verdict, time, channel) {
+    const until = strike(row, verdict.strikes, time, channel);
     return httpError(422, "CHAT_MESSAGE_BLOCKED", blockedNotice("message", verdict.category), {
       category: verdict.category,
       ...(until && { until }),
     });
   }
 
-  async function screenText(text) {
+  async function screenText(text, mine) {
+    const key = mine && createHash("sha256").update(text).digest("base64");
+    if (key && mine.draft?.key === key) return mine.draft.verdict;
     const reading = readModeration(text);
     if (!reading.verdict.allowed || (!reading.screen && !reading.suspect)) return reading.verdict;
-    return textVerdict(reading, await checkText(text));
+    const scores = await checkText(text);
+    const verdict = textVerdict(reading, scores);
+    if (key && scores) mine.draft = { key, verdict };
+    return verdict;
   }
 
   function silenced(row) {
@@ -261,21 +286,25 @@ export function createChatRoom({
     return null;
   }
 
-  function readText(payload) {
+  function readText(payload, hasAttachment = false) {
     const text = cleanChatText(payload.text);
-    return text ? { text } : { failure: httpError(400, "CHAT_TEXT_INVALID", `messages need 1 to ${CHAT_LIMITS.text} characters`) };
+    return text || (hasAttachment && (payload.text === undefined || payload.text === ""))
+      ? { text }
+      : { failure: httpError(400, "CHAT_TEXT_INVALID", `messages need 1 to ${CHAT_LIMITS.text} characters`) };
   }
 
-  async function screenMessage(text, row, time) {
-    const verdict = await screenText(text);
-    if (!verdict.allowed) return rejectContent(row, verdict, time);
+  async function screenMessage(text, row, time, channel) {
+    const verdict = await screenText(text, activityOf(row.id, time));
+    if (!verdict.allowed) return rejectContent(row, verdict, time, channel);
     return silenced(row);
   }
 
-  function findMessage(id) {
+  function findMessage(id, row) {
     const numeric = typeof id === "string" && /^\d{1,15}$/.test(id) ? Number(id) : NaN;
     const message = Number.isSafeInteger(numeric) ? store.message(numeric) : null;
-    return message ? { message, numeric } : { failure: httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone") };
+    return message && canReadChannel((store.user(row.id) ?? row).role, message.channel)
+      ? { message, numeric }
+      : { failure: httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone") };
   }
 
   function findTarget(id) {
@@ -289,7 +318,7 @@ export function createChatRoom({
     return row ? { row } : { failure: httpError(404, "CHAT_USER_NOT_FOUND", "that user has not joined chat yet") };
   }
 
-  async function send(payload, row, ip, time) {
+  async function send(payload, row, ip, time, file) {
     if (!isChatChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
     if (!canPostIn(row.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     const mine = activityOf(row.id, time);
@@ -297,63 +326,83 @@ export function createChatRoom({
     if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) {
       return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     }
-    const written = readText(payload);
+    const written = readText(payload, !!file);
     if (written.failure) return written.failure;
-    const comparable = written.text.toLowerCase();
+    let attachment;
+    if (file) {
+      if (file.size > CHAT_ATTACHMENT.gif.bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const type = chatImageType(bytes);
+      if (!type) return httpError(415, "CHAT_MEDIA_INVALID", "that image type is not supported");
+      const limits = type === "image/gif" ? CHAT_ATTACHMENT.gif : CHAT_ATTACHMENT;
+      if (file.size > limits.bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+      attachment = readChatImage(bytes, type, limits);
+      if (!attachment) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
+    }
+    const comparable = `${written.text.toLowerCase()}${attachment ? `\n${attachment.hash}` : ""}`;
     if (mine.last?.text === comparable && time - mine.last.at < duplicateMs) {
       return httpError(429, "CHAT_DUPLICATE", "you just sent that");
     }
     let replyTo;
     if (payload.replyTo !== undefined) {
-      const parent = findMessage(payload.replyTo);
-      if (parent.failure || parent.message.channel !== payload.channel) {
+      const parent = findMessage(payload.replyTo, row);
+      if (parent.failure || parent.message.notice || parent.message.channel !== payload.channel) {
         return httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone");
       }
       replyTo = {
         id: parent.numeric,
         userId: Number(parent.message.author),
         name: parent.message.name,
-        text: replySnippet(parent.message.text),
+        text: replySnippet(parent.message.text || (parent.message.attachment ? "[image]" : "")),
       };
     }
     mine.sends.push(time);
     source.push(time);
     sourceSends.set(ip, source);
-    const refused = await screenMessage(written.text, row, time);
+    const refused = await screenMessage(written.text, row, time, payload.channel);
     if (refused) return refused;
+    if (attachment) {
+      const rejected = await screenImage(attachment, "image", row, time, payload.channel);
+      if (rejected) return rejected;
+    }
+    const fresh = store.user(row.id);
+    const silencedAfterCheck = silenced(row);
+    if (silencedAfterCheck) return silencedAfterCheck;
+    if (!fresh || !canPostIn(fresh.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     mine.last = { text: comparable, at: time };
     mine.typedAt = 0;
-    const id = store.insertMessage({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo });
+    const id = store.insertMessage({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo, attachment });
     const nonce = typeof payload.nonce === "string" && payload.nonce.length <= 40 ? payload.nonce : undefined;
     const message = { ...store.message(id), ...(nonce && { nonce }) };
-    broadcast(frame("message", message));
+    broadcast(frame("message", message), message.channel);
     return ok({ message });
   }
 
   async function edit(payload, row, time) {
-    const { message, numeric, failure } = findMessage(payload.id);
+    const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
-    if (message.author !== String(row.id)) return httpError(403, "CHAT_FORBIDDEN", "you can only edit your own messages");
+    if (message.notice || message.author !== String(row.id)) return httpError(403, "CHAT_FORBIDDEN", "you can only edit your own messages");
     if (!canPostIn(row.role, message.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     const mine = activityOf(row.id, time);
     if (mine.sends.length >= sendLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
-    const written = readText(payload);
+    const written = readText(payload, !!message.attachment);
     if (written.failure) return written.failure;
     mine.sends.push(time);
     if (written.text === message.text) return ok({ message });
-    const refused = await screenMessage(written.text, row, time);
+    const refused = await screenMessage(written.text, row, time, message.channel);
     if (refused) return refused;
+    if (!canPostIn((store.user(row.id) ?? row).role, message.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     if (!store.message(numeric)) return httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone");
     store.editMessage(numeric, written.text, time);
     const updated = store.message(numeric);
-    broadcast(frame("update", updated));
+    broadcast(frame("update", updated), updated.channel);
     return ok({ message: updated });
   }
 
   function remove(payload, row, time) {
-    const { message, numeric, failure } = findMessage(payload.id);
+    const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
-    const own = message.author === String(row.id);
+    const own = !message.notice && message.author === String(row.id);
     if (!own && !(canDeleteAny(row.role) && outranks(row.role, message.role))) {
       return httpError(403, "CHAT_FORBIDDEN", "you can not delete that message");
     }
@@ -361,20 +410,21 @@ export function createChatRoom({
     if (!own) {
       store.audit({ time, actorId: row.id, action: "delete", targetId: Number(message.author), detail: message.text });
     }
-    broadcast(frame("remove", { id: message.id, channel: message.channel }));
+    broadcast(frame("remove", { id: message.id, channel: message.channel }), message.channel);
     return ok();
   }
 
   function react(payload, row, time) {
     if (!isChatReaction(payload.emoji)) return httpError(400, "CHAT_REACTION_INVALID", "that reaction is not available");
-    const { numeric, failure } = findMessage(payload.id);
+    const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
+    if (message.notice) return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
     const mine = activityOf(row.id, time);
     if (mine.reacts.length >= reactLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     mine.reacts.push(time);
     store.toggleReaction(numeric, row.id, payload.emoji, time);
     const updated = store.message(numeric);
-    broadcast(frame("update", updated));
+    broadcast(frame("update", updated), updated.channel);
     return ok({ message: updated });
   }
 
@@ -385,9 +435,19 @@ export function createChatRoom({
     const mine = activityOf(row.id, time);
     if (time - mine.typedAt >= typingGapMs) {
       mine.typedAt = time;
-      broadcast(frame("typing", { author: String(row.id), name: row.username, channel: payload.channel }));
+      broadcast(frame("typing", { author: String(row.id), name: row.username, channel: payload.channel }), payload.channel);
     }
     return ok();
+  }
+
+  async function draft(payload, row, time) {
+    const text = cleanChatText(payload.text);
+    const mine = activityOf(row.id, time);
+    if (!text) return ok();
+    if (mine.drafts.length >= draftLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
+    mine.drafts.push(time);
+    const verdict = await screenText(text, mine);
+    return ok({ ok: true, ...(!verdict.allowed && { category: verdict.category }) });
   }
 
   function minutesFrom(value, { optional = false } = {}) {
@@ -402,6 +462,7 @@ export function createChatRoom({
     if (actor && actor.id === target.id) return httpError(403, "CHAT_FORBIDDEN", "you can not do that to yourself");
     const audit = (detail) =>
       store.audit({ time, actorId: actor?.id, action, targetId: target.id, detail: detail ?? null });
+    const channel = isChatChannel(payload.channel) && canReadChannel(actorRole, payload.channel) ? payload.channel : undefined;
 
     if (action === "role") {
       const role = payload.role;
@@ -414,6 +475,9 @@ export function createChatRoom({
       for (const stream of streams.values()) if (stream.user.id === target.id) stream.user = { ...stream.user, role };
       broadcast(frame("role", { author: String(target.id), role }));
       sendTo(target.id, frame("viewer", viewer({ ...target, role })));
+      if (canReadChannel(target.role, "staff-chat") !== canReadChannel(role, "staff-chat")) {
+        sendTo(target.id, frame("history", visibleHistory(role)));
+      }
       announcePresence();
       return ok({ user: member({ ...target, role }) });
     }
@@ -429,6 +493,8 @@ export function createChatRoom({
       store.setMute(target.id, until);
       audit(until ? `${Math.round((until - time) / 60_000)} min` : null);
       sendTo(target.id, frame("muted", { until }));
+      if (until) announce(channel, target, { action, until }, time);
+      else if (target.muted_until > time) announce(channel, target, { action }, time);
       return ok({ user: { ...member(target), ...(until && { mutedUntil: until }) } });
     }
 
@@ -445,6 +511,7 @@ export function createChatRoom({
       if (action === "unban") {
         store.setBan(target.id, 0, null);
         audit(null);
+        if (target.banned_until > time) announce(channel, target, { action }, time);
         return ok({ user: member(target) });
       }
       const minutes = minutesFrom(payload.minutes, { optional: true });
@@ -454,13 +521,14 @@ export function createChatRoom({
       store.setBan(target.id, until, reason);
       const removed = payload.purge ? store.purge(target.id, time - PURGE_WINDOW_MS) : [];
       audit([minutes === null ? "permanent" : `${minutes} min`, reason, removed.length && `${removed.length} removed`].filter(Boolean).join(", "));
-      for (const entry of removed) broadcast(frame("remove", entry));
+      for (const entry of removed) broadcast(frame("remove", entry), entry.channel);
       const banned = frame("banned", { ...(until < PERMANENT && { until }), ...(reason && { reason }) });
       for (const stream of [...streams.values()]) {
         if (stream.user.id !== target.id) continue;
         stream.send(banned);
         stream.close();
       }
+      announce(channel, target, { action, ...(until < PERMANENT && { until }) }, time);
       return ok({ user: member(target), removed: removed.length });
     }
 
@@ -508,7 +576,7 @@ export function createChatRoom({
           heartbeat.unref?.();
         }
         stream.send(frame("viewer", viewer(row)));
-        stream.send(frame("history", Object.fromEntries(CHAT_CHANNELS.map((channel) => [channel, store.recent(channel, historySize)]))));
+        stream.send(frame("history", visibleHistory(row.role)));
         stream.send(frame("members", members()));
         announcePresence();
       },
@@ -605,6 +673,20 @@ export function createChatRoom({
     return ok({ profile: profileOf(updated, updated) });
   }
 
+  async function screenImage(image, kind, row, time, channel) {
+    const verdict = await checkImage(image.bytes, image.type);
+    if (verdict?.invalid) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
+    if (verdict?.varied) return httpError(400, "CHAT_MEDIA_TOO_VARIED", "that gif has too many different frames, try a shorter one");
+    if (!verdict || verdict.unavailable || (verdict.allowed !== true && !verdict.category)) return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", "image checks are unavailable right now");
+    if (!verdict.allowed) {
+      const until = strike(row, 1, time, channel);
+      return httpError(422, "CHAT_MEDIA_BLOCKED", blockedNotice(kind, verdict.category), {
+        kind, category: verdict.category, ...(until && { until }),
+      });
+    }
+    return silenced(row);
+  }
+
   async function upload(request, kind, row) {
     const time = now();
     const type = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
@@ -621,18 +703,8 @@ export function createChatRoom({
       if (!bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
       const image = readChatImage(bytes, type, limits);
       if (!image) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
-      const verdict = await checkImage(image.bytes, type);
-      if (verdict.invalid) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
-      if (verdict.varied) return httpError(400, "CHAT_MEDIA_TOO_VARIED", "that gif has too many different frames, try a shorter one");
-      if (verdict.unavailable) return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", "image checks are unavailable right now");
-      if (!verdict.allowed) {
-        const until = strike(row, 1, time);
-        return httpError(422, "CHAT_MEDIA_BLOCKED", blockedNotice(kind, verdict.category), {
-          kind,
-          category: verdict.category,
-          ...(until && { until }),
-        });
-      }
+      const refused = await screenImage(image, kind, row, time);
+      if (refused) return refused;
       const updated = store.putMedia(row.id, kind, image, time);
       announceProfile(updated);
       return ok({ profile: profileOf(updated, updated) });
@@ -642,24 +714,25 @@ export function createChatRoom({
   }
 
   function media(request, kind, id) {
-    const stored = store.media(Number(id), kind);
+    const stored = kind === "message" ? store.attachment(Number(id)) : store.media(Number(id), kind);
     if (!stored) return reply(httpError(404, "CHAT_MEDIA_NOT_FOUND", "that image is gone"));
     const etag = `"${stored.hash}"`;
     const immutable = new URL(request.url).searchParams.get("v") === stored.hash;
     const headers = {
-      "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+      "Cache-Control": kind === "message" ? "no-store" : immutable ? "public, max-age=31536000, immutable" : "no-cache",
       ETag: etag,
       "Content-Security-Policy": "default-src 'none'; sandbox",
       "Cross-Origin-Resource-Policy": "same-origin",
       "X-Content-Type-Options": "nosniff",
     };
     if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
-    return new Response(stored.bytes, { headers: { ...headers, "Content-Type": stored.type } });
+    return new Response(request.method === "HEAD" ? null : stored.bytes, { headers: { ...headers, "Content-Type": stored.type } });
   }
 
-  function history(url) {
+  function history(url, row) {
     const channel = url.searchParams.get("channel");
     if (!isChatChannel(channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
+    if (!canReadChannel(row.role, channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can access this channel");
     const before = Number(url.searchParams.get("before"));
     if (!Number.isSafeInteger(before) || before < 1) return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
     return ok({ messages: store.recent(channel, historySize, before) });
@@ -667,11 +740,40 @@ export function createChatRoom({
 
   async function action(request, row, ip) {
     if (crossSite(request)) return httpError(403, "CHAT_REQUEST_DENIED", "this request is not allowed");
+    const contentType = request.headers.get("content-type") || "";
+    if (/^multipart\/form-data(?:\s*;|$)/i.test(contentType)) {
+      if (uploading.has(row.id)) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
+      const refused = silenced(row);
+      if (refused) return refused;
+      uploading.add(row.id);
+      try {
+        const bytes = await readBody(request, CHAT_ATTACHMENT.gif.bytes + BODY_MAX_BYTES);
+        if (!bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+        let form;
+        try {
+          form = await new Response(bytes, { headers: { "Content-Type": contentType } }).formData();
+        } catch {
+          return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
+        }
+        const payload = {};
+        let file;
+        for (const [key, value] of form) {
+          if (key === "image" && value instanceof Blob && !file) file = value;
+          else if (["channel", "text", "nonce", "replyTo"].includes(key) && typeof value === "string" && !(key in payload)) payload[key] = value;
+          else return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
+        }
+        if (!file) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
+        return await send(payload, row, ip, now(), file);
+      } finally {
+        uploading.delete(row.id);
+      }
+    }
     const length = request.headers.get("content-length");
     if (length && !(Number(length) <= BODY_MAX_BYTES)) return httpError(413, "CHAT_REQUEST_TOO_LARGE", "message is too large");
     const payload = await readJson(request);
     if (!payload) return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
     const time = now();
+    row = store.user(row.id) ?? row;
     const type = payload.type ?? "send";
     if (type === "delete") return remove(payload, row, time);
     if (["role", "timeout", "untimeout", "ban", "unban", "clearprofile"].includes(type)) {
@@ -685,6 +787,7 @@ export function createChatRoom({
     if (type === "edit") return edit(payload, row, time);
     if (type === "react") return react(payload, row, time);
     if (type === "typing") return typing(payload, row, time);
+    if (type === "draft") return draft(payload, row, time);
     return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
   }
 
@@ -693,6 +796,16 @@ export function createChatRoom({
     const route = url.pathname.replace(/^\/api\/chat\//, "");
     const method = request.method;
     const mediaRoute = MEDIA_ROUTE.exec(route);
+    const attachmentRoute = ATTACHMENT_ROUTE.exec(route);
+    if (attachmentRoute && (method === "GET" || method === "HEAD")) {
+      const message = store.message(Number(attachmentRoute[1]));
+      if (message && !canReadChannel("member", message.channel)) {
+        const { row, failure } = await session(request, ip);
+        if (failure) return reply(failure);
+        if (!canReadChannel(row.role, message.channel)) return reply(httpError(404, "CHAT_MEDIA_NOT_FOUND", "that image is gone"));
+      }
+      return media(request, "message", attachmentRoute[1]);
+    }
     if (mediaRoute?.[2] && (method === "GET" || method === "HEAD")) return media(request, mediaRoute[1], mediaRoute[2]);
     const known =
       (["message", "profile"].includes(route) && method === "POST") ||
@@ -704,7 +817,7 @@ export function createChatRoom({
     if (route === "stream") return connect(row, request.signal);
     if (route === "me") return json(200, { viewer: viewer(row) });
     let result;
-    if (route === "history") result = history(url);
+    if (route === "history") result = history(url, row);
     else if (route === "profile") result = method === "POST" ? await editProfile(request, row) : profile(url, row);
     else if (mediaRoute) result = await upload(request, mediaRoute[1], row);
     else result = await action(request, row, ip);

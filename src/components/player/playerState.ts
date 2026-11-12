@@ -103,5 +103,7 @@ export type PlayerSelector =
   | "episodes"
   | "language"
   | "subtitles"
+  | "captionStyle"
   | "quality"
-  | "audio";
+  | "audio"
+  | "provider";

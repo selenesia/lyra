@@ -1,10 +1,11 @@
 import { memo } from "preact/compat";
 import { useEffect, useState } from "preact/hooks";
-import { CHAT_REACTIONS, displayName, type ChatMember } from "../../features/chat/chatProtocol.ts";
+import { CHAT_REACTIONS, CHAT_REACTION_FACES, displayName, type ChatMember } from "../../features/chat/chatProtocol.ts";
 import type { ChatEntry } from "../../features/chat/chatRoom.ts";
 import { IconArrowCornerUpLeft, IconCrossMedium, IconFaceSmilePlus, IconGhost, IconPencil } from "../icons";
 import MessageText from "./MessageText.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
+import { appPath } from "../../core/runtime/hosting.ts";
 import { RoleBadge } from "./ChatProfile.tsx";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
@@ -120,6 +121,18 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
         />
         {entry.editedAt && <span class="chat-edited"> (edited)</span>}
       </div>
+      {entry.attachment && (
+        <a class="chat-attachment" href={appPath(`/api/chat/media/message/${encodeURIComponent(entry.id)}`)} target="_blank" rel="noopener noreferrer">
+          <img
+            src={appPath(`/api/chat/media/message/${encodeURIComponent(entry.id)}`)}
+            alt="chat attachment"
+            width={entry.attachment.width}
+            height={entry.attachment.height}
+            loading="lazy"
+            decoding="async"
+          />
+        </a>
+      )}
       {reactions.length > 0 && (
         <div class="chat-reactions">
           {reactions.map(([emoji, authors]) => (
@@ -131,6 +144,12 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
               onClick={() => actions.react(entry, emoji)}
             >
               <span>{emoji}</span>
+              <span class="chat-reaction-faces">
+                {authors.slice(0, CHAT_REACTION_FACES).map((id) => {
+                  const reactor = entry.reactors?.[id];
+                  return reactor && <ChatAvatar key={id} member={{ author: id, ...reactor }} size={18} />;
+                })}
+              </span>
               <span class="chat-reaction-count">{authors.length}</span>
             </button>
           ))}

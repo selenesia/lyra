@@ -1,5 +1,5 @@
 import { appPath } from "../../core/runtime/hosting.ts";
-import { isTitleType, type TitleType } from "./titles.ts";
+import type { TitleType } from "./titles.ts";
 
 export const WATCH_LANGUAGE_KEY = "lyra-watch-language";
 export const WATCH_LANGUAGE_OPTIONS = [
@@ -86,7 +86,7 @@ function wholeNumber(value: string | null, minimum: number): number | undefined 
 export function parseTitlePlayback(params: URLSearchParams): TitlePlayback | null {
   const type = params.get("media_type");
   const id = params.get("tmdb_id") || "";
-  if (!isTitleType(type) || !/^[1-9]\d{0,9}$/.test(id)) return null;
+  if ((type !== "movie" && type !== "tv") || !/^[1-9]\d{0,9}$/.test(id)) return null;
   if (type === "movie") return { type, id };
   const season = wholeNumber(params.get("season"), 0);
   return season === undefined ? null : { type, id, season };

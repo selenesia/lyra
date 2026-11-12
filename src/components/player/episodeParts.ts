@@ -61,6 +61,7 @@ export function buildNextEpisodeStreamUrl(
   language: "sub" | "dub",
   session: string,
   qualityRequest: string,
+  provider: string,
 ): string {
   const part = episodeParts.find(
     (candidate) => episode >= candidate.start && episode <= candidate.end,
@@ -78,5 +79,6 @@ export function buildNextEpisodeStreamUrl(
   });
   if (qualityRequest) query.set("preferred_quality", qualityRequest);
   appendMegaPlayParams(query, ids);
+  if (provider) query.set("provider", provider);
   return `/stream/anikoto?${query}`;
 }

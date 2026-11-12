@@ -1,5 +1,5 @@
 import { appPath } from "../../core/runtime/hosting.ts";
-import { CHAT_MEDIA, type ChatMediaKind } from "./chatProtocol.ts";
+import { CHAT_ATTACHMENT, CHAT_MEDIA, type ChatMediaKind } from "./chatProtocol.ts";
 
 const QUALITIES = [0.86, 0.74, 0.62, 0.5, 0.4];
 const SOURCE_MAX_BYTES = 25 * 1024 * 1024;
@@ -77,8 +77,8 @@ export function avatarColor(src: string): Promise<string | null> {
 
 export type ChatImageResult = { image: Blob } | { error: "too_large" | "unreadable" };
 
-async function checkGif(file: Blob, kind: ChatMediaKind): Promise<ChatImageResult> {
-  const limits = CHAT_MEDIA[kind].gif;
+async function checkGif(file: Blob, kind: ChatMediaKind | "message"): Promise<ChatImageResult> {
+  const limits = (kind === "message" ? CHAT_ATTACHMENT : CHAT_MEDIA[kind]).gif;
   if (file.size > limits.bytes) return { error: "too_large" };
   try {
     const bitmap = await createImageBitmap(file);
@@ -90,7 +90,7 @@ async function checkGif(file: Blob, kind: ChatMediaKind): Promise<ChatImageResul
   }
 }
 
-export async function encodeChatImage(file: Blob, kind: ChatMediaKind): Promise<ChatImageResult> {
+export async function encodeChatImage(file: Blob, kind: ChatMediaKind | "message"): Promise<ChatImageResult> {
   if (file.type === "image/gif") return checkGif(file, kind);
   if (!file.type.startsWith("image/")) return { error: "unreadable" };
   if (file.size > SOURCE_MAX_BYTES) return { error: "too_large" };
@@ -98,7 +98,7 @@ export async function encodeChatImage(file: Blob, kind: ChatMediaKind): Promise<
   return image ? { image } : { error: "unreadable" };
 }
 
-async function drawChatImage(file: Blob, kind: ChatMediaKind): Promise<Blob | null> {
+async function drawChatImage(file: Blob, kind: ChatMediaKind | "message"): Promise<Blob | null> {
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file);
@@ -106,12 +106,14 @@ async function drawChatImage(file: Blob, kind: ChatMediaKind): Promise<Blob | nu
     return null;
   }
   try {
-    const target = CHAT_MEDIA[kind];
-    const scale = Math.max(target.width / bitmap.width, target.height / bitmap.height);
-    const cropWidth = target.width / scale;
-    const cropHeight = target.height / scale;
-    const width = Math.max(1, Math.round(scale > 1 ? cropWidth : target.width));
-    const height = Math.max(1, Math.round(scale > 1 ? cropHeight : target.height));
+    const target = kind === "message" ? CHAT_ATTACHMENT : CHAT_MEDIA[kind];
+    const scale = kind === "message"
+      ? Math.min(1, target.width / bitmap.width, target.height / bitmap.height)
+      : Math.max(target.width / bitmap.width, target.height / bitmap.height);
+    const cropWidth = kind === "message" ? bitmap.width : target.width / scale;
+    const cropHeight = kind === "message" ? bitmap.height : target.height / scale;
+    const width = Math.max(1, Math.round(kind === "message" ? bitmap.width * scale : scale > 1 ? cropWidth : target.width));
+    const height = Math.max(1, Math.round(kind === "message" ? bitmap.height * scale : scale > 1 ? cropHeight : target.height));
     const { context, encode } = surface(width, height);
     if (!context) return null;
     context.imageSmoothingQuality = "high";

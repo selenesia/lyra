@@ -161,7 +161,7 @@ export default function Sidebar() {
       >
         <IconPlusMedium /> new tab
       </button>
-      <div id="tabs-container" class="tabs-container">
+      <div class="tabs-container">
         {tabViewModels.map(({ tab, isActive, isSplitPair, splitSide }) => {
           return (
             <Tab

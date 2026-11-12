@@ -614,6 +614,11 @@ async function appFetch(req, server, url) {
     return healthResponse((await probeEturnal()) ? 200 : 503);
   }
 
+  if (pathname.startsWith("/api/chat/")) {
+    if (method === "POST") server.timeout(req, 120);
+    return chat.handle(req, { ip: getClientIp(req, server) });
+  }
+
   if (isMochiPath(pathname) || hasMochiReferer(req)) return proxyToMochi(req);
   if (pathname === "/api/dns") {
     return rateLimitApi(req, server) || dnsService.handle(req);
@@ -623,9 +628,6 @@ async function appFetch(req, server, url) {
     if (stream) return stream;
     const failure = httpError(429, "RATE_LIMITED", "too many requests, please try again later");
     return jsonResponse(failure.body, failure.status);
-  }
-  if (pathname.startsWith("/api/chat/")) {
-    return chat.handle(req, { ip: getClientIp(req, server) });
   }
   if (pathname === "/api/notice") {
     const result = await notices.handle(req);

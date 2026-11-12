@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { showHomeView } from "../state/store.ts";
 import { attachSearchLight } from "../core/ui/searchLight.ts";
 import {
-  closeSettingsModalIfOpen,
   getDefaultScrollTarget,
   getScrollTop,
   hasBlockingModalOpen,
@@ -14,10 +13,10 @@ import {
 interface MenuViewOptions {
   bodyClass: string;
   signal: { value: boolean };
-  iconId: string;
-  inactiveIcon: string;
-  activeIcon: string;
-  openedStorageKey: string;
+  iconId?: string;
+  inactiveIcon?: string;
+  activeIcon?: string;
+  openedStorageKey?: string;
   hideOtherViews?: () => void;
   interceptEscape?: () => boolean;
   onShowFrame?: () => void;
@@ -62,11 +61,10 @@ export function useMenuView({
     setVisible(false);
     document.body.classList.remove(bodyClass);
 
-    setElementHtml(iconId, inactiveIcon);
+    if (iconId && inactiveIcon) setElementHtml(iconId, inactiveIcon);
   }, [bodyClass, iconId, inactiveIcon, signal]);
 
   const show = useCallback(() => {
-    closeSettingsModalIfOpen();
     hideOtherViews?.();
 
     showHomeView();
@@ -77,11 +75,11 @@ export function useMenuView({
     requestAnimationFrame(() => {
       const target = scrollTargetRef.current;
       if (target) setScrollTop(target, savedScrollRef.current);
-      localStorage.setItem(openedStorageKey, "true");
+      if (openedStorageKey) localStorage.setItem(openedStorageKey, "true");
       onShowFrame?.();
     });
 
-    setElementHtml(iconId, activeIcon);
+    if (iconId && activeIcon) setElementHtml(iconId, activeIcon);
   }, [
     activeIcon,
     bodyClass,

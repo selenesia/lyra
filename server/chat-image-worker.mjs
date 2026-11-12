@@ -1,9 +1,9 @@
 import os from "os";
 import * as ort from "onnxruntime-node";
 import labels from "./chat-image-labels.json" with { type: "json" };
-import { CROP_SIDE, ImageTooVaried, ImageUnreadable, pickFrames, planImage, resizeCrops } from "./chat-image-frames.mjs";
+import { CROP_SIDE, ImageTooVaried, ImageUnreadable, planImage, resizeCrops } from "./chat-image-frames.mjs";
 import { IMAGE_CLASSIFIERS, IMAGE_EMBEDDER, IMAGE_MODEL_ID } from "./chat-image-model.mjs";
-import { flaggedFrames, IMAGE_COVERAGE, scoreImage } from "./chat-image-policy.mjs";
+import { IMAGE_COVERAGE, scoreImage } from "./chat-image-policy.mjs";
 import { NEGATIVE, negativeMessage } from "../src/core/runtime/messages.ts";
 
 const THREADS = Math.max(1, Math.min(4, Math.floor(os.availableParallelism() / 2)));
@@ -70,13 +70,6 @@ async function screenFrames(loaded, plan) {
   return readings;
 }
 
-function chooseFrames(plan, screened) {
-  const flagged = flaggedFrames(screened, plan.boxes);
-  if (flagged.length * plan.boxes > IMAGE_COVERAGE.flaggedCrops) throw new ImageTooVaried(negativeMessage("gif has too many flagged frames to check"));
-  const diverse = pickFrames(plan.thumbnails, Math.max(1, Math.floor(IMAGE_COVERAGE.diverseCrops / plan.boxes)));
-  return [...new Set([...diverse, ...flagged])].sort((a, b) => a - b);
-}
-
 async function readCrops(loaded, { count, pixels }) {
   const crops = [];
   for (let crop = 0; crop < count; crop += 1) {
@@ -95,7 +88,7 @@ async function readCrops(loaded, { count, pixels }) {
 export async function scanImage(loaded, bytes, type) {
   const plan = await planImage(bytes, type, { screenSide: SCREEN.side, screenCrops: IMAGE_COVERAGE.screenCrops });
   const screened = await screenFrames(loaded, plan);
-  const wanted = chooseFrames(plan, screened);
+  const wanted = Array.from({ length: plan.frames }, (_, index) => index);
   const crops = await readCrops(loaded, plan.render(wanted));
   crops.forEach((crop, index) => {
     crop[IMAGE_COVERAGE.screen] = screened[wanted[Math.floor(index / plan.boxes)] * plan.boxes + (index % plan.boxes)];
@@ -115,9 +108,13 @@ async function check({ id, bytes, mime }) {
 }
 
 if (process.send) {
+  let queue = Promise.resolve();
   process.on("disconnect", () => process.exit(0));
   process.on("message", async (data) => {
-    if (data?.type === "check") return check(data);
+    if (data?.type === "check") {
+      queue = queue.then(() => check(data));
+      return;
+    }
     if (data?.type !== "start") return;
     try {
       models = await loadImageModels(data.models);

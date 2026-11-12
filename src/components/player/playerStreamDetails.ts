@@ -28,6 +28,7 @@ interface StreamDetailsContext {
   languageStreamInfoRef: MutableRef<{ params: string; info: StreamInfoResponse } | null>;
   syncMediaState: (patch?: MediaStateHints) => void;
   setStreamProvider: Dispatch<StateUpdater<string | null>>;
+  setStreamProviders: Dispatch<StateUpdater<string[]>>;
   fallbackPendingRef: MutableRef<boolean>;
   requested4kContext: string;
   playbackContext: string;
@@ -39,12 +40,18 @@ interface StreamDetailsContext {
   unavailableMessage: (status?: number | undefined) => string;
 }
 
+export function streamProviderIds(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((id): id is string => typeof id === "string" && /^[a-z0-9-]{1,32}$/.test(id)))]
+    : [];
+}
+
 export function loadStreamDetails({
   streamQuery, titleMode, setStreamLanguages, setSourceLanguage,
   setLoadingStreamInfo, sourceGenerationRef, sourceContextRef,
   manifestDurationRef, setIntroMarker, setOutroMarker, language,
-  languageStreamInfoRef, syncMediaState, setStreamProvider, fallbackPendingRef,
-  requested4kContext, playbackContext, request4k, notify4kFallback,
+  languageStreamInfoRef, syncMediaState, setStreamProvider, setStreamProviders,
+  fallbackPendingRef, requested4kContext, playbackContext, request4k, notify4kFallback,
   setSubtitleTracks, notifyPreference, mediaStateRef, unavailableMessage,
 }: StreamDetailsContext) {
   if (!streamQuery) {
@@ -88,6 +95,7 @@ export function loadStreamDetails({
       setIntroMarker(info?.intro || null);
       setOutroMarker(info?.outro || null);
       setStreamProvider(info.source?.provider || "");
+      setStreamProviders(streamProviderIds(info.providers));
       fallbackPendingRef.current = requested4kContext === playbackContext &&
         (info.quality_fallback === true || (!request4k &&
           !info.qualities?.some((quality) => Number(quality.height) >= 2160)));

@@ -287,8 +287,7 @@ export default function Bookmarks() {
 
   return (
     <div
-      id="bookmarks-container"
-      class={isEditMode ? "bookmarks-edit-mode" : ""}
+      class={`bookmarks-container${isEditMode ? " bookmarks-edit-mode" : ""}`}
       onMouseEnter={warmExtensionRuntime}
     >
       <div class="bookmarks-header">

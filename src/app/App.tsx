@@ -6,7 +6,7 @@ import Bookmarks from "../components/browser/Bookmarks.tsx";
 import Footer from "../components/layout/Footer.tsx";
 import LiveNotices from "../components/layout/LiveNotices.tsx";
 import TopBar from "../components/browser/TopBar.tsx";
-import Tutorial from "../components/layout/Tutorial.tsx";
+import { tutorialSeen } from "../components/layout/tutorialSeen.ts";
 import hachiiUrl from "../assets/images/peaks/hachii.webp";
 import konaUrl from "../assets/images/peaks/kona.webp";
 import osaUrl from "../assets/images/peaks/osa.webp";
@@ -15,9 +15,10 @@ import {
   loadWatchCatalog,
   loadGamesCatalog,
   loadNewTabModal,
-  loadSettingsModal,
+  loadSettingsPage,
   loadChatPage,
   loadFallingLeaves,
+  loadTutorial,
 } from "./loaders.ts";
 import {
   prefersReducedMotion,
@@ -59,9 +60,10 @@ function getRandomPeakIndex(): number {
 const GamesCatalog = lazy(loadGamesCatalog);
 const WatchCatalog = lazy(loadWatchCatalog);
 const NewTabModal = lazy(loadNewTabModal);
-const SettingsModal = lazy(loadSettingsModal);
+const SettingsPage = lazy(loadSettingsPage);
 const ChatPage = lazy(loadChatPage);
 const FallingLeaves = lazy(loadFallingLeaves);
+const Tutorial = lazy(loadTutorial);
 
 const SITE_IN_USE_CLASSES = [
   "browser-view",
@@ -86,9 +88,12 @@ export default function App() {
   const [gamesMounted, setGamesMounted] = useState(false);
   const [watchMounted, setWatchMounted] = useState(false);
   const [newTabMounted, setNewTabMounted] = useState(false);
-  const [settingsMounted, setSettingsMounted] = useState(false);
+  const [settingsPageMounted, setSettingsPageMounted] = useState(false);
   const [chatMounted, setChatMounted] = useState(false);
   const [leavesMounted, setLeavesMounted] = useState(false);
+  const [tutorial, setTutorial] = useState<"unseen" | "replay" | null>(() =>
+    tutorialSeen() ? null : "unseen",
+  );
   const [peakSrc] = useState(
     () =>
       document.documentElement.dataset.peakSrc ||
@@ -101,10 +106,9 @@ export default function App() {
     const showNewTab = () => {
       setNewTabMounted(true);
     };
-    const showSettings = () => {
-      setSettingsMounted(true);
-    };
+    const showSettingsPage = () => setSettingsPageMounted(true);
     const showChat = () => setChatMounted(true);
+    const replayTutorial = () => setTutorial((current) => current ?? "replay");
     const runtimeWindow = window as typeof window & {
       showNewTabModal?: () => void;
     };
@@ -114,11 +118,14 @@ export default function App() {
     window.showWatchMenu = showWatch;
     window.toggleWatchMenu = showWatch;
     runtimeWindow.showNewTabModal = showNewTab;
-    window.toggleSettingsModal = showSettings;
+    window.showSettingsPage = showSettingsPage;
+    window.toggleSettingsPage = showSettingsPage;
     window.showChatPage = showChat;
     window.toggleChatPage = showChat;
+    document.addEventListener("show-tutorial", replayTutorial);
 
     return () => {
+      document.removeEventListener("show-tutorial", replayTutorial);
       if (window.showGameMenu === showGames) delete window.showGameMenu;
       if (window.toggleGameMenu === showGames) delete window.toggleGameMenu;
       if (window.showWatchMenu === showWatch) delete window.showWatchMenu;
@@ -126,8 +133,11 @@ export default function App() {
       if (runtimeWindow.showNewTabModal === showNewTab) {
         delete runtimeWindow.showNewTabModal;
       }
-      if (window.toggleSettingsModal === showSettings) {
-        delete window.toggleSettingsModal;
+      if (window.showSettingsPage === showSettingsPage) {
+        delete window.showSettingsPage;
+      }
+      if (window.toggleSettingsPage === showSettingsPage) {
+        delete window.toggleSettingsPage;
       }
       if (window.showChatPage === showChat) delete window.showChatPage;
       if (window.toggleChatPage === showChat) delete window.toggleChatPage;
@@ -225,6 +235,11 @@ export default function App() {
             <ChatPage openOnMount />
           </Suspense>
         )}
+        {settingsPageMounted && (
+          <Suspense fallback={null}>
+            <SettingsPage openOnMount />
+          </Suspense>
+        )}
         <div id="iframe-container">
           <div id="iframe-resize-divider"></div>
         </div>
@@ -235,13 +250,12 @@ export default function App() {
           <NewTabModal openOnMount />
         </Suspense>
       )}
-      {settingsMounted && (
+      <div id="overlay" class="overlay" />
+      {tutorial && (
         <Suspense fallback={null}>
-          <SettingsModal openOnMount />
+          <Tutorial replayOnMount={tutorial === "replay"} />
         </Suspense>
       )}
-      <div id="overlay" class="overlay" />
-      <Tutorial />
       <LiveNotices />
     </>
   );

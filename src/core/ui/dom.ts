@@ -28,19 +28,8 @@ export function setElementHtml(id: string, html: string): void {
   if (el) el.innerHTML = html;
 }
 
-export function closeSettingsModalIfOpen(): void {
-  if (
-    typeof window.toggleSettingsModal === "function" &&
-    document.getElementById("settings-modal")?.classList.contains("open")
-  ) {
-    window.toggleSettingsModal();
-  }
-}
-
 export function hasBlockingModalOpen(): boolean {
-  return (
-    Array.from(document.querySelectorAll(".popup")).some(
-      (el) => (el as HTMLElement).offsetHeight > 0,
-    ) || document.querySelector(".settings-modal.open") !== null
+  return Array.from(document.querySelectorAll(".popup")).some(
+    (el) => (el as HTMLElement).offsetHeight > 0,
   );
 }

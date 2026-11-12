@@ -24,7 +24,9 @@ declare global {
       episode: number;
       language?: "sub" | "dub";
     }) => void;
-    toggleSettingsModal?: () => void;
+    showSettingsPage?: () => void;
+    hideSettingsPage?: () => void;
+    toggleSettingsPage?: () => void;
     showChatPage?: () => void;
     hideChatPage?: () => void;
     toggleChatPage?: () => void;

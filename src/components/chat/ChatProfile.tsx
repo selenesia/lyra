@@ -501,7 +501,7 @@ export default function ChatProfile({
         {roles.length > 0 && (
           <div class="chat-profile-field">
             <label>role</label>
-            <p class="chat-profile-hint">mods can time out. admins can also ban and set roles.</p>
+            <p class="chat-profile-hint">mods can time out, ban, and reset profiles. admins can also set roles.</p>
             <div class="chat-profile-row">
               {roles.map((role) => (
                 <button

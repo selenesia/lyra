@@ -205,16 +205,6 @@ export function requestSlot(intervalMs: number, now: () => number = Date.now) {
   };
 }
 
-export async function withTimeout<T>(timeoutMs: number, task: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new LoadFailure("timeout")), timeoutMs);
-  try {
-    return await task(controller.signal);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function hedgedCount(
   primary: Promise<number>,
   fallback: () => Promise<number>,

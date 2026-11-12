@@ -1,6 +1,5 @@
 import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import type { PlayerSelector } from "./playerState.ts";
-import type { MediaStateHints } from "../../core/media/mediaState.ts";
 
 interface PlayerShortcutsContext {
   selectorOpenRef: MutableRef<boolean>;
@@ -12,7 +11,7 @@ interface PlayerShortcutsContext {
   seekTo: (seconds: number) => void;
   togglePlay: () => void;
   pendingSeekRef: MutableRef<number | null>;
-  syncMediaState: (patch?: MediaStateHints) => void;
+  stepVolume: (delta: number) => void;
   toggleMute: () => void;
   toggleFullscreen: () => void;
   toggleCaptions: () => void;
@@ -21,7 +20,7 @@ interface PlayerShortcutsContext {
 
 export function attachPlayerShortcuts({
   selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
-  displayDurationRef, seekTo, togglePlay, pendingSeekRef, syncMediaState,
+  displayDurationRef, seekTo, togglePlay, pendingSeekRef, stepVolume,
   toggleMute, toggleFullscreen, toggleCaptions, setSpeed,
 }: PlayerShortcutsContext) {
   const handleKeydown = (event: KeyboardEvent) => {
@@ -87,27 +86,11 @@ export function attachPlayerShortcuts({
         break;
       case "arrowup":
         event.preventDefault();
-        video.volume = Math.min(1, video.volume + 0.05);
-        video.muted = false;
-        try {
-          localStorage.setItem(
-            "lyra-anime-volume",
-            String(video.volume * 100),
-          );
-        } catch {}
-        syncMediaState();
+        stepVolume(5);
         break;
       case "arrowdown":
         event.preventDefault();
-        video.volume = Math.max(0, video.volume - 0.05);
-        video.muted = false;
-        try {
-          localStorage.setItem(
-            "lyra-anime-volume",
-            String(video.volume * 100),
-          );
-        } catch {}
-        syncMediaState();
+        stepVolume(-5);
         break;
       case "m":
         toggleMute();

@@ -1,5 +1,9 @@
 import Hls from "hls.js";
 import { HLS_PLAYBACK_CONFIG } from "./hlsConfig.ts";
+import {
+  measuredBandwidthConfig,
+  rememberBandwidth,
+} from "./streamBandwidth.ts";
 import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import {
   type SubtitleTrack,
@@ -162,6 +166,7 @@ export function attachPlayerSource({
     let detachNative: (() => void) | undefined;
     const hls = new Hls({
       ...HLS_PLAYBACK_CONFIG,
+      ...measuredBandwidthConfig(),
       startFragPrefetch: true,
       backBufferLength: 30,
       maxBufferLength: 30,
@@ -312,6 +317,7 @@ export function attachPlayerSource({
     hls.on(Hls.Events.FRAG_LOADED, (_event, fragmentInfo) => {
       if (!isCurrentHls()) return;
       networkRecoveries = 0;
+      rememberBandwidth(hls.bandwidthEstimate);
       if (firstSegmentRecordedRef.current) return;
       firstSegmentRecordedRef.current = true;
       const stats = fragmentInfo.frag.stats;

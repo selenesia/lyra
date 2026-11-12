@@ -11,6 +11,7 @@ interface PlayerMenuProps {
   ariaLabel?: string;
   triggerClassName?: string;
   panelClassName?: string;
+  panelRole?: "listbox" | "group";
 }
 
 export function PlayerMenu({
@@ -23,6 +24,7 @@ export function PlayerMenu({
   ariaLabel,
   triggerClassName,
   panelClassName = "",
+  panelRole = "listbox",
 }: PlayerMenuProps) {
   return (
     <div class={`player-control-popover ${className}`}>
@@ -49,7 +51,7 @@ export function PlayerMenu({
       </button>
       <div
         class={`player-selector-options${panelClassName ? ` ${panelClassName}` : ""}${open ? " is-open" : ""}`}
-        role="listbox"
+        role={panelRole}
         aria-hidden={!open}
       >
         {children}

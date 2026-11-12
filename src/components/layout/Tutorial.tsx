@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { isStatic } from "../../core/runtime/hosting.ts";
 import { showHomeView } from "../../state/store.ts";
+import { markTutorialSeen, tutorialSeen } from "./tutorialSeen.ts";
 import "../../assets/styles/tutorial.css";
 
-const STORAGE_KEY = "lyra-tutorial-seen";
 const SPOTLIGHT_PAD = 5;
 
 function spotlightRadius(target: Element) {
@@ -25,18 +25,16 @@ const steps = [
   { title: "take another look anytime...", target: "#settings", text: "open settings and select tutorial to replay this guide. use back to revisit a step, or click finish to start exploring!!" },
 ];
 
-export default function Tutorial() {
+export default function Tutorial({ replayOnMount = false }: { replayOnMount?: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const spotlight = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY) !== "1"; } catch { return true; }
-  });
+  const [open, setOpen] = useState(() => !tutorialSeen());
   const [step, setStep] = useState(0);
   const currentStep = steps[step]!;
 
   const dismiss = () => {
-    try { localStorage.setItem(STORAGE_KEY, "1"); } catch { }
+    markTutorialSeen();
     setOpen(false);
   };
 
@@ -45,10 +43,12 @@ export default function Tutorial() {
       window.hideGameMenu?.();
       window.hideWatchMenu?.();
       window.hideChatPage?.();
+      window.hideSettingsPage?.();
       showHomeView();
       setStep(0);
       setOpen(true);
     };
+    if (replayOnMount) replay();
     document.addEventListener("show-tutorial", replay);
     return () => document.removeEventListener("show-tutorial", replay);
   }, []);

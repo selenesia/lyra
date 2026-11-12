@@ -34,6 +34,7 @@ export const sidebarHiddenSignal = uiSignal(false);
 export const gamesViewSignal = uiSignal(false);
 export const watchViewSignal = uiSignal(false);
 export const chatViewSignal = uiSignal(false);
+export const settingsViewSignal = uiSignal(false);
 export const currentUrlSignal = uiSignal<string>("");
 
 export function initUiSignals(): void {

@@ -55,8 +55,15 @@ function gifSize(bytes) {
 
 const IMAGE_SIZES = { "image/webp": webpSize, "image/jpeg": jpegSize, "image/gif": gifSize };
 
+export function chatImageType(bytes) {
+  if (bytes.length >= 12 && ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WEBP")) return "image/webp";
+  if (bytes.length >= 6 && (ascii(bytes, 0, "GIF87a") || ascii(bytes, 0, "GIF89a"))) return "image/gif";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  return null;
+}
+
 export function readChatImage(bytes, type, limits) {
   const size = IMAGE_SIZES[type]?.(bytes) ?? null;
   if (!size || size.width < 1 || size.height < 1 || size.width > limits.width || size.height > limits.height) return null;
-  return { type, hash: createHash("sha256").update(bytes).digest("base64url").slice(0, 16), bytes };
+  return { type, ...size, hash: createHash("sha256").update(bytes).digest("base64url").slice(0, 16), bytes };
 }

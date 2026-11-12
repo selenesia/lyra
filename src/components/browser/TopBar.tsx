@@ -13,7 +13,7 @@ import {
   preloadWatchCatalog,
   loadCloudSync,
   preloadGamesCatalog,
-  loadSettingsModal,
+  loadSettingsPage,
   loadChatPage,
 } from "../../app/loaders.ts";
 
@@ -68,6 +68,7 @@ export default function TopBar() {
     window.hideGameMenu?.();
     window.hideWatchMenu?.();
     window.hideChatPage?.();
+    window.hideSettingsPage?.();
   }, []);
 
   const handleGamesClick = useCallback((e: MouseEvent) => {
@@ -94,7 +95,7 @@ export default function TopBar() {
 
   const handleSettingsClick = useCallback((e: MouseEvent) => {
     e.preventDefault();
-    invokeWindowAction("toggleSettingsModal");
+    invokeWindowAction("toggleSettingsPage");
   }, []);
 
   return (
@@ -162,8 +163,8 @@ export default function TopBar() {
           id="settings"
           class="icon-btn"
           data-tooltip="settings"
-          onPointerEnter={() => void loadSettingsModal()}
-          onFocus={() => void loadSettingsModal()}
+          onPointerEnter={() => void loadSettingsPage()}
+          onFocus={() => void loadSettingsPage()}
           onClick={handleSettingsClick}
         >
           <IconSettingsGear4 solid class="settings" />
