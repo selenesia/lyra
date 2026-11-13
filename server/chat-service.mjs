@@ -1,4 +1,5 @@
 import { createChatRoom } from "./chat.mjs";
+import { createChatAudioVideo } from "./chat-audio-video.mjs";
 import { createCloudsyncIdentity } from "./chat-auth.mjs";
 import { chatSocketPath, serveChatControl } from "./chat-control.mjs";
 import { createChatImageCheck } from "./chat-image-check.mjs";
@@ -13,6 +14,7 @@ export function startChat({ root }) {
     store,
     identify: createCloudsyncIdentity(),
     checkImage: images.check,
+    prepareMedia: createChatAudioVideo().prepare,
     checkText: texts.check,
     warmText: texts.warm,
   });

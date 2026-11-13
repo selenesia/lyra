@@ -418,13 +418,9 @@ body.settings-view .settings-page .catalog-topbar.has-scroll-shadow::before {
 .settings-page-subtitle-preview {
   align-items: flex-end;
   aspect-ratio: 16 / 9;
-  background: linear-gradient(
-    160deg,
-    #3fc5f0 0%,
-    #4a6fd8 45%,
-    #6b3fb5 75%,
-    #e0a04a 100%
-  );
+  background-image: url(/assets/images/peaks/madoka.webp);
+  background-position: center;
+  background-size: cover;
   border-radius: var(--radius-panel);
   box-sizing: border-box;
   color: var(--caption-color, #fff);

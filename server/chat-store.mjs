@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { Database } from "bun:sqlite";
 import { CHAT_REACTION_FACES, conversationIdOf, conversationKey, isConversationKey } from "../src/features/chat/chatProtocol.ts";
+import { mentionsName } from "../src/features/chat/chatText.ts";
 
 export const PERMANENT = 8_640_000_000_000_000;
 
@@ -236,6 +237,10 @@ export function createChatStore(file) {
     unread: db.query(
       "SELECT COUNT(*) AS count FROM chat_messages WHERE channel = $channel AND id > $after AND user_id != $userId AND notice IS NULL",
     ),
+    unreadMentions: db.query(
+      `SELECT text, reply_user_id FROM chat_messages WHERE channel = $channel AND id > $after AND user_id != $userId AND notice IS NULL
+        AND (reply_user_id = $userId OR instr(lower(text), $handle) > 0) ORDER BY id DESC LIMIT 50`,
+    ),
     latestId: db.query("SELECT COALESCE(MAX(id), 0) AS id FROM chat_messages WHERE channel = $channel"),
     dmByKey: db.query("SELECT id FROM chat_conversations WHERE dm_key = $key"),
     insertConversation: db.query(
@@ -318,8 +323,17 @@ export function createChatStore(file) {
     return { deleted: false };
   }
 
+  function mentionedIn(channel, after, userId) {
+    const username = statements.user.get({ id: userId })?.username;
+    if (!username) return false;
+    return statements.unreadMentions
+      .all({ channel, after, userId, handle: `@${username.toLowerCase()}` })
+      .some((message) => message.reply_user_id === userId || mentionsName(message.text, username));
+  }
+
   function conversationOf(row, userId) {
     const channel = conversationKey(row.id);
+    const unread = statements.unread.get({ channel, after: row.last_read_id, userId }).count;
     return {
       id: row.id,
       kind: row.kind,
@@ -330,7 +344,8 @@ export function createChatStore(file) {
       hidden: !!row.hidden,
       members: statements.conversationMembers.all({ id: row.id }),
       last: statements.lastMessage.get({ channel }) ?? null,
-      unread: statements.unread.get({ channel, after: row.last_read_id, userId }).count,
+      unread,
+      mentioned: unread > 0 && row.kind === "group" && mentionedIn(channel, row.last_read_id, userId),
     };
   }
 

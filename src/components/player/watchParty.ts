@@ -3,8 +3,10 @@ import { useEffect, useRef, useState, type MutableRef } from "preact/hooks";
 import { appPath } from "../../core/runtime/hosting.ts";
 import { toast } from "../../core/ui/toast.ts";
 import { partyMediaOf } from "../../features/chat/chatParty.ts";
+import { blockedNotice, isModerationCategory } from "../../features/chat/moderationNotice.ts";
 import type { MediaStateHints } from "../../core/media/mediaState.ts";
 import {
+  CHAT_LIMITS,
   CHAT_PARTY_LIMITS,
   displayName,
   isPartyControl,
@@ -14,6 +16,7 @@ import {
   type ChatMember,
   type ChatParty,
   type ChatPartyControl,
+  type ChatPartyMessage,
   type ChatPartyPath,
   type ChatPartyPlayback,
   type ChatChannel,
@@ -167,9 +170,44 @@ export function partyFailureText(code: unknown, status: number): string {
     case "CHAT_USERNAME_BLOCKED":
       return "you can't join watch parties right now";
   }
-  if (status === 401) return "sign in to chat to join watch parties";
+  if (status === 401) return "make a cloudsync account to join watch parties";
   if (status === 404) return "this watch party has ended or is unavailable";
   return "the watch party is unreachable right now";
+}
+
+export function partyChatFailureText(code: unknown, status: number, category?: unknown): string {
+  switch (code) {
+    case "CHAT_MESSAGE_BLOCKED":
+      return isModerationCategory(category) ? blockedNotice("message", category) : "that message was blocked for breaking the rules";
+    case "CHAT_TEXT_INVALID":
+      return `messages need 1 to ${CHAT_LIMITS.text} characters`;
+    case "CHAT_FORBIDDEN":
+      return "join the watch party first";
+  }
+  return partyFailureText(code, status);
+}
+
+export function isPartyMessage(value: unknown): value is ChatPartyMessage {
+  const message = value as Partial<ChatPartyMessage> | null;
+  return (
+    typeof message === "object" && message !== null &&
+    typeof message.id === "string" && /^\d{1,15}$/.test(message.id) &&
+    typeof message.author === "string" &&
+    typeof message.name === "string" &&
+    typeof message.text === "string" &&
+    typeof message.at === "number" && Number.isFinite(message.at)
+  );
+}
+
+export function mergePartyMessages(
+  current: readonly ChatPartyMessage[],
+  incoming: readonly ChatPartyMessage[],
+  limit: number = CHAT_PARTY_LIMITS.messages,
+): readonly ChatPartyMessage[] {
+  const known = new Set(current.map((message) => message.id));
+  const added = incoming.filter((message) => !known.has(message.id));
+  if (!added.length) return current;
+  return [...current, ...added].sort((left, right) => Number(left.id) - Number(right.id)).slice(-limit);
 }
 
 function isPlayback(value: unknown): value is ChatPartyPlayback {
@@ -279,8 +317,8 @@ function releasePlayer(player: WatchPartyPlayer) {
 }
 
 type PartyResult =
-  | { ok: true; party: ChatParty | null }
-  | { ok: false; status: number; code: unknown };
+  | { ok: true; party: ChatParty | null; message: ChatPartyMessage | null }
+  | { ok: false; status: number; code: unknown; category?: unknown };
 
 async function postParty(payload: Record<string, unknown>): Promise<PartyResult> {
   try {
@@ -290,8 +328,14 @@ async function postParty(payload: Record<string, unknown>): Promise<PartyResult>
       body: JSON.stringify(payload),
     });
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (response.ok) return { ok: true, party: isPartyState(body.party) ? body.party : null };
-    return { ok: false, status: response.status, code: body.code };
+    if (response.ok) {
+      return {
+        ok: true,
+        party: isPartyState(body.party) ? body.party : null,
+        message: isPartyMessage(body.message) ? body.message : null,
+      };
+    }
+    return { ok: false, status: response.status, code: body.code, category: body.category };
   } catch {
     return { ok: false, status: 0, code: undefined };
   }
@@ -310,6 +354,7 @@ interface PartyView {
   active: boolean;
   party: ChatParty | null;
   viewer: string;
+  messages: readonly ChatPartyMessage[];
 }
 
 interface WatchPartyActions {
@@ -318,6 +363,7 @@ interface WatchPartyActions {
   reportPlayback: () => void;
   reportMedia: (query: string, keepPlaying: boolean, navigateTo?: string) => Promise<boolean>;
   setControl: (control: ChatPartyControl) => void;
+  say: (text: string) => Promise<string | null>;
   copyInvite: () => void;
   leave: () => void;
   end: () => void;
@@ -331,6 +377,7 @@ export interface WatchParty extends WatchPartyActions {
   isHost: boolean;
   canControl: boolean;
   watchers: ChatMember[];
+  messages: readonly ChatPartyMessage[];
 }
 
 const IDLE_ACTIONS: WatchPartyActions = {
@@ -339,12 +386,14 @@ const IDLE_ACTIONS: WatchPartyActions = {
   reportPlayback: () => undefined,
   reportMedia: () => Promise.resolve(true),
   setControl: () => undefined,
+  say: () => Promise.resolve(null),
   copyInvite: () => undefined,
   leave: () => undefined,
   end: () => undefined,
 };
 
 const NO_WATCHERS: ChatMember[] = [];
+const NO_MESSAGES: readonly ChatPartyMessage[] = [];
 
 function createPartySync(
   id: string,
@@ -352,6 +401,7 @@ function createPartySync(
   setView: (view: PartyView) => void,
 ) {
   let party: ChatParty | null = null;
+  let messages = NO_MESSAGES;
   let viewer = "";
   let active = true;
   let stopped = true;
@@ -382,7 +432,13 @@ function createPartySync(
   };
   const live = () => active && !stopped;
   const publish = () => {
-    if (!stopped) setView({ active, party: active ? party : null, viewer });
+    if (!stopped) setView({ active, party: active ? party : null, viewer, messages: active ? messages : NO_MESSAGES });
+  };
+  const receiveMessages = (incoming: readonly ChatPartyMessage[]) => {
+    const next = mergePartyMessages(messages, incoming);
+    if (next === messages) return;
+    messages = next;
+    publish();
   };
   const busy = () => sending || dirty || sendTimer !== null || mediaPending > 0;
   const controls = () => !party || party.control === "everyone" || party.host === viewer;
@@ -634,6 +690,11 @@ function createPartySync(
       if (data.by !== viewer && typeof data.name === "string") toast.info(mediaNoticeText(data.name, next));
       reconcile();
     });
+    source.addEventListener("chat", (event) => {
+      const data = readEvent(event);
+      if (!data || !Array.isArray(data.messages) || !live()) return;
+      receiveMessages(data.messages.filter(isPartyMessage));
+    });
     source.addEventListener("ended", () => {
       if (!live()) return;
       if (!ending) toast.info("the watch party ended");
@@ -722,6 +783,20 @@ function createPartySync(
       if (!live() || !party || party.host !== viewer || party.control === control) return;
       void postParty({ type: "party-control", id, control }).then(accept);
     },
+    say: async (text) => {
+      if (!live() || !party || !viewer) return partyChatFailureText(undefined, 0);
+      const result = await postParty({ type: "party-chat", id, text });
+      if (!live()) return null;
+      if (result.ok) {
+        if (result.message) receiveMessages([result.message]);
+        return null;
+      }
+      if (result.code === "CHAT_PARTY_NOT_FOUND") {
+        fail(result);
+        return null;
+      }
+      return partyChatFailureText(result.code, result.status, result.category);
+    },
     copyInvite: () => {
       const url = party
         ? new URL(appPath(partyPlayerPath(party)), window.location.href).href
@@ -779,7 +854,7 @@ function createPartySync(
 export function useWatchParty(initialId: string | null, player: WatchPartyPlayer): WatchParty {
   const playerRef = useRef(player);
   playerRef.current = player;
-  const [view, setView] = useState<PartyView>(() => ({ active: Boolean(initialId), party: null, viewer: "" }));
+  const [view, setView] = useState<PartyView>(() => ({ active: Boolean(initialId), party: null, viewer: "", messages: NO_MESSAGES }));
   const [sync, setSync] = useState(() => (initialId ? createPartySync(initialId, playerRef, setView) : null));
   useEffect(() => {
     if (!sync) return;
@@ -807,7 +882,7 @@ export function useWatchParty(initialId: string | null, player: WatchPartyPlayer
       if (!current) {
         const created = result.party;
         window.history.replaceState(window.history.state, "", withPartyParam(window.location.href, window.location.href, created.id));
-        setView({ active: true, party: created, viewer: created.host });
+        setView({ active: true, party: created, viewer: created.host, messages: NO_MESSAGES });
         setSync(createPartySync(created.id, playerRef, setView));
       }
       toast.success(`watch party ${channels.length > 1 ? "invites" : "invite"} sent`);
@@ -819,5 +894,6 @@ export function useWatchParty(initialId: string | null, player: WatchPartyPlayer
     isHost,
     canControl: !view.active || !party || party.control === "everyone" || isHost,
     watchers: party?.watchers ?? NO_WATCHERS,
+    messages: view.messages,
   };
 }

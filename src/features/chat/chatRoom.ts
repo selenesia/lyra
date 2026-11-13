@@ -5,10 +5,13 @@ import { blockedNotice, isModerationCategory, type ModerationCategory } from "./
 import type { ChatRole } from "./chatRoles.ts";
 import { mentionsName } from "./chatText.ts";
 import {
+  CHAT_AUDIO,
   CHAT_CHANNELS,
   CHAT_CONVERSATION_LIMITS,
   CHAT_LIMITS,
   CHAT_PARTY_LIMITS,
+  CHAT_VIDEO,
+  type ChatAttachmentKind,
   type ChatChannel,
   type ChatConversation,
   type ChatConversationKey,
@@ -29,6 +32,11 @@ import {
 
 export interface ChatEntry extends ChatMessage {
   pending?: boolean;
+}
+
+export interface ChatUpload {
+  blob: Blob;
+  kind: ChatAttachmentKind;
 }
 
 export type ChatStatus = "connecting" | "live" | "offline";
@@ -188,6 +196,7 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
   const blockedText = (subject: string) =>
     category ? blockedNotice(subject, category) : `that ${subject} was blocked for breaking the rules`;
   const field = typeof body.field === "string" ? PROFILE_FIELD_LABELS[body.field] : undefined;
+  const media = body.kind === "video" || body.kind === "audio" || body.kind === "file" ? body.kind : "image";
   const failure = (error: string): ChatFailure => ({
     error: negativeMessage(error),
     ...(typeof code === "string" && { code }),
@@ -200,8 +209,6 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
       return failure("you are timed out for a bit");
     case "CHAT_RATE_LIMITED":
       return failure("slow down a little");
-    case "CHAT_DUPLICATE":
-      return failure("you just sent that");
     case "CHAT_TEXT_INVALID":
       return failure(`messages need 1 to ${CHAT_LIMITS.text} characters`);
     case "CHAT_MESSAGE_NOT_FOUND":
@@ -223,15 +230,19 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
     case "CHAT_PROFILE_INVALID":
       return failure(`that ${field ?? "profile text"} is too long`);
     case "CHAT_MEDIA_TOO_LARGE":
-      return failure("that image is too large");
+      return failure(`that ${media} is too large`);
+    case "CHAT_MEDIA_TOO_LONG":
+      return failure(media === "audio"
+        ? `that audio is too long, audio can be up to ${CHAT_AUDIO.seconds / 60} minutes`
+        : `that video is too long, videos can be up to ${CHAT_VIDEO.seconds} seconds`);
     case "CHAT_MEDIA_INVALID":
-      return failure("that image could not be used");
+      return failure(`that ${media} could not be used`);
     case "CHAT_MEDIA_TOO_VARIED":
       return failure("that gif has too many different frames, try a shorter one");
     case "CHAT_MEDIA_BLOCKED":
-      return failure(blockedText(isChatMediaKind(body.kind) ? body.kind : "image"));
+      return failure(blockedText(isChatMediaKind(body.kind) || body.kind === "video" ? body.kind : "image"));
     case "CHAT_MEDIA_CHECK_UNAVAILABLE":
-      return failure("image checks are unavailable right now");
+      return failure(media === "image" || media === "video" ? `${media} checks are unavailable right now` : "uploads are unavailable right now");
     case "CHAT_NAME_BLOCKED":
       return failure(blockedText("group name"));
     case "CHAT_NAME_INVALID":
@@ -383,9 +394,10 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   }, [attempt, updateViewer]);
 
   const ready = access.state === "ready";
+  const connectable = ready || access.state === "checking";
 
   useEffect(() => {
-    if (!ready || !foreground) return;
+    if (!connectable || !foreground) return;
     let events: EventSource | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let retryDelay = 1_000;
@@ -420,6 +432,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
           retryDelay = 1_000;
           setStatus("live");
           updateViewer(parse<ChatViewer>(event));
+          setAccess((current) => (current.state === "ready" ? current : { state: "ready" }));
         },
       ],
       [
@@ -577,7 +590,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
               if (conversation.unread <= 0 || (view.visible && view.target === conversation.key)) continue;
               next[conversation.key] = {
                 count: conversation.unread,
-                mention: direct.has(conversation.key) || !!current[conversation.key]?.mention,
+                mention: direct.has(conversation.key) || !!conversation.mentioned || !!current[conversation.key]?.mention,
               };
             }
             return next;
@@ -595,7 +608,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
           storeConversation(conversation);
           setUnread((current) => {
             if (active || conversation.unread <= 0) return withoutKey(current, conversation.key);
-            const mention = conversation.kind === "dm" || !!current[conversation.key]?.mention;
+            const mention = conversation.kind === "dm" || !!conversation.mentioned || !!current[conversation.key]?.mention;
             return { ...current, [conversation.key]: { count: conversation.unread, mention } };
           });
         },
@@ -686,7 +699,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
       clearTimeout(retry);
       close();
     };
-  }, [dropConversation, foreground, ready, recheck, storeConversation, touchConversation, updateViewer]);
+  }, [connectable, dropConversation, foreground, recheck, storeConversation, touchConversation, updateViewer]);
 
   useEffect(() => {
     if (!typing.length) return;
@@ -738,7 +751,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   }, [newestShown, ready, request, syncCount, target, visible]);
 
   const send = useCallback(
-    async (target: ChatTarget, text: string, replyTo?: string, image?: Blob): Promise<ChatResult> => {
+    async (target: ChatTarget, text: string, replyTo?: string, upload?: ChatUpload): Promise<ChatResult> => {
       if (!viewer) return { failure: describeFailure("CHAT_LOGIN_REQUIRED", {}) };
       const nonce = crypto.randomUUID();
       const localId = `local-${nonce}`;
@@ -755,15 +768,15 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         nonce,
         pending: true,
       };
-      if (!image) setHistory((current) => patchTarget(current, target, (entries) => upsert(entries, pending)));
+      if (!upload) setHistory((current) => patchTarget(current, target, (entries) => upsert(entries, pending)));
       let result: ChatResult;
-      if (image) {
+      if (upload) {
         const form = new FormData();
         form.set("channel", target);
         form.set("text", text);
         form.set("nonce", nonce);
         if (replyTo) form.set("replyTo", replyTo);
-        form.set("image", image, "upload");
+        form.set(upload.kind === "image" ? "image" : "media", upload.blob, "upload");
         result = await post("/api/chat/message", form);
       } else {
         result = await request({ type: "send", channel: target, text, nonce, ...(replyTo && { replyTo }) });

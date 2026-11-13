@@ -364,7 +364,7 @@ configure_adcash
 export DEBIAN_FRONTEND=noninteractive
 
 retry 3 sudo apt-get update -y
-retry 3 sudo apt-get install -y --no-install-recommends unzip libcap2-bin jq dnsutils binaryen build-essential cmake libclang-dev pkg-config libssl-dev git debian-keyring debian-archive-keyring apt-transport-https docker.io docker-cli libjemalloc2 ca-certificates curl gnupg lsb-release openssl psmisc
+retry 3 sudo apt-get install -y --no-install-recommends unzip libcap2-bin jq dnsutils binaryen build-essential cmake libclang-dev pkg-config libssl-dev git debian-keyring debian-archive-keyring apt-transport-https docker.io docker-cli libjemalloc2 ca-certificates curl gnupg lsb-release openssl psmisc ffmpeg
 
 BUN_VERSION="1.4.4"
 export PATH="$HOME/.bun/bin:$PATH"

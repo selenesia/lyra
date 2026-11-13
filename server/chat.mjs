@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "crypto";
 import { httpError } from "./errors.mjs";
 import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
+import { chatAudioVideoDemuxer } from "./chat-audio-video.mjs";
 import { chatImageType, readChatImage } from "./chat-media.mjs";
 import { createPartyRegistry } from "./chat-party.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
@@ -16,6 +17,8 @@ import {
   CHAT_CONVERSATION_LIMITS,
   CHAT_PARTY_LIMITS,
   CHAT_PROFILE_TEXT,
+  CHAT_UPLOAD_BYTES,
+  attachmentKind,
   canPostIn,
   canReadChannel,
   cleanChatText,
@@ -86,6 +89,14 @@ async function readJson(request) {
   }
 }
 
+function byteRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header?.trim() ?? "");
+  if (!match || (!match[1] && !match[2])) return null;
+  const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+  const end = match[1] && match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  return start <= end && start < size ? { start, end } : false;
+}
+
 function crossSite(request) {
   return ["cross-site", "same-site"].includes(request.headers.get("sec-fetch-site"));
 }
@@ -104,6 +115,7 @@ export function createChatRoom({
   store,
   identify,
   checkImage = async () => ({ unavailable: true }),
+  prepareMedia = async () => ({ unavailable: true }),
   checkText = async () => null,
   warmText = () => {},
   historySize = CHAT_LIMITS.page,
@@ -120,7 +132,6 @@ export function createChatRoom({
   strikeDecayMs = 5 * 60_000,
   muteMs = 2 * 60_000,
   maxMuteMs = 60 * 60_000,
-  duplicateMs = 30_000,
   profileLimit = 8,
   profileWindowMs = 60_000,
   socialLimit = 20,
@@ -170,6 +181,7 @@ export function createChatRoom({
     delayMs: presenceDelayMs,
     idleMs: partyIdleMs,
     maxMs: partyMaxMs,
+    messageLimit: CHAT_PARTY_LIMITS.messages,
     announce: (party) => broadcast(frame("party", party), party.target),
   });
 
@@ -214,7 +226,7 @@ export function createChatRoom({
   }
 
   function preview(row) {
-    const text = row.text ? replySnippet(row.text) : row.party ? "[watch party]" : row.attachment_type ? "[image]" : "";
+    const text = row.text ? replySnippet(row.text) : row.party ? "[watch party]" : row.attachment_type ? `[${attachmentKind(row.attachment_type)}]` : "";
     return { author: String(row.user_id), name: row.display || row.username, text };
   }
 
@@ -229,6 +241,7 @@ export function createChatRoom({
       lastAt: stored.lastAt,
       ...(stored.last && { last: preview(stored.last) }),
       unread: stored.unread,
+      ...(stored.mentioned && { mentioned: true }),
     };
   }
 
@@ -359,7 +372,7 @@ export function createChatRoom({
     if (!entry) {
       entry = {
         sends: [], reacts: [], profiles: [], drafts: [], socials: [], searches: [], states: [],
-        typedAt: 0, last: undefined, draft: undefined,
+        typedAt: 0, draft: undefined,
       };
       activity.set(userId, entry);
     }
@@ -480,19 +493,24 @@ export function createChatRoom({
     const written = readText(payload, !!file);
     if (written.failure) return written.failure;
     let attachment;
+    let frames = [];
     if (file) {
-      if (file.size > CHAT_ATTACHMENT.gif.bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+      if (file.size > CHAT_UPLOAD_BYTES) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that file is too large", { kind: "file" });
       const bytes = new Uint8Array(await file.arrayBuffer());
       const type = chatImageType(bytes);
-      if (!type) return httpError(415, "CHAT_MEDIA_INVALID", "that image type is not supported");
-      const limits = type === "image/gif" ? CHAT_ATTACHMENT.gif : CHAT_ATTACHMENT;
-      if (file.size > limits.bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
-      attachment = readChatImage(bytes, type, limits);
-      if (!attachment) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
-    }
-    const comparable = `${written.text.toLowerCase()}${attachment ? `\n${attachment.hash}` : ""}`;
-    if (mine.last?.text === comparable && time - mine.last.at < duplicateMs) {
-      return httpError(429, "CHAT_DUPLICATE", "you just sent that");
+      if (type) {
+        const limits = type === "image/gif" ? CHAT_ATTACHMENT.gif : CHAT_ATTACHMENT;
+        if (file.size > limits.bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+        attachment = readChatImage(bytes, type, limits);
+        if (!attachment) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
+        frames = [attachment];
+      } else {
+        if (!chatAudioVideoDemuxer(bytes)) return httpError(415, "CHAT_MEDIA_INVALID", "that file type is not supported", { kind: "file" });
+        const prepared = await prepareMedia(bytes);
+        if (!prepared.media) return mediaFailure(prepared);
+        attachment = prepared.media;
+        frames = prepared.frames;
+      }
     }
     let replyTo;
     if (payload.replyTo !== undefined) {
@@ -504,7 +522,7 @@ export function createChatRoom({
         id: parent.numeric,
         userId: Number(parent.message.author),
         name: parent.message.name,
-        text: replySnippet(parent.message.text || (parent.message.attachment ? "[image]" : parent.message.party ? "[watch party]" : "")),
+        text: replySnippet(parent.message.text || (parent.message.attachment ? `[${attachmentKind(parent.message.attachment.type)}]` : parent.message.party ? "[watch party]" : "")),
       };
     }
     mine.sends.push(time);
@@ -512,8 +530,8 @@ export function createChatRoom({
     sourceSends.set(ip, source);
     const refused = await screenMessage(written.text, row, time, payload.channel);
     if (refused) return refused;
-    if (attachment) {
-      const rejected = await screenImage(attachment, "image", row, time, payload.channel);
+    if (frames.length) {
+      const rejected = await screenFrames(frames, attachmentKind(attachment.type), row, time, payload.channel);
       if (rejected) return rejected;
     }
     const fresh = store.user(row.id);
@@ -521,7 +539,6 @@ export function createChatRoom({
     if (silencedAfterCheck) return silencedAfterCheck;
     const lost = fresh ? targetGate(payload.channel, fresh) : httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
     if (lost) return lost;
-    mine.last = { text: comparable, at: time };
     mine.typedAt = 0;
     const stored = insertInto({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo, attachment });
     const nonce = typeof payload.nonce === "string" && payload.nonce.length <= 40 ? payload.nonce : undefined;
@@ -835,16 +852,34 @@ export function createChatRoom({
     return ok({ profile: profileOf(updated, updated) });
   }
 
+  function mediaFailure(prepared) {
+    const kind = prepared.kind ?? "file";
+    if (prepared.tooLarge) return httpError(413, "CHAT_MEDIA_TOO_LARGE", `that ${kind} is too large`, { kind });
+    if (prepared.tooLong) return httpError(400, "CHAT_MEDIA_TOO_LONG", `that ${kind} is too long`, { kind });
+    if (prepared.unsupported) return httpError(415, "CHAT_MEDIA_INVALID", `that ${kind} format is not supported`, { kind });
+    if (prepared.invalid) return httpError(400, "CHAT_MEDIA_INVALID", `that ${kind} could not be used`, { kind });
+    return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", "media checks are unavailable right now", { kind });
+  }
+
   async function screenImage(image, kind, row, time, channel) {
-    const verdict = await checkImage(image.bytes, image.type);
-    if (verdict?.invalid) return httpError(400, "CHAT_MEDIA_INVALID", "that image could not be used");
-    if (verdict?.varied) return httpError(400, "CHAT_MEDIA_TOO_VARIED", "that gif has too many different frames, try a shorter one");
-    if (!verdict || verdict.unavailable || (verdict.allowed !== true && !verdict.category)) return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", "image checks are unavailable right now");
-    if (!verdict.allowed) {
-      const until = strike(row, 1, time, channel);
-      return httpError(422, "CHAT_MEDIA_BLOCKED", blockedNotice(kind, verdict.category), {
-        kind, category: verdict.category, ...(until && { until }),
-      });
+    return screenFrames([image], kind, row, time, channel);
+  }
+
+  async function screenFrames(frames, kind, row, time, channel) {
+    const video = kind === "video" ? { kind } : {};
+    for (const frame of frames) {
+      const verdict = await checkImage(frame.bytes, frame.type);
+      if (verdict?.invalid) return httpError(400, "CHAT_MEDIA_INVALID", `that ${video.kind ?? "image"} could not be used`, video);
+      if (verdict?.varied) return httpError(400, "CHAT_MEDIA_TOO_VARIED", "that gif has too many different frames, try a shorter one");
+      if (!verdict || verdict.unavailable || (verdict.allowed !== true && !verdict.category)) {
+        return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", `${video.kind ?? "image"} checks are unavailable right now`, video);
+      }
+      if (!verdict.allowed) {
+        const until = strike(row, 1, time, channel);
+        return httpError(422, "CHAT_MEDIA_BLOCKED", blockedNotice(kind, verdict.category), {
+          kind, category: verdict.category, ...(until && { until }),
+        });
+      }
     }
     return silenced(row);
   }
@@ -881,14 +916,23 @@ export function createChatRoom({
     const etag = `"${stored.hash}"`;
     const immutable = new URL(request.url).searchParams.get("v") === stored.hash;
     const headers = {
-      "Cache-Control": kind === "message" ? "no-store" : immutable ? "public, max-age=31536000, immutable" : "no-cache",
+      "Cache-Control": kind === "message" ? "private, no-cache" : immutable ? "public, max-age=31536000, immutable" : "no-cache",
       ETag: etag,
+      "Accept-Ranges": "bytes",
       "Content-Security-Policy": "default-src 'none'; sandbox",
       "Cross-Origin-Resource-Policy": "same-origin",
       "X-Content-Type-Options": "nosniff",
     };
     if (request.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
-    return new Response(request.method === "HEAD" ? null : stored.bytes, { headers: { ...headers, "Content-Type": stored.type } });
+    const size = stored.bytes.length;
+    const range = byteRange(request.headers.get("range"), size);
+    if (range === false) return new Response(null, { status: 416, headers: { ...headers, "Content-Range": `bytes */${size}` } });
+    const body = request.method === "HEAD" ? null : range ? stored.bytes.subarray(range.start, range.end + 1) : stored.bytes;
+    if (!range) return new Response(body, { headers: { ...headers, "Content-Type": stored.type } });
+    return new Response(body, {
+      status: 206,
+      headers: { ...headers, "Content-Type": stored.type, "Content-Range": `bytes ${range.start}-${range.end}/${size}` },
+    });
   }
 
   function history(url, row) {
@@ -1243,6 +1287,27 @@ export function createChatRoom({
     return ok();
   }
 
+  async function partyChat(payload, row, ip, time) {
+    const { party, failure } = findParty(payload.id, row);
+    if (failure) return failure;
+    if (!parties.isWatching(party, row.id)) return httpError(403, "CHAT_FORBIDDEN", "join the watch party first");
+    const mine = activityOf(row.id, time);
+    const source = sourceWindow(ip, time);
+    if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) return rateLimited();
+    const written = readText(payload);
+    if (written.failure) return written.failure;
+    mine.sends.push(time);
+    source.push(time);
+    sourceSends.set(ip, source);
+    const refused = await screenMessage(written.text, row, time, party.target);
+    if (refused) return refused;
+    const fresh = store.user(row.id);
+    if (!fresh || parties.get(party.id) !== party || !canRead(party.target, fresh) || !parties.isWatching(party, row.id)) {
+      return partyMissing();
+    }
+    return ok({ message: parties.say(party, member(fresh), written.text) });
+  }
+
   function partyInfo(url, row) {
     const { party, failure } = findParty(url.searchParams.get("id"), row);
     return failure ?? ok({ party: parties.view(party) });
@@ -1269,8 +1334,8 @@ export function createChatRoom({
       if (refused) return refused;
       uploading.add(row.id);
       try {
-        const bytes = await readBody(request, CHAT_ATTACHMENT.gif.bytes + BODY_MAX_BYTES);
-        if (!bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that image is too large");
+        const bytes = await readBody(request, CHAT_UPLOAD_BYTES + BODY_MAX_BYTES);
+        if (!bytes) return httpError(413, "CHAT_MEDIA_TOO_LARGE", "that file is too large", { kind: "file" });
         let form;
         try {
           form = await new Response(bytes, { headers: { "Content-Type": contentType } }).formData();
@@ -1280,7 +1345,7 @@ export function createChatRoom({
         const payload = {};
         let file;
         for (const [key, value] of form) {
-          if (key === "image" && value instanceof Blob && !file) file = value;
+          if ((key === "image" || key === "media") && value instanceof Blob && !file) file = value;
           else if (["channel", "text", "nonce", "replyTo"].includes(key) && typeof value === "string" && !(key in payload)) payload[key] = value;
           else return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
         }
@@ -1314,6 +1379,7 @@ export function createChatRoom({
     if (type === "party-end") return partyEnd(payload, row);
     if (row.muted_until > time) return httpError(403, "CHAT_MUTED", "you are timed out for a bit", { until: row.muted_until });
     if (type === "send") return send(payload, row, ip, time);
+    if (type === "party-chat") return partyChat(payload, row, ip, time);
     if (type === "edit") return edit(payload, row, time);
     if (type === "react") return react(payload, row, time);
     if (type === "typing") return typing(payload, row, time);

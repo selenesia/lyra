@@ -3,7 +3,7 @@ import { roleRank, type ChatRole } from "./chatRoles.ts";
 export const CHAT_LIMITS = { text: 500, replySnippet: 120, page: 50 } as const;
 export const CHAT_CATEGORIES = [
   { name: "info", channels: ["rules", "announcements", "updates"] },
-  { name: "social", channels: ["general", "general-2", "introductions", "art", "debating", "photography", "pets"] },
+  { name: "social", channels: ["general", "general-2", "introductions", "art", "music", "debating", "photography", "pets"] },
   { name: "support", channels: ["help", "suggestions", "bugs"] },
   { name: "staff", channels: ["staff-chat"] },
 ] as const;
@@ -18,9 +18,12 @@ export const CHAT_MEDIA = {
 } as const;
 export const CHAT_MEDIA_TYPES = ["image/webp", "image/jpeg", "image/gif"] as const;
 export const CHAT_ATTACHMENT = { width: 1920, height: 1920, bytes: 1024 * 1024, gif: { width: 1280, height: 1280, bytes: 4 * 1024 * 1024 } } as const;
+export const CHAT_VIDEO = { bytes: 25 * 1024 * 1024, seconds: 60, side: 4096 } as const;
+export const CHAT_AUDIO = { bytes: 20 * 1024 * 1024, seconds: 15 * 60 } as const;
+export const CHAT_UPLOAD_BYTES = Math.max(CHAT_ATTACHMENT.gif.bytes, CHAT_VIDEO.bytes, CHAT_AUDIO.bytes);
 export const CHAT_PROFILE_TEXT = ["display", "pronouns", "status", "bio"] as const;
 export const CHAT_CONVERSATION_LIMITS = { name: 32, groupMembers: 10, groups: 30, userSearch: 8 } as const;
-export const CHAT_PARTY_LIMITS = { watchers: 50, hosted: 3, query: 2048, idleMs: 10 * 60_000, maxMs: 12 * 60 * 60_000 } as const;
+export const CHAT_PARTY_LIMITS = { watchers: 50, hosted: 3, query: 2048, messages: 100, idleMs: 10 * 60_000, maxMs: 12 * 60 * 60_000 } as const;
 export const CHAT_PARTY_PATHS = { watch: "/stream/watch", anime: "/stream/anime" } as const;
 export const CHAT_PARTY_COMMAND = /^\/(?:party|watch)(?=\s|$)/i;
 
@@ -32,6 +35,7 @@ export type ChatPartyPath = keyof typeof CHAT_PARTY_PATHS;
 export type ChatPartyKind = "movie" | "tv" | "anime";
 export type ChatPartyControl = "host" | "everyone";
 export type ChatMediaKind = keyof typeof CHAT_MEDIA;
+export type ChatAttachmentKind = "image" | "video" | "audio";
 export type ChatProfileText = (typeof CHAT_PROFILE_TEXT)[number];
 
 interface ChatReply {
@@ -85,6 +89,12 @@ export interface ChatParty extends ChatPartyMedia {
   ended?: boolean;
 }
 
+export interface ChatPartyMessage extends ChatMember {
+  id: string;
+  text: string;
+  at: number;
+}
+
 export interface ChatConversation {
   key: ChatConversationKey;
   kind: ChatConversationKind;
@@ -95,6 +105,7 @@ export interface ChatConversation {
   lastAt: number;
   last?: { author: string; name: string; text: string };
   unread: number;
+  mentioned?: boolean;
 }
 
 export interface ChatMessage {
@@ -267,6 +278,10 @@ export function cleanChatText(value: unknown): string {
 
 export function isChatMediaKind(value: unknown): value is ChatMediaKind {
   return value === "avatar" || value === "banner";
+}
+
+export function attachmentKind(type: string): ChatAttachmentKind {
+  return type.startsWith("video/") ? "video" : type.startsWith("audio/") ? "audio" : "image";
 }
 
 export function isChatAccent(value: unknown): value is string {

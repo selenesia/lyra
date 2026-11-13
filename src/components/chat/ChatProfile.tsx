@@ -78,7 +78,7 @@ export function ChatMemberRow({ member, online, self, blocked, tag, onOpen }: Ch
       </span>
       <span class="chat-member-text">
         <span class="chat-member-name">{displayName(member)}</span>
-        {member.status && <span class="chat-member-status">{member.status}</span>}
+        {online && member.status && <span class="chat-member-status">{member.status}</span>}
       </span>
       {tag && <span class="chat-member-tag">{tag}</span>}
     </button>
@@ -112,6 +112,7 @@ interface ChatProfileProps {
   fallback: ChatMember;
   viewer: ChatViewer;
   blocked: boolean;
+  online: boolean;
   loadProfile: (id: string) => Promise<Profile | null>;
   moderate: (type: ChatModeration, target: string, extra?: Record<string, unknown>) => Promise<ChatResult>;
   saveProfile: (fields: ChatProfileEdit) => Promise<ChatResult>;
@@ -127,6 +128,7 @@ export default function ChatProfile({
   fallback,
   viewer,
   blocked,
+  online,
   loadProfile,
   moderate,
   saveProfile,
@@ -422,6 +424,7 @@ export default function ChatProfile({
           onClick={() => choose("avatar")}
         >
           <ChatAvatar member={look} size={84} src={avatarSrc} />
+          {online && <span class="chat-member-dot chat-card-dot" />}
           {editing && (
             <span class="chat-card-avatar-edit">
               <IconPencil size={22} />
@@ -454,7 +457,7 @@ export default function ChatProfile({
             />
           </label>
         ) : (
-          look.status && (
+          online && look.status && (
             <p class="chat-card-status" title={look.status}>
               <span>{look.status}</span>
             </p>

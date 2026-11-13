@@ -1,14 +1,16 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import type { ChatMember } from "../../features/chat/chatProtocol.ts";
+import type { ChatChannel, ChatMember } from "../../features/chat/chatProtocol.ts";
 import { MESSAGE_TOKEN } from "../../features/chat/chatText.ts";
 
 interface MessageTextProps {
   text: string;
   selfName: string;
   mentionMembers: ReadonlyMap<string, ChatMember>;
+  channels: ReadonlySet<string>;
   onOpenProfile: (member: ChatMember) => void;
   onOpenLink: (url: string) => void;
+  onOpenChannel: (channel: ChatChannel) => void;
 }
 
 function Spoiler({ children }: { children: ComponentChildren }) {
@@ -36,7 +38,7 @@ function render(text: string, props: MessageTextProps, depth: number, inSpoiler 
   const nodes: ComponentChildren[] = [];
   let last = 0;
   for (const match of text.matchAll(MESSAGE_TOKEN)) {
-    const [token, code, spoiler, bold, strike, star, underscore, link, mention] = match;
+    const [token, code, spoiler, bold, strike, star, underscore, link, mention, channelTag] = match;
     const index = match.index ?? 0;
     if (index > last) nodes.push(text.slice(last, index));
     last = index + token.length;
@@ -78,6 +80,24 @@ function render(text: string, props: MessageTextProps, depth: number, inSpoiler 
           {token}
         </button>
       ) : <span class={classes}>{token}</span>);
+    } else if (channelTag) {
+      const channel = token.slice(1).toLowerCase();
+      if (!props.channels.has(channel)) nodes.push(token);
+      else if (inSpoiler) nodes.push(<span class="chat-mention">#{channel}</span>);
+      else {
+        nodes.push(
+          <button
+            type="button"
+            class="chat-mention"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onOpenChannel(channel as ChatChannel);
+            }}
+          >
+            #{channel}
+          </button>,
+        );
+      }
     }
   }
   if (last < text.length) nodes.push(text.slice(last));

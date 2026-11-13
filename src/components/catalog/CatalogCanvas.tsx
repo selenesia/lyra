@@ -364,26 +364,7 @@ export default function CatalogCanvas<T>({
         styleDirty = false;
         fullRedraw = true;
       }
-      if (shift && !fullRedraw) {
-        const pixels = shift * dpr;
-        if (Math.abs(shift) >= height || !Number.isInteger(pixels)) {
-          fullRedraw = true;
-        } else {
-          ctx.save();
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.globalCompositeOperation = "copy";
-          ctx.drawImage(canvas, 0, -pixels);
-          ctx.restore();
-          const top = shift > 0 ? height - shift : 0;
-          const bottom = shift > 0 ? height : -shift;
-          ctx.clearRect(0, top, width, bottom - top);
-          for (const [index, entry] of cards) {
-            const y =
-              Math.floor(index / layout.columns) * layout.stride - offset;
-            if (y < bottom && y + layout.cardHeight > top) delete entry.painted;
-          }
-        }
-      }
+      if (shift) fullRedraw = true;
       if (fullRedraw) ctx.clearRect(0, 0, width, height);
       const now = performance.now();
       let animating = false;

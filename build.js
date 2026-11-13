@@ -14,7 +14,7 @@ const gzipAsync = promisify(gzip);
 const SENSITIVE_TERM = /(games?|anime|proxy|rivet|folio|lyra)/i;
 const SENSITIVE_STRING_PATTERN =
   "[Gg]ames?|[Aa]nime|[Pp]roxy|[Rr]ivet|[Ff]olio|[Ll]yra";
-const ZERO_MATCH_TERM = /games?|proxy/gi;
+const ZERO_MATCH_TERM = /games?|anime|proxy/gi;
 const WASM_PAYLOAD_PATTERN = "(?:data:[\\w/+.-]+;base64,)?AGFzbQ";
 const ICON_MARKUP_PATTERN = `^(?![\\s\\S]*(?:${SENSITIVE_STRING_PATTERN}))<(?:svg|path|circle|rect|line|polyline|polygon|ellipse)\\b`;
 const WASM_PAYLOAD_LITERAL = new RegExp(

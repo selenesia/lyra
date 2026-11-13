@@ -1,8 +1,44 @@
 import { appPath } from "../../core/runtime/hosting.ts";
-import { CHAT_ATTACHMENT, CHAT_MEDIA, type ChatMediaKind } from "./chatProtocol.ts";
+import { CHAT_ATTACHMENT, CHAT_MEDIA, type ChatAttachmentKind, type ChatMediaKind } from "./chatProtocol.ts";
 
 const QUALITIES = [0.86, 0.74, 0.62, 0.5, 0.4];
 const SOURCE_MAX_BYTES = 25 * 1024 * 1024;
+const VIDEO_NAME = /\.(?:mp4|m4v|mov|webm|mkv)$/i;
+const AUDIO_NAME = /\.(?:mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+const DURATION_READ_MS = 5_000;
+
+export function uploadKind(file: Blob): ChatAttachmentKind | null {
+  const name = file instanceof File ? file.name : "";
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/") || VIDEO_NAME.test(name)) return "video";
+  if (file.type.startsWith("audio/") || AUDIO_NAME.test(name)) return "audio";
+  return null;
+}
+
+export function readMediaSeconds(file: Blob, kind: "video" | "audio"): Promise<number | null> {
+  return new Promise((resolve) => {
+    const element = document.createElement(kind);
+    const url = URL.createObjectURL(file);
+    let done = false;
+    const finish = (seconds: number | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      element.onloadedmetadata = null;
+      element.onerror = null;
+      element.removeAttribute("src");
+      element.load();
+      URL.revokeObjectURL(url);
+      resolve(seconds);
+    };
+    const timer = setTimeout(() => finish(null), DURATION_READ_MS);
+    element.preload = "metadata";
+    element.muted = true;
+    element.onloadedmetadata = () => finish(Number.isFinite(element.duration) ? element.duration : null);
+    element.onerror = () => finish(null);
+    element.src = url;
+  });
+}
 
 export function chatMediaUrl(kind: ChatMediaKind, author: string, version: string): string {
   return appPath(`/api/chat/media/${kind}/${encodeURIComponent(author)}?v=${encodeURIComponent(version)}`);

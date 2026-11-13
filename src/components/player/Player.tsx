@@ -46,6 +46,7 @@ import {
   IconForwards10s,
   IconFullScreen,
   IconDownsize,
+  IconChat,
 } from "../icons";
 import { attachSeekBar } from "./seekBar.ts";
 import {
@@ -161,6 +162,7 @@ import {
 } from "./playerControls.tsx";
 import { togglePlayback } from "./playerPlayback.ts";
 import { readPartyParam, useWatchParty } from "./watchParty.ts";
+import PlayerPartyChat, { usePartyChatUnread } from "./PlayerPartyChat.tsx";
 
 export default function Player() {
   const params = useRef(new URLSearchParams(window.location.search)).current;
@@ -913,6 +915,13 @@ export default function Player() {
     reportPlayback: reportPartyPlayback,
     reportMedia: reportPartyMedia,
   } = watchParty;
+  const [partyChatOpen, setPartyChatOpen] = useState(false);
+  const partyChatToggleRef = useRef<HTMLButtonElement | null>(null);
+  const partyChatUnread = usePartyChatUnread(watchParty.messages, watchParty.viewer, partyChatOpen);
+  const closePartyChat = useCallback(() => {
+    setPartyChatOpen(false);
+    partyChatToggleRef.current?.focus({ preventScroll: true });
+  }, []);
 
   const userTogglePlay = useCallback(() => {
     if (catchUpParty() || !allowPartyIntent()) return;
@@ -1741,6 +1750,15 @@ export default function Player() {
           autoNext, clearAutoNext, changeEpisode: requestEpisode,
           continueNextSeason,
         })}
+        {watchParty.party && (
+          <PlayerPartyChat
+            open={partyChatOpen}
+            messages={watchParty.messages}
+            watching={watchParty.watchers.length}
+            say={watchParty.say}
+            onClose={closePartyChat}
+          />
+        )}
 
         <div class={`player-controls${controlsVisible ? "" : " is-hidden"}`}>
           <div
@@ -1826,6 +1844,19 @@ export default function Player() {
               providerChoice, openSelector, setOpenSelector, changingProvider,
               changeProvider,
             })}
+            {watchParty.party && (
+              <button
+                ref={partyChatToggleRef}
+                type="button"
+                class={`player-btn player-btn-party${partyChatOpen ? " is-open" : ""}`}
+                aria-label={partyChatUnread ? `party chat, ${partyChatUnread} new` : "party chat"}
+                aria-pressed={partyChatOpen}
+                onClick={() => setPartyChatOpen((open) => !open)}
+              >
+                <IconChat size={24} />
+                {partyChatUnread > 0 && <span class="player-party-count">{partyChatUnread}</span>}
+              </button>
+            )}
             {renderPartyMenu({
               party: watchParty.party, isHost: watchParty.isHost, openSelector,
               setOpenSelector: setSelectorState,

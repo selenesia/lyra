@@ -6,7 +6,7 @@ const EVENT_HEADERS = {
   "X-Accel-Buffering": "no",
 };
 
-export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, announce, delayMs, idleMs, maxMs }) {
+export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, announce, delayMs, idleMs, maxMs, messageLimit }) {
   const parties = new Map();
   const streams = new Map();
   let heartbeat;
@@ -90,6 +90,8 @@ export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, ann
       startedAt: time,
       streams: new Map(),
       signature: "",
+      messages: [],
+      said: 0,
     };
     parties.set(id, party);
     party.maxTimer = later(() => end(party), maxMs);
@@ -155,6 +157,7 @@ export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, ann
         clearTimeout(party.idleTimer);
         party.idleTimer = undefined;
         stream.send(frame("party", { party: view(party), now: now() }));
+        if (party.messages.length) stream.send(frame("chat", { messages: party.messages, now: now() }));
         watchersChanged(party);
       },
       cancel() {
@@ -182,6 +185,15 @@ export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, ann
     publish(party);
   }
 
+  function say(party, author, text) {
+    const time = now();
+    party.said += 1;
+    const message = { ...author, id: String(party.said), text, at: time };
+    party.messages = [...party.messages, message].slice(-messageLimit);
+    sendAll(party, frame("chat", { messages: [message], now: time }));
+    return message;
+  }
+
   function closeStreams(userId, lost) {
     for (const stream of [...streams.values()]) if (stream.user.id === userId && lost(stream.party)) stream.close();
   }
@@ -207,6 +219,7 @@ export function createPartyRegistry({ now, frame, pingFrame, pingMs, member, ann
     setPlayback,
     setMedia,
     setControl,
+    say,
     closeStreams,
     refresh,
     close,

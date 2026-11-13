@@ -186,6 +186,17 @@
   width: auto;
 }
 
+.chat-attachment-video {
+  border-radius: var(--radius-control);
+  color-scheme: dark;
+  height: auto;
+}
+
+.chat-attachment-audio {
+  color-scheme: dark;
+  width: min(360px, 100%);
+}
+
 .chat-party {
   align-items: center;
   background-color: var(--bg-surface-5);

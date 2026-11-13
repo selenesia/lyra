@@ -10,14 +10,17 @@ import { useMenuView } from "../../hooks/useMenuView.ts";
 import { loadTutorial, loadCloudSync } from "../../app/loaders.ts";
 import { blockedNotice } from "../../features/chat/moderationNotice.ts";
 import { mentionsName } from "../../features/chat/chatText.ts";
-import { encodeChatImage } from "../../features/chat/chatMedia.ts";
+import { encodeChatImage, readMediaSeconds, uploadKind } from "../../features/chat/chatMedia.ts";
 import { partyMediaOf, partyQuery, usePartyTitles, type ChatPartyTitle } from "../../features/chat/chatParty.ts";
 import { canDeleteAny, CHAT_ROLES, isChatRole, outranks, type ChatRole } from "../../features/chat/chatRoles.ts";
 import {
+  CHAT_AUDIO,
   CHAT_CATEGORIES,
+  CHAT_CHANNELS,
   CHAT_LIMITS,
   CHAT_ATTACHMENT,
   CHAT_PARTY_COMMAND,
+  CHAT_VIDEO,
   canPostIn,
   canReadChannel,
   cleanChatText,
@@ -27,6 +30,7 @@ import {
   isConversationKey,
   noticeText,
   partyPlayerPath,
+  type ChatAttachmentKind,
   type ChatChannel,
   type ChatConversation,
   type ChatConversationKey,
@@ -40,6 +44,7 @@ import {
   type ChatEntry,
   type ChatModeration,
   type ChatResult,
+  type ChatUpload,
 } from "../../features/chat/chatRoom.ts";
 import {
   IconArrowLeft,
@@ -73,6 +78,12 @@ const NEAR_TOP_PX = 60;
 const TYPING_SEND_MS = 2_500;
 const DRAFT_CHECK_MS = 300;
 const MENTION_QUERY = /(?:^|[\s([{])@([\p{L}\p{N}._-]*)$/u;
+const CHANNEL_QUERY = /(?:^|[\s([{])#([a-z0-9-]*)$/i;
+const UPLOAD_STATUS: Record<ChatAttachmentKind, string> = {
+  image: "checking image and sending",
+  video: "checking video and sending",
+  audio: "uploading audio",
+};
 const ROLE_COMMAND = /^\/role(?=\s|$)/i;
 const ROLE_ARGUMENTS = /^\/role\s+@?(\w+)\s+(\w+)$/i;
 const Tutorial = lazy(loadTutorial);
@@ -111,6 +122,11 @@ function placeCaretAtEnd(field: HTMLElement | null): void {
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
+}
+
+function ChannelIcon({ channel }: { channel: ChatChannel }) {
+  const icon = CHANNEL_ICONS[channel];
+  return icon ? <IconBase icon={ICON_PATHS[icon]} size={16} class="chat-channel-icon" /> : <span class="chat-channel-icon chat-channel-hash">#</span>;
 }
 
 function ConversationIcon({ conversation, viewerAuthor }: { conversation: ChatConversation; viewerAuthor: string }) {
@@ -196,7 +212,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [target, setTarget] = useState<ChatTarget>("general");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [draft, setDraft] = useState("");
-  const [attachment, setAttachment] = useState<Blob | null>(null);
+  const [attachment, setAttachment] = useState<ChatUpload | null>(null);
   const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
   const [preparingImage, setPreparingImage] = useState(false);
   const [sending, setSending] = useState(false);
@@ -341,15 +357,38 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       setAttachmentUrl(null);
       return;
     }
-    const url = URL.createObjectURL(attachment);
+    const url = URL.createObjectURL(attachment.blob);
     setAttachmentUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [attachment]);
 
-  const pickImage = async (file: File | undefined) => {
+  const pickAttachment = async (file: File | undefined) => {
     if (!file || locked || muted || sendingRef.current || preparingImage || mode?.kind === "edit") return;
+    const kind = uploadKind(file);
+    if (!kind) {
+      setHint(negativeMessage("you can attach images, gifs, videos, or audio"));
+      return;
+    }
     setPreparingImage(true);
     try {
+      if (kind !== "image") {
+        const limits = kind === "video" ? CHAT_VIDEO : CHAT_AUDIO;
+        const plural = kind === "video" ? "videos" : "audio files";
+        if (file.size > limits.bytes) {
+          setHint(negativeMessage(`that ${kind} is too large, ${plural} can be up to ${limits.bytes / 1024 / 1024} mb`));
+          return;
+        }
+        const seconds = await readMediaSeconds(file, kind);
+        if (seconds !== null && seconds > limits.seconds + 0.5) {
+          const length = kind === "video" ? `${limits.seconds} seconds` : `${limits.seconds / 60} minutes`;
+          setHint(negativeMessage(`that ${kind} is too long, ${plural} can be up to ${length}`));
+          return;
+        }
+        setAttachment({ blob: file, kind });
+        setHint(null);
+        focusFieldAfterRender();
+        return;
+      }
       const result = await encodeChatImage(file, "message");
       if ("error" in result) {
         setHint(negativeMessage(result.error === "too_large"
@@ -357,11 +396,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           : "that image could not be read"));
         return;
       }
-      setAttachment(result.image);
+      setAttachment({ blob: result.image, kind });
       setHint(null);
       focusFieldAfterRender();
     } catch {
-      setHint(negativeMessage("that image could not be read"));
+      setHint(negativeMessage(`that ${kind} could not be read`));
     } finally {
       setPreparingImage(false);
     }
@@ -420,7 +459,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       return;
     }
     if (scrollTargetRef.current !== target) {
-      scrollTargetRef.current = target;
+      scrollTargetRef.current = entries.length ? target : null;
       scrollToBottom("instant");
       return;
     }
@@ -512,6 +551,21 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     [focusFieldAfterRender, locked],
   );
 
+  const insertChannel = useCallback(
+    (name: ChatChannel) => {
+      if (locked) return;
+      setDraft((current) => current.replace(CHANNEL_QUERY, (match) => `${match.startsWith("#") ? "" : match[0]}#${name} `));
+      setSuggestionIndex(0);
+      focusFieldAfterRender();
+    },
+    [focusFieldAfterRender, locked],
+  );
+
+  const readableChannels = useMemo(
+    () => new Set<string>(viewer ? CHAT_CHANNELS.filter((option) => canReadChannel(viewer.role, option)) : []),
+    [viewer?.role],
+  );
+
   const actions = useMemo<ChatMessageActions>(
     () => ({
       reply: (entry) => {
@@ -550,6 +604,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         hide();
         void app().handleSearch?.(url);
       },
+      openChannel: switchTarget,
       select: setSelectedId,
       joinParty: (invite) => {
         void room.loadParty(invite.id).then((result) => {
@@ -559,7 +614,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       },
       endParty: (id) => void room.endParty(id).then(showFailure),
     }),
-    [focusFieldAfterRender, hide, locked, openParty, room.endParty, room.loadParty, room.react, room.remove, room.toggleBlocked, showFailure],
+    [focusFieldAfterRender, hide, locked, openParty, room.endParty, room.loadParty, room.react, room.remove, room.toggleBlocked, showFailure, switchTarget],
   );
 
   const onScroll = useCallback(() => {
@@ -593,7 +648,19 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       )
       .slice(0, 5);
   }, [conversation, mentionMembers, blockedAuthors, mentionQuery, viewer?.author]);
-  const pickerSize = picking ? partyTitles.titles.length : suggestions.length;
+  const channelQuery = ready && !locked && !picking && mentionQuery === undefined ? CHANNEL_QUERY.exec(draft)?.[1]?.toLowerCase() : undefined;
+  const channelSuggestions = useMemo(
+    () =>
+      channelQuery === undefined
+        ? []
+        : CHAT_CATEGORIES.flatMap((category) =>
+            category.channels
+              .filter((option) => readableChannels.has(option) && option.startsWith(channelQuery))
+              .map((option) => ({ name: option, category: category.name })),
+          ).slice(0, 5),
+    [channelQuery, readableChannels],
+  );
+  const pickerSize = picking ? partyTitles.titles.length : suggestions.length || channelSuggestions.length;
   const pickerIndex = Math.min(picking ? suggestionIndex : Math.max(0, suggestionIndex), pickerSize - 1);
 
   const runRoleCommand = useCallback(
@@ -695,7 +762,8 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         else if (picking) {
           if (pickerIndex >= 0) void startParty(partyTitles.titles[pickerIndex]!);
         }
-        else insertMention(suggestions[pickerIndex]!.name);
+        else if (suggestions.length) insertMention(suggestions[pickerIndex]!.name);
+        else insertChannel(channelSuggestions[pickerIndex]!.name);
         return;
       }
       if (event.key === "ArrowUp" && !draft && !mode && viewer) {
@@ -708,7 +776,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       }
       if (event.key === "Enter") void submitMessage();
     },
-    [actions, draft, entries, insertMention, mode, partyTitles.titles, picking, pickerIndex, pickerSize, startParty, submitMessage, suggestions, viewer],
+    [actions, channelSuggestions, draft, entries, insertChannel, insertMention, mode, partyTitles.titles, picking, pickerIndex, pickerSize, startParty, submitMessage, suggestions, viewer],
   );
 
   const onDraftChange = useCallback(
@@ -761,7 +829,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           ? "loading..."
           : partner
             ? `this is the start of ${startText}`
-            : `this is the start of ${startText}, say hi`;
+            : `this is the start of ${startText}, say hi!`;
   const partyStatus = !picking
     ? null
     : partyTitles.loading
@@ -847,6 +915,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           author={viewer?.author ?? ""}
           selfName={viewer?.name ?? ""}
           mentionMembers={mentionMembers}
+          channels={readableChannels}
           mentioned={!mine && !!viewer && (mentionsName(entry.text, viewer.name) || entry.reply?.author === viewer.author)}
           selected={selectedId === entry.id}
           editing={editingId === entry.id}
@@ -857,7 +926,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       previous = entry;
     }
     return rows;
-  }, [actions, blockedAuthors, channel, editingId, entries, historyExhausted, locked, mentionMembers, parties, room.toggleBlocked, selectedId, startText, viewer]);
+  }, [actions, blockedAuthors, channel, editingId, entries, historyExhausted, locked, mentionMembers, parties, readableChannels, room.toggleBlocked, selectedId, startText, viewer]);
 
   return (
     <section id="chat-page" ref={pageRef} class={`chat-page${visible ? " is-visible" : ""}${ready ? "" : " is-gated"}`} aria-hidden={!visible}>
@@ -939,7 +1008,6 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   </button>
                   {channels.map((option) => {
                     const waiting = unread[option];
-                    const icon = CHANNEL_ICONS[option];
                     return (
                       <button
                         type="button"
@@ -948,11 +1016,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                         aria-current={option === channel ? "page" : undefined}
                         onClick={() => switchTarget(option)}
                       >
-                        {icon ? (
-                          <IconBase icon={ICON_PATHS[icon]} size={16} class="chat-channel-icon" />
-                        ) : (
-                          <span class="chat-channel-icon chat-channel-hash">#</span>
-                        )}
+                        <ChannelIcon channel={option} />
                         <span class="chat-channel-name">{option}</span>
                         {waiting && (
                           <span class={`chat-badge${waiting.mention ? " mention" : ""}`}>
@@ -969,7 +1033,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
           <div class="chat-main">
             <div class="chat-feed" ref={listRef} onScroll={onScroll} onWheel={interruptScroll} onTouchStart={interruptScroll} onPointerDown={interruptScroll} onKeyDown={interruptScroll} onLoadCapture={() => {
-              if (stickToBottomRef.current) scrollToBottom();
+              if (stickToBottomRef.current) scrollToBottom("instant");
             }} role="log" aria-live="polite">
               {rows.length ? rows : <p class="chat-empty">{emptyText}</p>}
             </div>
@@ -1017,6 +1081,25 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   ))}
                 </div>
               )}
+              {channelSuggestions.length > 0 && (
+                <div class="chat-suggestions" role="listbox" aria-label="channels">
+                  {channelSuggestions.map((option, index) => (
+                    <button
+                      type="button"
+                      key={option.name}
+                      role="option"
+                      aria-selected={index === pickerIndex}
+                      class={`chat-suggestion${index === pickerIndex ? " active" : ""}`}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => insertChannel(option.name)}
+                    >
+                      <ChannelIcon channel={option.name} />
+                      <span class="chat-suggestion-name">{option.name}</span>
+                      <span class="chat-suggestion-handle">{option.category}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {mode && !locked && (
                 <div class="chat-context">
                   <span>
@@ -1033,9 +1116,15 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   </button>
                 </div>
               )}
-              {attachmentUrl && !locked && mode?.kind !== "edit" && (
+              {attachment && attachmentUrl && !locked && mode?.kind !== "edit" && (
                 <div class="chat-attachment-preview">
-                  <img src={attachmentUrl} alt="attachment preview" />
+                  {attachment.kind === "video" ? (
+                    <video src={attachmentUrl} aria-label="attachment preview" muted playsInline preload="metadata" />
+                  ) : attachment.kind === "audio" ? (
+                    <audio src={attachmentUrl} aria-label="attachment preview" controls preload="metadata" />
+                  ) : (
+                    <img src={attachmentUrl} alt="attachment preview" />
+                  )}
                   <button type="button" class="chat-tool" aria-label="remove attachment" disabled={sending} onClick={() => setAttachment(null)}>
                     <IconCrossMedium size={16} />
                   </button>
@@ -1049,22 +1138,22 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   if (!file) return;
                   event.preventDefault();
                   event.stopPropagation();
-                  void pickImage(file);
+                  void pickAttachment(file);
                 }}
               >
                 <div class="light-border"></div>
                 <div class="light-inset-bg"></div>
                 <div class="light"></div>
-                <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => {
+                <input ref={fileRef} type="file" accept="image/*,video/*,audio/*,.mkv,.flac,.opus" hidden onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   event.currentTarget.value = "";
-                  void pickImage(file);
+                  void pickAttachment(file);
                 }} />
                 <button
                   type="button"
                   class="chat-tool search-icon chat-attach-button"
-                  aria-label="attach image or gif"
-                  data-tooltip="attach image or gif"
+                  aria-label="attach a file"
+                  data-tooltip="attach an image, gif, video, or audio"
                   disabled={locked || muted || sending || preparingImage || mode?.kind === "edit"}
                   onClick={() => fileRef.current?.click()}
                 >
@@ -1088,11 +1177,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   (sending
                     ? startingParty
                       ? "starting the watch party"
-                      : attachment
-                        ? "checking image and sending"
-                        : "sending"
+                      : attachment && UPLOAD_STATUS[attachment.kind]
                     : preparingImage
-                      ? "preparing image"
+                      ? "preparing attachment"
                       : idleStatus)}
               </p>
             </div>
@@ -1199,6 +1286,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           fallback={profile}
           viewer={viewer}
           blocked={blockedAuthors.has(profile.author)}
+          online={onlineAuthors.has(profile.author) || profile.author === viewer.author}
           loadProfile={room.loadProfile}
           moderate={moderateInChannel}
           saveProfile={room.saveProfile}

@@ -12,6 +12,7 @@ import {
 } from "../core/config/advancedSettings.ts";
 import "../assets/styles/base/themes.css";
 import "../assets/styles/base/motion.css";
+import "../assets/styles/base/modal-close.css";
 import "../assets/styles/watch/episode-selector.css";
 import "../assets/styles/player/player.css";
 import "../assets/styles/chat/chat-avatar.css";

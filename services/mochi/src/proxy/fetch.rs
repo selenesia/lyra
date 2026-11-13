@@ -29,7 +29,6 @@ pub(super) async fn fetch_and_cache(
     target_url_str: &str,
     headers: &HeaderMap,
     req_body: &Bytes,
-    max_body_size: Option<usize>,
 ) -> Result<Response, Box<Response>> {
     let force_refresh = request_bypasses_cache(headers);
     let request_cache_allowed = request_allows_shared_cache(headers);
@@ -161,18 +160,6 @@ pub(super) async fn fetch_and_cache(
         return Ok(not_modified_response(upstream_res.headers()));
     }
 
-    if max_body_size.is_some_and(|max_size| {
-        upstream_res
-            .content_length()
-            .is_some_and(|size| size > max_size as u64)
-    }) {
-        return Err(Box::new(classified_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "invalid-request",
-            "asset is too large",
-        )));
-    }
-
     if status.is_redirection() {
         return Err(Box::new(classified_error_response(
             StatusCode::BAD_GATEWAY,
@@ -218,7 +205,7 @@ pub(super) async fn fetch_and_cache(
             mpsc::channel::<Result<Bytes, std::io::Error>>(state.channel_buffer);
         let target_url_str_owned = target_url_str.to_string();
         let ram_limit = state.ram_cache_limit;
-        let max_stream_size = max_body_size.unwrap_or(state.max_cache_entry_size);
+        let max_stream_size = state.max_cache_entry_size;
         let state_clone = state.clone();
         let safe_headers_clone = safe_headers.clone();
         let content_length = upstream_res.content_length();
@@ -282,17 +269,6 @@ pub(super) async fn fetch_and_cache(
                     Ok(chunk) => {
                         let chunk_len = chunk.len();
                         total_size += chunk_len;
-
-                        if total_size > max_stream_size && max_body_size.is_some() {
-                            let _ = sender_tx
-                                .send(Err(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    "asset is too large... /ᐠ - ˕ -マ",
-                                )))
-                                .await;
-                            aborted = true;
-                            break;
-                        }
 
                         if total_size > max_stream_size && disk_write_success {
                             file = None;

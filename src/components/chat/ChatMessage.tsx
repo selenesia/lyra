@@ -3,8 +3,11 @@ import { useEffect, useState } from "preact/hooks";
 import {
   CHAT_REACTIONS,
   CHAT_REACTION_FACES,
+  attachmentKind,
   displayName,
+  type ChatChannel,
   type ChatMember,
+  type ChatMessage as ChatMessageData,
   type ChatParty,
   type ChatPartyInvite,
 } from "../../features/chat/chatProtocol.ts";
@@ -17,9 +20,26 @@ import { RoleBadge } from "./ChatProfile.tsx";
 import ChatPartyCard from "./ChatPartyCard.tsx";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const MEDIA_MAX_HEIGHT = 360;
 
 function plainPreview(text: string): string {
   return text.replace(/\|\|.+?(?:\|\||$)/g, "[spoiler]").replace(/\*\*|~~|`/g, "");
+}
+
+function Attachment({ id, attachment }: { id: string; attachment: NonNullable<ChatMessageData["attachment"]> }) {
+  const src = appPath(`/api/chat/media/message/${encodeURIComponent(id)}`);
+  const kind = attachmentKind(attachment.type);
+  if (kind === "audio") return <audio class="chat-attachment chat-attachment-audio" src={src} controls preload="metadata" />;
+  const { width, height } = attachment;
+  const style = `width:${Math.round(Math.min(width, (MEDIA_MAX_HEIGHT * width) / height))}px`;
+  if (kind === "video") {
+    return <video class="chat-attachment chat-attachment-video" src={src} width={width} height={height} style={style} controls playsInline preload="metadata" />;
+  }
+  return (
+    <a class="chat-attachment" href={src} target="_blank" rel="noopener noreferrer">
+      <img src={src} alt="chat attachment" width={width} height={height} style={style} loading="lazy" decoding="async" />
+    </a>
+  );
 }
 
 export interface ChatMessageActions {
@@ -31,6 +51,7 @@ export interface ChatMessageActions {
   jumpTo: (id: string) => void;
   openProfile: (member: ChatMember) => void;
   openLink: (url: string) => void;
+  openChannel: (channel: ChatChannel) => void;
   select: (id: string | null) => void;
   joinParty: (invite: ChatPartyInvite) => void;
   endParty: (id: string) => void;
@@ -45,6 +66,7 @@ interface ChatMessageProps {
   author: string;
   selfName: string;
   mentionMembers: ReadonlyMap<string, ChatMember>;
+  channels: ReadonlySet<string>;
   mentioned: boolean;
   selected: boolean;
   editing: boolean;
@@ -52,7 +74,7 @@ interface ChatMessageProps {
   actions: ChatMessageActions;
 }
 
-function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, mentioned, selected, editing, party, actions }: ChatMessageProps) {
+function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, channels, mentioned, selected, editing, party, actions }: ChatMessageProps) {
   const [picking, setPicking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -83,7 +105,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
       class={classes.join(" ")}
       data-id={entry.id}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("a, button, [role='button']")) return;
+        if ((event.target as HTMLElement).closest("a, button, [role='button'], video, audio")) return;
         actions.select(selected ? null : entry.id);
       }}
       onMouseLeave={() => {
@@ -128,8 +150,10 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
             text={entry.text}
             selfName={selfName}
             mentionMembers={mentionMembers}
+            channels={channels}
             onOpenProfile={actions.openProfile}
             onOpenLink={actions.openLink}
+            onOpenChannel={actions.openChannel}
           />
           {entry.editedAt && <span class="chat-edited"> (edited)</span>}
         </div>
@@ -144,18 +168,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           onEnd={actions.endParty}
         />
       )}
-      {entry.attachment && (
-        <a class="chat-attachment" href={appPath(`/api/chat/media/message/${encodeURIComponent(entry.id)}`)} target="_blank" rel="noopener noreferrer">
-          <img
-            src={appPath(`/api/chat/media/message/${encodeURIComponent(entry.id)}`)}
-            alt="chat attachment"
-            width={entry.attachment.width}
-            height={entry.attachment.height}
-            loading="lazy"
-            decoding="async"
-          />
-        </a>
-      )}
+      {entry.attachment && <Attachment id={entry.id} attachment={entry.attachment} />}
       {reactions.length > 0 && (
         <div class="chat-reactions">
           {reactions.map(([emoji, authors]) => (

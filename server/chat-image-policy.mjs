@@ -8,6 +8,7 @@ export const IMAGE_RULES = [
 ];
 
 export const IMAGE_COVERAGE = { screen: "safety", screenCrops: 96 };
+export const VIDEO_COVERAGE = { everySeconds: 1, crops: 96, side: 640 };
 
 function cropScores({ clip, nsfw, safety }) {
   const explicit = nsfw.hentai + nsfw.porn;

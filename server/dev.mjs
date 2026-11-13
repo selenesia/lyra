@@ -329,6 +329,7 @@ app.use("/api/chat/", async (req, res) => {
         "content-length": req.get("content-length") || "",
         "sec-fetch-site": req.get("sec-fetch-site") || "",
         "if-none-match": req.get("if-none-match") || "",
+        range: req.get("range") || "",
       },
       ...(req.method === "POST" && { body: Readable.toWeb(req), duplex: "half" }),
       signal: abort.signal,

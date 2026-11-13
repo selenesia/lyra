@@ -18,11 +18,16 @@
   margin-bottom: 8px;
 }
 
-.chat-attachment-preview img {
+.chat-attachment-preview :is(img, video) {
   border-radius: var(--radius-control);
   max-height: 140px;
   max-width: min(240px, 80%);
   object-fit: contain;
+}
+
+.chat-attachment-preview audio {
+  color-scheme: dark;
+  width: min(320px, 80%);
 }
 
 .chat-tool:disabled {

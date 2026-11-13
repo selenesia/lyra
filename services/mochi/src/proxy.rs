@@ -56,9 +56,8 @@ static UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 static SEC_CH_UA: &str =
     "\"Not-A.Brand\";v=\"99\", \"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\"";
 static MOCHI_UPSTREAM_META_HEADER: &str = "x-mochi-upstream-meta";
-const MAX_COVER_BODY_SIZE: usize = 5 * 1024 * 1024;
 const MAX_UPSTREAM_ATTEMPTS: usize = 3;
-const MAX_HTML_BODY_SIZE: usize = 16 * 1024 * 1024;
+const MAX_HTML_BODY_SIZE: usize = 32 * 1024 * 1024;
 const MAX_CSS_BODY_SIZE: usize = 4 * 1024 * 1024;
 
 fn decoded_target(raw: &str) -> Option<(String, Option<String>)> {
@@ -319,7 +318,6 @@ pub async fn proxy_handler(
             target_url_str,
             &headers,
             &req_body.buffered(),
-            Some(MAX_COVER_BODY_SIZE),
         )
         .await
         .unwrap_or_else(|error| *error);
@@ -340,7 +338,6 @@ pub async fn proxy_handler(
             target_url_str,
             &headers,
             &req_body.buffered(),
-            None,
         )
         .await
         .unwrap_or_else(|error| *error);
