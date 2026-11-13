@@ -22,6 +22,7 @@
   display: none !important;
   opacity: 0;
   transition: opacity var(--motion-enter) var(--motion-ease);
+  text-transform: lowercase;
 }
 .player-page.is-visible {
   display: flex !important;
@@ -421,9 +422,20 @@
   width: 24px;
   height: 24px;
 }
-.player-btn-cc.is-open {
+.player-btn-cc.is-open,
+.player-btn-party.is-open {
   background-color: var(--hover-bg);
   opacity: 1;
+}
+.player-btn-party {
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-pill);
+  font: inherit;
+}
+.player-party-count {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .player-btn-cc.is-off {
   color: var(--text-muted);
@@ -524,9 +536,10 @@
 }
 .player-selector-options
   button:not(.episode-selector-button):not(.episode-season-tab):not(:where(.settings-page-button)):hover,
+.player-party-options button:focus-visible,
 .player-selector-options:not(.player-subtitle-options):not(.player-audio-options):not(
     .player-quality-options
-  )
+  ):not(.player-party-options)
   button:not(.episode-selector-button):not(.episode-season-tab):not(:where(.settings-page-button)).is-active {
   background: var(--bg-surface-active);
   color: var(--text-primary);
@@ -584,8 +597,57 @@
 .player-audio-options.is-open {
   overflow-y: auto;
 }
-.player-selector-options.player-subtitle-options button.is-active {
+.player-selector-options.player-subtitle-options button.is-active,
+.player-selector-options.player-party-options button.is-active {
   color: var(--text-white);
+}
+.player-party-options {
+  width: min(260px, calc(100vw - 24px));
+  overflow-y: auto;
+}
+.player-party-options button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.player-party-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 10px;
+}
+.player-party-heading strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-party-heading span,
+.player-party-host {
+  color: var(--color-sublabel);
+  font-size: 12px;
+}
+.player-party-watcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.player-party-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-party-host {
+  flex: 0 0 auto;
 }
 .player-selector-options.player-audio-options button.is-active,
 .player-selector-options.player-quality-options button.is-active {
@@ -819,6 +881,15 @@
   }
   .player-caption-style {
     width: auto;
+  }
+  .controls-row:has(.player-party-control) {
+    position: relative;
+  }
+  .player-party-control {
+    position: static;
+  }
+  .player-party-options {
+    min-width: 0;
   }
   .player-controls {
     padding: 36px max(12px, env(safe-area-inset-right))

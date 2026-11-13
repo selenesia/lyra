@@ -60,6 +60,7 @@ const REVERSED_SLURS = ["nigger", "faggot", "tranny"].map((slur) => [...slur].re
 
 const WORD_SLUR = new RegExp(`^(?:${WORD_SLURS.map(stemPattern).join("|")})${SLUR_SUFFIX}$`);
 const EMBEDDED_SLUR = new RegExp(EMBEDDED_SLURS.map(stemPattern).join("|"));
+const SPLIT_SLUR = new RegExp(`^(?:${EMBEDDED_SLURS.map(stemPattern).join("|")})${SLUR_SUFFIX}$`);
 const REVERSED_SLUR = new RegExp(`^(?:${REVERSED_SLURS.map(stemPattern).join("|")})$`);
 const EMBEDDED_EXCEPTIONS = /^sniggers?$|^snigger(?:ed|ing)$/;
 const INSERTION_SLURS = ["nigger", "nigga", "faggot", "wetback", "raghead", "towelhead", "jigaboo", "zipperhead"].map(squeeze);
@@ -372,11 +373,13 @@ const SEND_BODY = new RegExp(
 const CUM = / cum (?!laude )/;
 const RULE_34 = /\br(?:ule)?\s*-?\s*34\b/;
 const ROLEPLAY = phrases([
-  "moan", "moans", "moaning", "unzip", "unzips", "strip", "strips", "undress", "undresses", "grope", "gropes",
+  "moan", "moans", "moaning", "undress", "undresses", "grope", "gropes",
+  "unzip your pants", "unzips your pants", "unzip ur pants", "unzips ur pants",
   "licks your", "licks ur", "thrust", "thrusts", "grinds on", "spank", "spanks", "bends over", "pulls down your pants",
   "pulls down ur pants", "takes off your", "takes off ur", "kisses your neck", "kisses down your", "touches your",
   "rubs your", "naked", "nude", "cums",
 ]);
+const AMBIGUOUS_ROLEPLAY = phrases(["unzip", "unzips", "strip", "strips"]);
 const ROLEPLAY_ACTION = /\*([^*]{1,80})\*/g;
 const MINORS = phrases([
   "loli", "lolis", "shota", "shotas", "underage", "minor", "minors", "kid", "kids", "child", "children", "preteen",
@@ -502,8 +505,16 @@ function hasSlur(text: ModerationText): boolean {
   return readings.some((reading) => {
     if (reading.tokens.some((token) => variants(token).some((variant) => WORD_SLUR.test(variant) || hasInsertedSlur(variant)))) return true;
     if (reading.tokens.some((token) => REVERSED_SLUR.test(token))) return true;
-    const squashed = reading.tokens.filter((token) => !EMBEDDED_EXCEPTIONS.test(token)).join("");
-    return EMBEDDED_SLUR.test(squashed) || EMBEDDED_SLUR.test(squashed.replace(/q/g, "g")) || SLUR_PHRASES.test(reading.plain);
+    const tokens = reading.tokens.filter((token) => !EMBEDDED_EXCEPTIONS.test(token));
+    if (tokens.some((token) => variants(token).some((variant) => EMBEDDED_SLUR.test(variant)))) return true;
+    for (let start = 0; start < tokens.length; start += 1) {
+      let joined = tokens[start] ?? "";
+      for (let end = start + 1; end < tokens.length && joined.length <= 32; end += 1) {
+        joined += tokens[end];
+        if (variants(joined).some((variant) => SPLIT_SLUR.test(variant))) return true;
+      }
+    }
+    return SLUR_PHRASES.test(reading.plain);
   });
 }
 
@@ -533,10 +544,15 @@ function hasCrisis(text: ModerationText, hyperbole: boolean): boolean {
     if (match[0] === "kms" && KILOMETERS.test(text.folded)) continue;
     return true;
   }
-  for (const match of text.plain.matchAll(ENDING_IT)) {
-    if (!negated(text.plain, match.index)) return true;
-  }
   return !matched && compactHas(text, CRISIS_COMPACT);
+}
+
+function ambiguousCrisisHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
+  if (hyperbole) return null;
+  for (const match of text.plain.matchAll(ENDING_IT)) {
+    if (!negated(text.plain, match.index)) return suspected("crisis", 0);
+  }
+  return null;
 }
 
 function threatHit(text: ModerationText, playful: boolean): RuleHit | null {
@@ -586,10 +602,13 @@ function sexualHit(text: ModerationText): RuleHit | null {
   if (MINOR_SEXUAL.test(plain) || CP_TRADE.test(plain)) return blocked("sexual", 3);
   if (explicit && (MINORS.test(plain) || MINOR_AGE.test(text.folded))) return blocked("sexual", 3);
   if (SEXUAL.test(plain) || SEND_BODY.test(plain) || CUM.test(plain) || RULE_34.test(text.folded)) return blocked("sexual", 2);
+  let ambiguous = false;
   for (const match of text.folded.matchAll(ROLEPLAY_ACTION)) {
-    if (ROLEPLAY.test(readModerationText(match[1] ?? "").plain)) return blocked("sexual", 2);
+    const action = readModerationText(match[1] ?? "").plain;
+    if (ROLEPLAY.test(action)) return blocked("sexual", 2);
+    ambiguous ||= AMBIGUOUS_ROLEPLAY.test(action);
   }
-  return null;
+  return ambiguous ? suspected("sexual", 2) : null;
 }
 
 function doxHit(text: ModerationText): RuleHit | null {
@@ -610,6 +629,7 @@ export function readModeration(input: string): ModerationReading {
     () => (sexual?.strikes === 3 ? sexual : null),
     () => selfHarmHit(text, hyperbole),
     () => (hasCrisis(text, hyperbole) ? blocked("crisis", 0) : null),
+    () => ambiguousCrisisHit(text, hyperbole),
     () => threatHit(text, playful),
     () => hateHit(text),
     () => harassmentHit(text),

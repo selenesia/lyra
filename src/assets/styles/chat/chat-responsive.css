@@ -10,8 +10,18 @@
     display: none;
   }
 
-  .chat-category {
+  .chat-category,
+  .chat-category-head {
     display: contents;
+  }
+
+  .chat-category-empty {
+    display: none;
+  }
+
+  .chat-category-add {
+    align-self: center;
+    margin: 0;
   }
 
   .chat-channels {
@@ -40,5 +50,22 @@
 
   .chat-card-banner {
     margin: 0 -18px;
+  }
+
+  .chat-party {
+    flex-wrap: wrap;
+  }
+
+  .chat-party-poster {
+    height: 54px;
+    width: 36px;
+  }
+
+  .chat-party-actions {
+    flex-basis: 100%;
+  }
+
+  .chat-party-actions .settings-page-button {
+    flex: 1;
   }
 }

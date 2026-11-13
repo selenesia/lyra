@@ -290,8 +290,14 @@
   margin-top: 20px;
 }
 
-.popup.chat-profile .input-container > * + * {
+.popup.chat-profile .input-container > * + *,
+.popup.chat-conversation .input-container > * + *,
+.popup.chat-conversation > :is(.input-container, .chat-member-group) + :is(.input-container, .chat-member-group) {
   margin-top: 20px;
+}
+
+.popup.chat-conversation {
+  max-width: 440px;
 }
 
 .chat-profile-hint,
@@ -307,6 +313,35 @@
 
 .chat-profile-meta + .chat-profile-meta {
   margin-top: 4px;
+}
+
+.chat-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  max-height: 236px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.chat-picker .chat-suggestion[aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+.chat-suggestion.is-disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.chat-suggestion-check {
+  color: var(--text-primary);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.chat-profile-meta.chat-picker-empty {
+  margin-top: 8px;
 }
 
 .chat-card-panel {
@@ -337,7 +372,8 @@
 }
 
 .popup.chat-profile .input-container input[type="text"],
-.popup.chat-profile .input-container textarea {
+.popup.chat-profile .input-container textarea,
+.popup.chat-conversation .input-container input[type="text"] {
   display: block;
   margin: 0;
 }
@@ -356,11 +392,13 @@
 }
 
 .chat-profile-row + .chat-profile-row,
-.popup.chat-profile .input-container input + .chat-profile-row {
+.popup.chat-profile .input-container input + .chat-profile-row,
+.popup.chat-conversation .input-container :is(input, .chat-picker, .chat-picker-empty) + .chat-profile-row {
   margin-top: 8px;
 }
 
-.popup.chat-profile .chat-profile-row button {
+.popup.chat-profile .chat-profile-row button,
+.popup.chat-conversation .chat-profile-row button {
   box-sizing: border-box;
   flex: 1;
   font-family: inherit;
@@ -379,29 +417,37 @@
   justify-content: center;
 }
 
-.popup.chat-profile .chat-profile-actions button {
+.popup.chat-profile .chat-profile-actions button,
+.popup.chat-conversation .chat-profile-actions button {
   font-family: inherit;
 }
 
-.popup.chat-profile .chat-secondary-btn {
+.popup.chat-profile .chat-secondary-btn,
+.popup.chat-conversation .chat-secondary-btn {
   background-color: var(--btn-secondary-bg);
   color: var(--btn-secondary-text);
 }
 
-.popup.chat-profile .chat-secondary-btn:hover {
+.popup.chat-profile .chat-secondary-btn:hover,
+.popup.chat-conversation .chat-secondary-btn:hover {
   background-color: var(--btn-secondary-bg-hover);
 }
 
-.popup.chat-profile .chat-danger-btn {
+.popup.chat-profile .chat-danger-btn,
+.popup.chat-conversation .chat-danger-btn,
+.chat-party .chat-danger-btn {
   background-color: color-mix(in srgb, var(--status-error-text) 20%, transparent);
   color: var(--status-error-text);
 }
 
-.popup.chat-profile .chat-danger-btn:hover {
+.popup.chat-profile .chat-danger-btn:hover,
+.popup.chat-conversation .chat-danger-btn:hover,
+.chat-party .chat-danger-btn:hover {
   background-color: color-mix(in srgb, var(--status-error-text) 30%, transparent);
 }
 
-.popup.chat-profile button:disabled {
+.popup.chat-profile button:disabled,
+.popup.chat-conversation .input-container button:disabled {
   cursor: default;
   opacity: 0.5;
   transform: none;

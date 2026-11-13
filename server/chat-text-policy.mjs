@@ -11,6 +11,8 @@ export const TEXT_RULES = [
 export const TEXT_CONFIRM = {
   threat: { score: "threat", limit: 0.5 },
   hate: { score: "identity", limit: 0.5 },
+  crisis: { score: "selfHarm", limit: 0.5 },
+  sexual: { score: "sexual", limit: 0.5 },
 };
 
 export const TEXT_SCORES = [...new Set([...TEXT_RULES, ...Object.values(TEXT_CONFIRM)].map((rule) => rule.score))];

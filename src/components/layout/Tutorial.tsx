@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { isStatic } from "../../core/runtime/hosting.ts";
 import { showHomeView } from "../../state/store.ts";
-import { markTutorialSeen, tutorialSeen } from "./tutorialSeen.ts";
+import { markTutorialSeen, tutorialSeen, type TutorialGuide } from "./tutorialSeen.ts";
 import "../../assets/styles/tutorial.css";
 
 const SPOTLIGHT_PAD = 5;
@@ -14,7 +14,7 @@ function spotlightRadius(target: Element) {
       .join(" "))
     .join(" ");
 }
-const steps = [
+const homeSteps = [
   { title: "a quick look around", target: ".main-container .search-bar .light-inset-bg", text: "use this bar for searches and website addresses. this guide shows you where to find the other main features." },
   { title: "games", target: "#choi", text: 'this controller button opens the games page, to get different games change "game source" in settings. click the button again to return to this current search page.' },
   { title: "watch", target: "#media-catalog", text: "this film button opens the watch page for movies, shows, and anime. also click the button again to return to this current search page." },
@@ -25,20 +25,30 @@ const steps = [
   { title: "take another look anytime...", target: "#settings", text: "open settings and select tutorial to replay this guide. use back to revisit a step, or click finish to start exploring!!" },
 ];
 
-export default function Tutorial({ replayOnMount = false }: { replayOnMount?: boolean }) {
+const chatSteps = [
+  { title: "your chats", target: "#chat-page .chat-channels", text: "switch between channels, dms, and group chats here. badges show unread messages." },
+  { title: "direct messages and groups", target: "#chat-page .chat-category-add", text: "click the + icon. pick one person for a dm or several for a group." },
+  { title: "sending messages", target: "#chat-page .chat-bar", text: "enter sends, shift + enter adds a line. click the + for images and @ for mentions." },
+  { title: "replies and reactions", target: "#chat-page .chat-feed", text: "hover or tap a message to reply, react, or edit your own. click an avatar to view a profile." },
+  { title: "watch together", target: "#chat-page .chat-bar", text: "type /watch and a title, then pick a result. others can join from your invitation." },
+];
+
+export default function Tutorial({ replayOnMount = false, guide = "home" }: { replayOnMount?: boolean; guide?: TutorialGuide }) {
+  const steps = guide === "chat" ? chatSteps : homeSteps;
   const dialog = useRef<HTMLDialogElement>(null);
   const card = useRef<HTMLDivElement>(null);
   const spotlight = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(() => !tutorialSeen());
+  const [open, setOpen] = useState(() => !tutorialSeen(guide));
   const [step, setStep] = useState(0);
   const currentStep = steps[step]!;
 
   const dismiss = () => {
-    markTutorialSeen();
+    markTutorialSeen(guide);
     setOpen(false);
   };
 
   useEffect(() => {
+    if (guide !== "home") return;
     const replay = () => {
       window.hideGameMenu?.();
       window.hideWatchMenu?.();
@@ -81,13 +91,30 @@ export default function Tutorial({ replayOnMount = false }: { replayOnMount?: bo
       const height = overlay.clientHeight;
       const gap = 18;
       const inset = 12;
-      const below = height - rect.bottom - gap - inset;
-      const above = rect.top - gap - inset;
-      const placeBelow = below >= panel.scrollHeight || below >= above;
-      panel.style.maxHeight = `${Math.max(120, placeBelow ? below : above)}px`;
-      const left = Math.max(inset, Math.min(rect.left, width - panel.offsetWidth - inset));
-      const top = placeBelow ? rect.bottom + gap : rect.top - gap - panel.offsetHeight;
-      panel.style.transform = `translate(${left}px, ${Math.max(inset, Math.min(top, height - panel.offsetHeight - inset))}px)`;
+      panel.style.maxWidth = `${Math.max(0, width - inset * 2)}px`;
+      panel.style.maxHeight = `${Math.max(0, height - inset * 2)}px`;
+      const panelWidth = panel.offsetWidth;
+      const panelHeight = panel.offsetHeight;
+      const right = rect.left + rect.width;
+      let left = rect.left;
+      let top = rect.bottom + gap;
+      if (top + panelHeight <= height - inset) {
+        top = rect.bottom + gap;
+      } else if (rect.top - gap - panelHeight >= inset) {
+        top = rect.top - gap - panelHeight;
+      } else if (right + gap + panelWidth <= width - inset) {
+        left = right + gap;
+        top = rect.top;
+      } else if (rect.left - gap - panelWidth >= inset) {
+        left = rect.left - gap - panelWidth;
+        top = rect.top;
+      } else {
+        left = (width - panelWidth) / 2;
+        top = (height - panelHeight) / 2;
+      }
+      left = Math.max(inset, Math.min(left, width - panelWidth - inset));
+      top = Math.max(inset, Math.min(top, height - panelHeight - inset));
+      panel.style.transform = `translate(${left}px, ${top}px)`;
       light.style.transform = `translate(${rect.left - SPOTLIGHT_PAD}px, ${rect.top - SPOTLIGHT_PAD}px)`;
       light.style.width = `${rect.width + SPOTLIGHT_PAD * 2}px`;
       light.style.height = `${rect.height + SPOTLIGHT_PAD * 2}px`;
@@ -108,7 +135,7 @@ export default function Tutorial({ replayOnMount = false }: { replayOnMount?: bo
   }, [open, currentStep]);
 
   return (
-    <dialog ref={dialog} class="tutorial" aria-labelledby="tutorial-title" aria-describedby="tutorial-copy"
+    <dialog ref={dialog} class="tutorial" aria-labelledby={`tutorial-${guide}-title`} aria-describedby={`tutorial-${guide}-copy`}
       onCancel={(event) => { event.preventDefault(); dismiss(); }}>
       <div ref={spotlight} class="tutorial-spotlight" aria-hidden="true" />
       <div ref={card} class="tutorial-card" tabIndex={-1} autoFocus>
@@ -117,8 +144,8 @@ export default function Tutorial({ replayOnMount = false }: { replayOnMount?: bo
         <button class="tutorial-secondary" type="button" onClick={dismiss}>skip</button>
       </div>
       <div aria-live="polite" aria-atomic="true">
-        <h2 id="tutorial-title">{currentStep.title}</h2>
-        <p id="tutorial-copy">{currentStep.text}</p>
+        <h2 id={`tutorial-${guide}-title`}>{currentStep.title}</h2>
+        <p id={`tutorial-${guide}-copy`}>{currentStep.text}</p>
       </div>
       <div class="tutorial-actions">
         <button class="tutorial-secondary" type="button" disabled={step === 0} onClick={() => setStep(step - 1)}>back</button>

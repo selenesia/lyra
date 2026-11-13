@@ -39,6 +39,7 @@
   cursor: pointer;
   display: flex;
   height: 28px;
+  width: 28px;
   justify-content: center;
   padding: 0;
   position: relative;
@@ -46,7 +47,6 @@
     color var(--motion-control) var(--motion-ease),
     background-color var(--motion-control) var(--motion-ease),
     transform var(--motion-control) var(--motion-ease);
-  width: 28px;
 }
 
 .chat-tool:not(:disabled):is(:hover, :focus-visible) {
@@ -114,7 +114,7 @@
 
 .chat-suggestions {
   background-color: var(--bg-surface-5);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-dialog);
   bottom: calc(100% - 4px);
   box-shadow: var(--shadow-dialog);
   display: flex;
@@ -124,6 +124,27 @@
   position: absolute;
   right: 0;
   z-index: 20;
+}
+
+.chat-suggestion-poster {
+  background-color: var(--game-card-bg);
+  border-radius: var(--radius-detail);
+  flex-shrink: 0;
+  height: 30px;
+  overflow: hidden;
+  width: 20px;
+}
+
+.chat-suggestion-poster img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.chat-suggestion:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .chat-context {
@@ -176,6 +197,10 @@
 
 .chat-context-close:active {
   transform: scale(1);
+}
+
+.chat-dock {
+  position: relative;
 }
 
 .chat-dock .search-bar.chat-bar {

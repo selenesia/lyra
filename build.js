@@ -5,6 +5,7 @@ import { promisify } from "util";
 import { createHash } from "crypto";
 import JavaScriptObfuscator from "javascript-obfuscator";
 import { createSourceBuildId } from "./build-id.mjs";
+import { createDomNames, DOM_NAME_ATTRIBUTES } from "./src/core/ui/domNames.ts";
 
 const { obfuscate } = JavaScriptObfuscator;
 const brotliCompressAsync = promisify(brotliCompress);
@@ -314,15 +315,222 @@ function addSensitiveToken(tokens, token) {
   if (SENSITIVE_TERM.test(token)) tokens.add(token);
 }
 
-function createCssTokenMap(cssSources, salt) {
+const DOM_NAME_CALLS = new Map([
+  ["getElementById", [[0, "list"]]],
+  ["getElementsByClassName", [[0, "list"]]],
+  ["querySelector", [[0, "selector"]]],
+  ["querySelectorAll", [[0, "selector"]]],
+  ["closest", [[0, "selector"]]],
+  ["matches", [[0, "selector"]]],
+  ["insertAdjacentHTML", [[1, "markup"]]],
+]);
+const CLASS_LIST_CALLS = new Map([
+  ["add", "all"],
+  ["remove", "all"],
+  ["toggle", [0]],
+  ["contains", [0]],
+  ["replace", [0, 1]],
+]);
+const DOM_NAME_PROPERTIES = new Map([
+  ["className", "list"],
+  ["id", "list"],
+  ["innerHTML", "markup"],
+  ["outerHTML", "markup"],
+]);
+const DOM_NAME_ASSIGNMENTS = new Set(["=", "+=", "||=", "&&=", "??="]);
+const DOM_NAME_HELPERS = {
+  list: ["mapDomNames", "__mapDomNames"],
+  selector: ["mapDomSelector", "__mapDomSelector"],
+  markup: ["mapDomMarkup", "__mapDomMarkup"],
+};
+const DOM_NAME_SITE_HINT =
+  /classList|className|\.id\s*=|innerHTML|outerHTML|getElementById|getElementsByClassName|querySelector|closest|matches|setAttribute|insertAdjacentHTML/;
+const DOM_NAME_EDIT_ORDER = { close: 0, open: 1, replace: 2 };
+
+function unwrapExpression(node) {
+  let current = node;
+  while (
+    current?.type === "ChainExpression" ||
+    current?.type === "ParenthesizedExpression"
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function memberName(node) {
+  if (node?.type !== "MemberExpression") return null;
+  if (!node.computed && node.property.type === "Identifier") return node.property.name;
+  return node.computed ? staticString(node.property) : null;
+}
+
+function staticString(node) {
+  if (node?.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0].value.cooked ?? null;
+  }
+  return null;
+}
+
+function isClassList(node) {
+  const target = unwrapExpression(node);
+  return (
+    (target?.type === "Identifier" && target.name === "classList") ||
+    memberName(target) === "classList"
+  );
+}
+
+function applyDomNameEdits(code, edits) {
+  edits.sort(
+    (left, right) =>
+      left.start - right.start ||
+      DOM_NAME_EDIT_ORDER[left.side] - DOM_NAME_EDIT_ORDER[right.side] ||
+      (left.side === "close" ? left.span - right.span : right.span - left.span),
+  );
+  let output = "";
+  let cursor = 0;
+  for (const edit of edits) {
+    if (edit.start < cursor) {
+      throw new Error("class and id name rewrites overlap... /ᐠ - ˕ -マ");
+    }
+    output += code.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+  }
+  return output + code.slice(cursor);
+}
+
+export function rewriteDomNameSites(code, program, names, helperModule = null) {
+  const edits = [];
+  const helpers = new Set();
+
+  const wrap = (node, kind, open, close) => {
+    if (!helperModule) {
+      throw new Error("inline page scripts must use fixed class and id names... /ᐠ - ˕ -マ");
+    }
+    helpers.add(kind);
+    const span = node.end - node.start;
+    edits.push({ start: node.start, end: node.start, text: open, side: "open", span });
+    edits.push({ start: node.end, end: node.end, text: close, side: "close", span });
+  };
+
+  const mapValue = (node, kind) => {
+    if (!node) return;
+    const helper = DOM_NAME_HELPERS[kind][1];
+    if (node.type === "SpreadElement") {
+      wrap(node.argument, kind, "Array.from(", `, ${helper})`);
+      return;
+    }
+    const value = staticString(node);
+    if (value === null) {
+      wrap(node, kind, `${helper}(`, ")");
+      return;
+    }
+    const mapped = names[kind](value);
+    if (mapped !== value) {
+      edits.push({ start: node.start, end: node.end, text: JSON.stringify(mapped), side: "replace" });
+    }
+  };
+
+  const inspectCall = (node) => {
+    const callee = unwrapExpression(node.callee);
+    const method = memberName(callee);
+    if (!method) return;
+    if (CLASS_LIST_CALLS.has(method) && isClassList(callee.object)) {
+      const positions = CLASS_LIST_CALLS.get(method);
+      node.arguments.forEach((argument, index) => {
+        if (positions === "all" || positions.includes(index)) mapValue(argument, "list");
+      });
+      return;
+    }
+    if (method === "setAttribute") {
+      const attribute = staticString(node.arguments[0]);
+      if (attribute !== null && DOM_NAME_ATTRIBUTES.includes(attribute.toLowerCase())) {
+        mapValue(node.arguments[1], "list");
+      }
+      return;
+    }
+    for (const [index, kind] of DOM_NAME_CALLS.get(method) ?? []) {
+      mapValue(node.arguments[index], kind);
+    }
+  };
+
+  const inspectAssignment = (node) => {
+    const target = unwrapExpression(node.left);
+    const property = memberName(target);
+    const kind = DOM_NAME_PROPERTIES.get(property);
+    if (!kind || !DOM_NAME_ASSIGNMENTS.has(node.operator)) return;
+    if (property === "id" && target.object.type === "ThisExpression") return;
+    mapValue(node.right, kind);
+  };
+
+  const visit = (node) => {
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!node || typeof node.type !== "string") return;
+    if (node.type === "CallExpression") inspectCall(node);
+    else if (node.type === "AssignmentExpression") inspectAssignment(node);
+    for (const key in node) {
+      const child = node[key];
+      if (child && typeof child === "object") visit(child);
+    }
+  };
+
+  visit(program);
+  if (edits.length === 0) return code;
+  const output = applyDomNameEdits(code, edits);
+  if (helpers.size === 0) return output;
+  const imports = [...helpers]
+    .map((kind) => `${DOM_NAME_HELPERS[kind][0]} as ${DOM_NAME_HELPERS[kind][1]}`)
+    .join(", ");
+  return `import { ${imports} } from ${JSON.stringify(helperModule)};\n${output}`;
+}
+
+export function renameCssSelector(node, names, seen) {
+  if (Array.isArray(node)) return node.map((child) => renameCssSelector(child, names, seen));
+  if (!node || typeof node !== "object") return node;
+  const renamed = {};
+  for (const [key, value] of Object.entries(node)) {
+    renamed[key] = renameCssSelector(value, names, seen);
+  }
+  if ((renamed.type === "class" || renamed.type === "id") && typeof renamed.name === "string") {
+    seen.add(renamed.name);
+    renamed.name = names.list(renamed.name);
+  }
+  return renamed;
+}
+
+export function rewriteStyleSelectors(css, names) {
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[{};])([^{};@]+)(?=\{)/g, (_match, boundary, prelude) =>
+      boundary + names.selector(prelude),
+    );
+}
+
+export function rewritePageDomNames(html, names, parse) {
+  return names
+    .markup(html)
+    .replace(/<style>([\s\S]*?)<\/style>/g, (_match, css) =>
+      `<style>${rewriteStyleSelectors(css, names)}</style>`,
+    )
+    .replace(/<script>([\s\S]*?)<\/script>/g, (_match, source) =>
+      `<script>${rewriteDomNameSites(source, parse(source), names)}</script>`,
+    );
+}
+
+function createCssTokenMap(cssSources, salt, selectorNames = []) {
   const tokens = new Set();
+  const selectors = new Set();
+  for (const name of selectorNames) addSensitiveToken(selectors, name);
 
   for (const source of cssSources) {
     for (const match of source.matchAll(/([^{}]+)\{/g)) {
       const header = match[1].trim();
       if (header.startsWith("@")) continue;
       for (const selector of header.matchAll(/[.#]([_a-zA-Z][\w-]*)/g)) {
-        addSensitiveToken(tokens, selector[1]);
+        addSensitiveToken(selectors, selector[1]);
       }
     }
 
@@ -336,15 +544,17 @@ function createCssTokenMap(cssSources, salt) {
     }
   }
 
-  return new Map(
-    [...tokens].map((token) => {
+  const domNames = createDomNames(salt);
+  return new Map([
+    ...[...tokens].map((token) => {
       const hash = createHash("sha256")
         .update(`${salt}\0${token}`)
         .digest("hex")
         .slice(0, 10);
       return [token, token.startsWith("--") ? `--x${hash}` : `x${hash}`];
     }),
-  );
+    ...[...selectors].map((name) => [name, domNames.list(name)]),
+  ]);
 }
 
 function escapeRegExp(value) {
@@ -387,6 +597,12 @@ export default function lyraPlugin(
   let outputDirectory;
   let serviceWorkerSourceDirectory;
   let projectRoot;
+  let appSourceDirectory;
+  let pageRuntimeDirectory;
+  let domNamesModule;
+  let isBuild = false;
+  const domNames = createDomNames(buildId);
+  const selectorNames = new Set();
 
   return {
     name: "lyra-build",
@@ -405,10 +621,23 @@ export default function lyraPlugin(
     },
 
     config(_config, { command }) {
-      if (command === "build" && !/^\/(?:w|[a-f0-9]{64})\/$/.test(wispPath)) {
+      isBuild = command === "build";
+      if (isBuild && !/^\/(?:w|[a-f0-9]{64})\/$/.test(wispPath)) {
         throw new Error("invalid wisp endpoint... /ᐠ - ˕ -マ");
       }
       return {
+        ...(isBuild
+          ? {
+              css: {
+                lightningcss: {
+                  visitor: {
+                    Selector: (selector) =>
+                      renameCssSelector(selector, domNames, selectorNames),
+                  },
+                },
+              },
+            }
+          : {}),
         define: {
           __LYRA_WISP_PATH__: JSON.stringify(
             command === "build" ? wispPath : "/w/",
@@ -431,6 +660,24 @@ export default function lyraPlugin(
       outputDirectory = path.resolve(config.root, config.build.outDir);
       serviceWorkerSourceDirectory = path.join(config.root, "b", "sw");
       projectRoot = path.resolve(config.root, "..");
+      appSourceDirectory = path.resolve(config.root) + path.sep;
+      pageRuntimeDirectory = path.join(appSourceDirectory, "b") + path.sep;
+      domNamesModule = path.join(appSourceDirectory, "core", "ui", "domNames.ts");
+    },
+
+    transform(code, id) {
+      if (!isBuild || !DOM_NAME_SITE_HINT.test(code)) return null;
+      const file = id.split("?")[0];
+      if (
+        !file.startsWith(appSourceDirectory) ||
+        file.startsWith(pageRuntimeDirectory) ||
+        file === domNamesModule ||
+        !/\.[cm]?[jt]sx?$/.test(file)
+      ) {
+        return null;
+      }
+      const rewritten = rewriteDomNameSites(code, this.parse(code), domNames, domNamesModule);
+      return rewritten === code ? null : { code: rewritten, map: null };
     },
 
     async writeBundle(_options, bundle) {
@@ -457,7 +704,7 @@ export default function lyraPlugin(
         cssFiles.map((filePath) => readFile(filePath, "utf8")),
       );
       const cssTokenMap = new Map([
-        ...createCssTokenMap(cssSources, buildId),
+        ...createCssTokenMap(cssSources, buildId, selectorNames),
         ...createFolioTokenMap(buildId),
         ...createAppRuntimeTokenMap(buildId),
         [
@@ -628,7 +875,13 @@ export default function lyraPlugin(
           const filePath = path.join(outputDirectory, fileName);
           const sourceCode = await readFile(filePath, "utf8");
           const isPage = fileName.endsWith(".html");
-          const rewritten = rewriteBuildTokens(sourceCode, cssTokenMap, isPage ? pageAliases : pathAliases);
+          const rewritten = rewriteBuildTokens(
+            isPage
+              ? rewritePageDomNames(sourceCode, domNames, (source) => this.parse(source))
+              : sourceCode,
+            cssTokenMap,
+            isPage ? pageAliases : pathAliases,
+          );
           await writeFile(
             filePath,
             isPage ? obfuscateInlinePageCode(rewritten, buildId, fileName) : rewritten,

@@ -1,6 +1,8 @@
+import "../core/ui/domNames.ts";
 import { render } from "preact";
 import Player from "../components/player/Player.tsx";
 import { appPath } from "../core/runtime/hosting.ts";
+import { resolveWatchAnimePlayback } from "../features/watch/watchAnimePlayback.ts";
 import { parseTitlePlayback } from "../features/watch/watchPlayback.ts";
 import { resolveTheme } from "../core/config/settingsOptions.ts";
 import { applyTheme } from "../core/ui/theme.ts";
@@ -12,6 +14,7 @@ import "../assets/styles/base/themes.css";
 import "../assets/styles/base/motion.css";
 import "../assets/styles/watch/episode-selector.css";
 import "../assets/styles/player/player.css";
+import "../assets/styles/chat/chat-avatar.css";
 import "../assets/styles/toast/toast.css";
 import "../features/ui/toast.ts";
 
@@ -30,5 +33,8 @@ applyMotionPreference(readMotionPreference());
 
 const root = document.getElementById("player-root");
 if (root) {
-  render(<Player />, root);
+  void resolveWatchAnimePlayback(recoveryUrl).then((animeUrl) => {
+    if (animeUrl) history.replaceState(history.state, "", animeUrl.href);
+    render(<Player />, root);
+  });
 }

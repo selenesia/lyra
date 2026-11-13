@@ -1,3 +1,4 @@
+import "../core/ui/domNames.ts";
 import { render } from "preact";
 import App from "./App.tsx";
 import { store } from "../state/store.ts";

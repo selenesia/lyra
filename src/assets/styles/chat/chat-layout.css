@@ -117,11 +117,82 @@ body.chat-view .chat-page.is-visible {
   transition: transform var(--motion-control) var(--motion-ease);
 }
 
+.chat-category-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 3px 4px;
+}
+
+.chat-category-head .chat-category-title {
+  margin: 0;
+  min-width: 0;
+}
+
+.chat-category-add {
+  flex-shrink: 0;
+  margin: 0;
+  margin-top: -7px;
+}
+
+.chat-channel.chat-conversation {
+  padding: 0;
+}
+
+.chat-conversation-open {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  font: inherit;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.chat-conversation-icon {
+  margin: 0 2px;
+}
+
+.chat-conversation-faces {
+  flex-shrink: 0;
+  height: 20px;
+  position: relative;
+  width: 20px;
+}
+
+.chat-conversation-faces .chat-avatar {
+  position: absolute;
+}
+
+.chat-conversation-faces .chat-avatar:first-child {
+  left: 0;
+  top: 0;
+}
+
+.chat-conversation-faces .chat-avatar + .chat-avatar {
+  bottom: 0;
+  right: 0;
+}
+
+.chat-category-empty {
+  margin: 0 0 4px 8px;
+}
+
 .chat-category.collapsed .chat-category-chevron {
   transform: rotate(-90deg);
 }
 
-.chat-category.collapsed .chat-channel:not(.active, .unread) {
+.chat-category.collapsed .chat-channel:not(.active, .unread),
+.chat-category.collapsed .chat-category-empty {
   display: none;
 }
 
@@ -153,6 +224,7 @@ body.chat-view .chat-page.is-visible {
 .chat-channel {
   font-size: 13px;
   gap: 6px;
+  min-height: 32px;
   padding: 5px 8px;
 }
 
@@ -166,6 +238,10 @@ body.chat-view .chat-page.is-visible {
 .chat-suggestion.active {
   background-color: var(--hover-bg-toast);
   color: var(--text-primary);
+}
+
+.chat-party-suggestions .chat-suggestion-name {
+  text-transform: lowercase;
 }
 
 .chat-channel.active {
@@ -231,7 +307,8 @@ body.chat-view .chat-page.is-visible {
 }
 
 .chat-member-tag,
-.chat-member-lurkers {
+.chat-member-lurkers,
+.chat-category-empty {
   color: var(--color-sublabel);
   font-size: 11px;
 }

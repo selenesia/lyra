@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Database } from "bun:sqlite";
-import { CHAT_REACTION_FACES } from "../src/features/chat/chatProtocol.ts";
+import { CHAT_REACTION_FACES, conversationIdOf, conversationKey, isConversationKey } from "../src/features/chat/chatProtocol.ts";
 
 export const PERMANENT = 8_640_000_000_000_000;
 
@@ -36,7 +36,8 @@ const SCHEMA = `
     reply_user_id INTEGER,
     reply_name TEXT,
     reply_text TEXT,
-    notice TEXT
+    notice TEXT,
+    party TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_chat_messages_channel ON chat_messages(channel, id);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, created_at);
@@ -82,11 +83,29 @@ const SCHEMA = `
     target_id INTEGER,
     detail TEXT
   );
+  CREATE TABLE IF NOT EXISTS chat_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    name TEXT,
+    owner_id INTEGER,
+    dm_key TEXT UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_message_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_conversation_members (
+    conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES chat_users(id) ON DELETE CASCADE,
+    joined_at INTEGER NOT NULL,
+    last_read_id INTEGER NOT NULL DEFAULT 0,
+    hidden INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (conversation_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_conversation_members_user ON chat_conversation_members(user_id);
 `;
 
 const MESSAGE_COLUMNS = `
   m.id, m.channel, m.user_id, m.text, m.created_at, m.edited_at,
-  m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, m.notice, u.username, u.role, p.display, p.avatar_hash,
+  m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, m.notice, m.party, u.username, u.role, p.display, p.avatar_hash,
   a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
 `;
 const MESSAGE_SOURCE = "chat_messages m JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id LEFT JOIN chat_attachments a ON a.message_id = m.id";
@@ -106,6 +125,9 @@ export function createChatStore(file) {
   }
   if (!db.query("SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'notice'").get()) {
     db.exec("ALTER TABLE chat_messages ADD COLUMN notice TEXT");
+  }
+  if (!db.query("SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'party'").get()) {
+    db.exec("ALTER TABLE chat_messages ADD COLUMN party TEXT");
   }
   if (file !== ":memory:") fs.chmodSync(file, 0o600);
 
@@ -150,8 +172,8 @@ export function createChatStore(file) {
     ),
     staff: db.query(`SELECT ${USER_COLUMNS} FROM ${USER_SOURCE} WHERE u.role != 'member' ORDER BY u.username COLLATE NOCASE`),
     insertMessage: db.query(
-      `INSERT INTO chat_messages (channel, user_id, text, created_at, reply_id, reply_user_id, reply_name, reply_text, notice)
-        VALUES ($channel, $userId, $text, $time, $replyId, $replyUserId, $replyName, $replyText, $notice) RETURNING id`,
+      `INSERT INTO chat_messages (channel, user_id, text, created_at, reply_id, reply_user_id, reply_name, reply_text, notice, party)
+        VALUES ($channel, $userId, $text, $time, $replyId, $replyUserId, $replyName, $replyText, $notice, $party) RETURNING id`,
     ),
     message: db.query(`SELECT ${MESSAGE_COLUMNS} FROM ${MESSAGE_SOURCE} WHERE m.id = $id`),
     recent: db.query(
@@ -180,6 +202,64 @@ export function createChatStore(file) {
         LEFT JOIN chat_users actor ON actor.id = a.actor_id LEFT JOIN chat_users target ON target.id = a.target_id
         ORDER BY a.id DESC LIMIT $limit`,
     ),
+    searchUsers: db.query(
+      `SELECT ${USER_COLUMNS} FROM ${USER_SOURCE} WHERE u.id != $viewerId AND u.banned_until <= $time
+        AND (u.username LIKE $pattern ESCAPE '\\' OR p.display LIKE $pattern ESCAPE '\\') ORDER BY u.last_seen DESC, u.id LIMIT $limit`,
+    ),
+    conversationInfo: db.query("SELECT id, kind, name, owner_id FROM chat_conversations WHERE id = $id"),
+    conversation: db.query(
+      `SELECT c.*, m.last_read_id, m.hidden FROM chat_conversations c
+        JOIN chat_conversation_members m ON m.conversation_id = c.id AND m.user_id = $userId WHERE c.id = $id`,
+    ),
+    userConversations: db.query(
+      `SELECT c.*, m.last_read_id, m.hidden FROM chat_conversation_members m JOIN chat_conversations c ON c.id = m.conversation_id
+        WHERE m.user_id = $userId AND m.hidden = 0 ORDER BY c.last_message_at DESC, c.id DESC`,
+    ),
+    conversationMembers: db.query(
+      `SELECT ${USER_COLUMNS} FROM chat_conversation_members cm JOIN chat_users u ON u.id = cm.user_id
+        LEFT JOIN chat_profiles p ON p.user_id = u.id WHERE cm.conversation_id = $id ORDER BY cm.joined_at, cm.rowid`,
+    ),
+    memberIds: db.query("SELECT user_id FROM chat_conversation_members WHERE conversation_id = $id ORDER BY joined_at, rowid"),
+    hiddenMembers: db.query("SELECT user_id FROM chat_conversation_members WHERE conversation_id = $id AND hidden = 1"),
+    memberships: db.query(
+      "SELECT c.id, c.kind FROM chat_conversation_members m JOIN chat_conversations c ON c.id = m.conversation_id WHERE m.user_id = $userId",
+    ),
+    groupCount: db.query(
+      `SELECT COUNT(*) AS count FROM chat_conversation_members m JOIN chat_conversations c ON c.id = m.conversation_id
+        WHERE m.user_id = $userId AND c.kind = 'group'`,
+    ),
+    lastMessage: db.query(
+      `SELECT m.id, m.user_id, m.text, m.party, a.type AS attachment_type, u.username, p.display FROM chat_messages m
+        JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id
+        LEFT JOIN chat_attachments a ON a.message_id = m.id WHERE m.channel = $channel AND m.notice IS NULL ORDER BY m.id DESC LIMIT 1`,
+    ),
+    unread: db.query(
+      "SELECT COUNT(*) AS count FROM chat_messages WHERE channel = $channel AND id > $after AND user_id != $userId AND notice IS NULL",
+    ),
+    latestId: db.query("SELECT COALESCE(MAX(id), 0) AS id FROM chat_messages WHERE channel = $channel"),
+    dmByKey: db.query("SELECT id FROM chat_conversations WHERE dm_key = $key"),
+    insertConversation: db.query(
+      `INSERT INTO chat_conversations (kind, name, owner_id, dm_key, created_at, last_message_at)
+        VALUES ($kind, $name, $ownerId, $dmKey, $time, $time) RETURNING id`,
+    ),
+    insertMember: db.query(
+      `INSERT OR IGNORE INTO chat_conversation_members (conversation_id, user_id, joined_at, last_read_id)
+        VALUES ($id, $userId, $time, $lastRead)`,
+    ),
+    removeMember: db.query("DELETE FROM chat_conversation_members WHERE conversation_id = $id AND user_id = $userId"),
+    oldestMember: db.query("SELECT user_id FROM chat_conversation_members WHERE conversation_id = $id ORDER BY joined_at, rowid LIMIT 1"),
+    setOwner: db.query("UPDATE chat_conversations SET owner_id = $ownerId WHERE id = $id"),
+    setHidden: db.query(
+      "UPDATE chat_conversation_members SET hidden = $hidden WHERE conversation_id = $id AND user_id = $userId AND hidden != $hidden",
+    ),
+    unhideMembers: db.query("UPDATE chat_conversation_members SET hidden = 0 WHERE conversation_id = $id AND hidden = 1"),
+    touchConversation: db.query("UPDATE chat_conversations SET last_message_at = MAX(last_message_at, $time) WHERE id = $id"),
+    renameConversation: db.query("UPDATE chat_conversations SET name = $name WHERE id = $id"),
+    markRead: db.query(
+      "UPDATE chat_conversation_members SET last_read_id = $messageId WHERE conversation_id = $id AND user_id = $userId AND last_read_id < $messageId",
+    ),
+    dropChannel: db.query("DELETE FROM chat_messages WHERE channel = $channel"),
+    dropConversation: db.query("DELETE FROM chat_conversations WHERE id = $id"),
   };
 
   function toMessages(rows) {
@@ -218,8 +298,73 @@ export function createChatStore(file) {
       ...(reactions.has(row.id) && { reactions: reactions.get(row.id) }),
       ...(reactors.has(row.id) && { reactors: reactors.get(row.id) }),
       ...(row.notice && { notice: JSON.parse(row.notice) }),
+      ...(row.party && { party: JSON.parse(row.party) }),
     }));
   }
+
+  function dropConversation(id) {
+    statements.dropChannel.run({ channel: conversationKey(id) });
+    statements.dropConversation.run({ id });
+  }
+
+  function leaveGroup(id, userId) {
+    statements.removeMember.run({ id, userId });
+    const next = statements.oldestMember.get({ id });
+    if (!next) {
+      dropConversation(id);
+      return { deleted: true };
+    }
+    if (statements.conversationInfo.get({ id })?.owner_id === userId) statements.setOwner.run({ id, ownerId: next.user_id });
+    return { deleted: false };
+  }
+
+  function conversationOf(row, userId) {
+    const channel = conversationKey(row.id);
+    return {
+      id: row.id,
+      kind: row.kind,
+      name: row.name,
+      owner: row.owner_id,
+      createdAt: row.created_at,
+      lastAt: row.last_message_at,
+      hidden: !!row.hidden,
+      members: statements.conversationMembers.all({ id: row.id }),
+      last: statements.lastMessage.get({ channel }) ?? null,
+      unread: statements.unread.get({ channel, after: row.last_read_id, userId }).count,
+    };
+  }
+
+  const openDm = db.transaction(({ userId, targetId, time }) => {
+    const dmKey = `${Math.min(userId, targetId)}:${Math.max(userId, targetId)}`;
+    const existing = statements.dmByKey.get({ key: dmKey });
+    if (existing) {
+      const { changes } = statements.setHidden.run({ id: existing.id, userId, hidden: 0 });
+      return { id: existing.id, created: false, unhidden: changes > 0 };
+    }
+    const { id } = statements.insertConversation.get({ kind: "dm", name: null, ownerId: null, dmKey, time });
+    statements.insertMember.run({ id, userId, time, lastRead: 0 });
+    statements.insertMember.run({ id, userId: targetId, time, lastRead: 0 });
+    return { id, created: true, unhidden: false };
+  });
+
+  const createGroup = db.transaction(({ ownerId, name, memberIds, time }) => {
+    const { id } = statements.insertConversation.get({ kind: "group", name: name || null, ownerId, dmKey: null, time });
+    for (const userId of [ownerId, ...memberIds]) statements.insertMember.run({ id, userId, time, lastRead: 0 });
+    return id;
+  });
+
+  const addMembers = db.transaction(({ id, userIds, time }) => {
+    const lastRead = statements.latestId.get({ channel: conversationKey(id) }).id;
+    for (const userId of userIds) statements.insertMember.run({ id, userId, time, lastRead });
+  });
+
+  const leaveConversation = db.transaction(({ id, userId }) => leaveGroup(id, userId));
+
+  const markRead = db.transaction(({ id, userId, messageId }) => {
+    const latest = statements.latestId.get({ channel: conversationKey(id) }).id;
+    const next = Math.min(messageId, latest);
+    return next > 0 && statements.markRead.run({ id, userId, messageId: next }).changes > 0 ? next : 0;
+  });
 
   const toggleReaction = db.transaction(({ id, userId, emoji, time }) => {
     if (statements.hasReaction.get({ id, userId, emoji })) statements.removeReaction.run({ id, userId, emoji });
@@ -237,6 +382,10 @@ export function createChatStore(file) {
     if (!existing) {
       statements.insertUser.run({ id, username, time });
     } else if (existing.username !== username) {
+      for (const conversation of statements.memberships.all({ userId: id })) {
+        if (conversation.kind === "dm") dropConversation(conversation.id);
+        else leaveGroup(conversation.id, id);
+      }
       statements.dropMessages.run({ id });
       statements.dropProfile.run({ id });
       statements.dropMedia.run({ id });
@@ -286,8 +435,14 @@ export function createChatStore(file) {
       replyName: message.reply?.name ?? null,
       replyText: message.reply?.text ?? null,
       notice: message.notice ? JSON.stringify(message.notice) : null,
+      party: message.party ? JSON.stringify(message.party) : null,
     });
     if (message.attachment) statements.putAttachment.run({ id, ...message.attachment });
+    if (isConversationKey(message.channel)) {
+      const conversation = conversationIdOf(message.channel);
+      statements.touchConversation.run({ id: conversation, time: message.time });
+      if (!message.notice) statements.unhideMembers.run({ id: conversation });
+    }
     return id;
   });
 
@@ -322,6 +477,26 @@ export function createChatStore(file) {
         detail: entry.detail ?? null,
       }),
     auditLog: (limit = 20) => statements.auditLog.all({ limit }),
+    searchUsers: (query, viewerId, time, limit) =>
+      statements.searchUsers.all({ viewerId, time, limit, pattern: `${query.replace(/[\\%_]/g, "\\$&")}%` }),
+    conversationInfo: (id) => statements.conversationInfo.get({ id }) ?? null,
+    conversation: (id, userId) => {
+      const row = statements.conversation.get({ id, userId });
+      return row ? conversationOf(row, userId) : null;
+    },
+    conversations: (userId) => statements.userConversations.all({ userId }).map((row) => conversationOf(row, userId)),
+    memberIds: (id) => statements.memberIds.all({ id }).map((row) => row.user_id),
+    hiddenMembers: (id) => statements.hiddenMembers.all({ id }).map((row) => row.user_id),
+    memberships: (userId) =>
+      statements.memberships.all({ userId }).map((row) => ({ ...row, members: statements.memberIds.all({ id: row.id }).map((entry) => entry.user_id) })),
+    groupCount: (userId) => statements.groupCount.get({ userId }).count,
+    openDm: (userId, targetId, time) => openDm({ userId, targetId, time }),
+    createGroup: (ownerId, name, memberIds, time) => createGroup({ ownerId, name, memberIds, time }),
+    addMembers: (id, userIds, time) => addMembers({ id, userIds, time }),
+    leaveGroup: (id, userId) => leaveConversation({ id, userId }),
+    hideConversation: (id, userId) => statements.setHidden.run({ id, userId, hidden: 1 }).changes > 0,
+    renameConversation: (id, name) => statements.renameConversation.run({ id, name: name || null }),
+    markRead: (id, userId, messageId) => markRead({ id, userId, messageId }),
     close: () => db.close(),
   };
 }

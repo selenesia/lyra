@@ -186,6 +186,87 @@
   width: auto;
 }
 
+.chat-party {
+  align-items: center;
+  background-color: var(--bg-surface-5);
+  border-radius: var(--radius-control);
+  box-sizing: border-box;
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  max-width: 440px;
+  padding: 8px;
+}
+
+.chat-party-poster {
+  align-items: center;
+  background-color: var(--game-card-bg);
+  border-radius: var(--radius-item);
+  color: var(--game-no-cover-line);
+  display: flex;
+  flex-shrink: 0;
+  height: 72px;
+  justify-content: center;
+  overflow: hidden;
+  transition: opacity var(--motion-control) var(--motion-ease);
+  width: 48px;
+}
+
+.chat-party-poster img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity var(--motion-control) var(--motion-ease);
+  width: 100%;
+}
+
+.chat-party-poster.loaded img {
+  opacity: 1;
+}
+
+.chat-party-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-party-title {
+  text-transform: lowercase;
+  color: var(--text-primary);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-party-detail {
+  color: var(--color-sublabel);
+  font-size: 12px;
+}
+
+.chat-party-watchers {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.chat-party-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.chat-party.is-ended .chat-party-title {
+  color: var(--text-secondary);
+}
+
+.chat-party.is-ended .chat-party-poster {
+  opacity: 0.6;
+}
+
 .chat-message-text strong {
   color: var(--text-primary);
   font-weight: 500;

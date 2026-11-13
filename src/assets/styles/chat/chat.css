@@ -1,6 +1,8 @@
+@import "../base/settings-button.css";
 @import "./chat-layout.css";
 @import "./chat-feed.css";
 @import "./chat-composer.css";
+@import "./chat-avatar.css";
 @import "./chat-members.css";
 @import "./chat-profile.css";
 @import "./chat-responsive.css";

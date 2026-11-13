@@ -288,6 +288,14 @@ export const ICON_PATHS = {
     "IconMegaphone",
     '<path d="M18.2461 14C19.9029 14 21.2461 12.6569 21.2461 11C21.2461 9.34315 19.9029 8 18.2461 8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M18.2461 5.4606V16.5393C18.2461 17.8857 16.9426 18.8475 15.6561 18.4502L4.15607 14.8995C3.31782 14.6407 2.74609 13.8659 2.74609 12.9886V9.01129C2.74609 8.134 3.31782 7.35912 4.15607 7.1003L15.6561 3.54961C16.9426 3.1524 18.2461 4.11418 18.2461 5.4606Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M12.5754 18.25C12.1636 19.4152 11.0523 20.25 9.74609 20.25C8.08924 20.25 6.74609 18.9069 6.74609 17.25V15.75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M6.75 6.25V15.75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path>',
   ),
+  IconPeople: createOutlineIcon(
+    "IconPeople",
+    '<path d="M9 11.25C10.7949 11.25 12.25 9.79493 12.25 8C12.25 6.20507 10.7949 4.75 9 4.75C7.20507 4.75 5.75 6.20507 5.75 8C5.75 9.79493 7.20507 11.25 9 11.25Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M2.75 19.25C2.75 16.4886 4.98858 14.25 7.75 14.25H10.25C13.0114 14.25 15.25 16.4886 15.25 19.25" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M15.25 11.25C17.0449 11.25 18.5 9.79493 18.5 8C18.5 6.20507 17.0449 4.75 15.25 4.75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M17.75 14.25C19.683 14.25 21.25 15.817 21.25 17.75V19.25" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path>',
+  ),
+  IconScreenPlay: createOutlineIcon(
+    "IconScreenPlay",
+    '<path d="M5.75 4.75H18.25C19.3546 4.75 20.25 5.64543 20.25 6.75V15.25C20.25 16.3546 19.3546 17.25 18.25 17.25H5.75C4.64543 17.25 3.75 16.3546 3.75 15.25V6.75C3.75 5.64543 4.64543 4.75 5.75 4.75Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M8.75 20.25H15.25" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path><path d="M10.75 8.95V13.05C10.75 13.4 11.13 13.62 11.43 13.44L14.85 11.39C15.14 11.21 15.14 10.79 14.85 10.61L11.43 8.56C11.13 8.38 10.75 8.6 10.75 8.95Z" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor"></path>',
+  ),
 } as const;
 
 export type CanonicalIconName = keyof typeof ICON_PATHS;

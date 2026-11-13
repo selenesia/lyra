@@ -13,6 +13,7 @@ leave a star or give credits if you like, fork, or take any ideas from this proj
 - nice ui
 - thousands of games aggregated from multiple sources
 - fully free high quality movies, shows, and anime streaming
+- watch parties
 - chat rooms
 - cloud syncing
 - functional chrome extensions support

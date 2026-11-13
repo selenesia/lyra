@@ -116,31 +116,6 @@
   text-align: center;
 }
 
-.chat-avatar {
-  align-items: center;
-  background-color: hsl(var(--avatar-hue) 36% 40%);
-  border-radius: 50%;
-  color: var(--text-white);
-  display: inline-flex;
-  flex-shrink: 0;
-  font-size: calc(var(--avatar-size) * 0.42);
-  height: var(--avatar-size);
-  justify-content: center;
-  line-height: 1;
-  overflow: hidden;
-  position: relative;
-  user-select: none;
-  width: var(--avatar-size);
-}
-
-.chat-avatar img {
-  height: 100%;
-  inset: 0;
-  object-fit: cover;
-  position: absolute;
-  width: 100%;
-}
-
 .chat-message-meta {
   position: relative;
 }
@@ -208,4 +183,35 @@
 
 .chat-suggestion .chat-role {
   flex-shrink: 0;
+}
+
+.chat-member-icon {
+  align-items: center;
+  background-color: var(--bg-surface-5);
+  border-radius: 50%;
+  color: var(--color-icon-dim);
+  height: 32px;
+  justify-content: center;
+  transition: color var(--motion-control) var(--motion-ease);
+  width: 32px;
+}
+
+.chat-member-action:is(:hover, :focus-visible) .chat-member-icon {
+  color: var(--text-white);
+}
+
+.chat-member-action.is-danger,
+.chat-member-action.is-danger .chat-member-icon {
+  color: var(--status-error-text);
+}
+
+.chat-conversation-member {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+}
+
+.chat-conversation-member .chat-member {
+  flex: 1;
+  min-width: 0;
 }

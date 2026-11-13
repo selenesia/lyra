@@ -684,8 +684,8 @@ export default function SettingsPage({
           <IconMagnifyingGlass2 class="catalog-search-icon" />
           <EditableField
             id="settingsSearchInput"
-            label="search settings..."
-            placeholder="search settings..."
+            label="search settings... ◝(ᵔᗜᵔ)◜"
+            placeholder="search settings... ◝(ᵔᗜᵔ)◜"
             value={query}
             onChange={setQuery}
           />

@@ -56,6 +56,35 @@ export function RoleBadge({ role }: { role: ChatRole }) {
   return <span class={`chat-role chat-role-${role}`}>{CHAT_ROLE_LABELS[role]}</span>;
 }
 
+interface ChatMemberRowProps {
+  member: ChatMember;
+  online: boolean;
+  self: boolean;
+  blocked: boolean;
+  tag?: string | undefined;
+  onOpen: (member: ChatMember) => void;
+}
+
+export function ChatMemberRow({ member, online, self, blocked, tag, onOpen }: ChatMemberRowProps) {
+  return (
+    <button
+      type="button"
+      class={`chat-member chat-member-${member.role}${self ? " self" : ""}${blocked ? " blocked" : ""}`}
+      onClick={() => onOpen(member)}
+    >
+      <span class="chat-member-face">
+        <ChatAvatar member={member} size={32} />
+        {online && <span class="chat-member-dot" />}
+      </span>
+      <span class="chat-member-text">
+        <span class="chat-member-name">{displayName(member)}</span>
+        {member.status && <span class="chat-member-status">{member.status}</span>}
+      </span>
+      {tag && <span class="chat-member-tag">{tag}</span>}
+    </button>
+  );
+}
+
 type TextDraft = Record<TextField, string>;
 type MediaDraft = Partial<Record<ChatMediaKind, { blob: Blob; url: string } | null>>;
 
@@ -88,6 +117,7 @@ interface ChatProfileProps {
   saveProfile: (fields: ChatProfileEdit) => Promise<ChatResult>;
   uploadMedia: (kind: ChatMediaKind, image: Blob) => Promise<ChatResult>;
   onMention: (name: string) => void;
+  onMessage: (member: ChatMember) => Promise<ChatResult>;
   onToggleBlock: (member: ChatMember) => void;
   onClose: () => void;
 }
@@ -102,6 +132,7 @@ export default function ChatProfile({
   saveProfile,
   uploadMedia,
   onMention,
+  onMessage,
   onToggleBlock,
   onClose,
 }: ChatProfileProps) {
@@ -223,6 +254,18 @@ export default function ChatProfile({
     },
     [author, moderate, refresh],
   );
+
+  const message = useCallback(async () => {
+    setBusy(true);
+    setNotice(null);
+    const result = await onMessage(shown);
+    setBusy(false);
+    if (result.failure) {
+      setNotice({ text: result.failure.error, tone: "error" });
+      return;
+    }
+    requestClose();
+  }, [onMessage, requestClose, shown]);
 
   const pickImage = useCallback(async (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
@@ -491,6 +534,9 @@ export default function ChatProfile({
               }}
             >
               mention
+            </button>
+            <button type="button" class="chat-secondary-btn" disabled={busy} onClick={() => void message()}>
+              message
             </button>
             <button type="button" class="chat-secondary-btn" onClick={() => onToggleBlock(shown)}>
               {blocked ? "unblock" : "block"}

@@ -1,0 +1,24 @@
+.chat-avatar {
+  align-items: center;
+  background-color: hsl(var(--avatar-hue) 36% 40%);
+  border-radius: 50%;
+  color: var(--text-white);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: calc(var(--avatar-size) * 0.42);
+  height: var(--avatar-size);
+  justify-content: center;
+  line-height: 1;
+  overflow: hidden;
+  position: relative;
+  user-select: none;
+  width: var(--avatar-size);
+}
+
+.chat-avatar img {
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  width: 100%;
+}

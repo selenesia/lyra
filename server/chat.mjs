@@ -3,6 +3,7 @@ import { httpError } from "./errors.mjs";
 import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
 import { chatImageType, readChatImage } from "./chat-media.mjs";
+import { createPartyRegistry } from "./chat-party.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
 import { moderate, readModeration } from "../src/features/chat/moderation.ts";
 import { blockedNotice } from "../src/features/chat/moderationNotice.ts";
@@ -12,14 +13,24 @@ import {
   CHAT_MEDIA,
   CHAT_MEDIA_TYPES,
   CHAT_ATTACHMENT,
+  CHAT_CONVERSATION_LIMITS,
+  CHAT_PARTY_LIMITS,
   CHAT_PROFILE_TEXT,
   canPostIn,
   canReadChannel,
   cleanChatText,
+  cleanConversationName,
   cleanProfileText,
+  conversationIdOf,
+  conversationKey,
   isChatAccent,
   isChatChannel,
   isChatReaction,
+  isChatTarget,
+  isConversationKey,
+  isPartyControl,
+  isPartyId,
+  readPartyMedia,
   replySnippet,
 } from "../src/features/chat/chatProtocol.ts";
 import {
@@ -39,6 +50,9 @@ const NAME_CACHE_LIMIT = 2_000;
 const MEDIA_ROUTE = /^media\/(avatar|banner)(?:\/(\d{1,15}))?$/;
 const ATTACHMENT_ROUTE = /^media\/message\/(\d{1,15})$/;
 const PROFILE_LABELS = { display: "display name", pronouns: "pronouns", status: "status", bio: "bio" };
+const MEMBER_CACHE_LIMIT = 10_000;
+const PARTY_POSITION_MAX = 86_400;
+const USER_QUERY_MAX = 32;
 
 async function readBody(request, limit) {
   const reader = request.body?.getReader();
@@ -109,6 +123,14 @@ export function createChatRoom({
   duplicateMs = 30_000,
   profileLimit = 8,
   profileWindowMs = 60_000,
+  socialLimit = 20,
+  searchLimit = 20,
+  partyWatchers = CHAT_PARTY_LIMITS.watchers,
+  partyIdleMs = CHAT_PARTY_LIMITS.idleMs,
+  partyMaxMs = CHAT_PARTY_LIMITS.maxMs,
+  partyStateLimit = 8,
+  partyStateWindowMs = 4_000,
+  maxPartyStreamsPerUser = 4,
   now = Date.now,
 } = {}) {
   const encoder = new TextEncoder();
@@ -138,10 +160,130 @@ export function createChatRoom({
     avatar_hash: row.avatar_hash,
     status: row.status,
   });
+  const memberCache = new Map();
+  const parties = createPartyRegistry({
+    now,
+    frame,
+    pingFrame,
+    pingMs,
+    member,
+    delayMs: presenceDelayMs,
+    idleMs: partyIdleMs,
+    maxMs: partyMaxMs,
+    announce: (party) => broadcast(frame("party", party), party.target),
+  });
 
   function broadcast(bytes, channel) {
+    const allowed = isConversationKey(channel) ? membersOf(conversationIdOf(channel)) : null;
     for (const stream of streams.values()) {
-      if (!channel || canReadChannel(stream.user.role, channel)) stream.send(bytes);
+      if (!channel || (allowed ? allowed.has(stream.user.id) : canReadChannel(stream.user.role, channel))) stream.send(bytes);
+    }
+  }
+
+  function membersOf(id) {
+    let ids = memberCache.get(id);
+    if (!ids) {
+      if (memberCache.size >= MEMBER_CACHE_LIMIT) memberCache.clear();
+      ids = new Set(store.memberIds(id));
+      memberCache.set(id, ids);
+    }
+    return ids;
+  }
+
+  function canRead(target, row) {
+    if (isConversationKey(target)) return membersOf(conversationIdOf(target)).has(row.id);
+    return isChatChannel(target) && canReadChannel(row.role, target);
+  }
+
+  const invalid = () => httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
+  const rateLimited = () => httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
+  const conversationMissing = () => httpError(404, "CHAT_CONVERSATION_NOT_FOUND", "that conversation does not exist");
+  const partyMissing = () => httpError(404, "CHAT_PARTY_NOT_FOUND", "that watch party has ended");
+  const groupFull = () => httpError(409, "CHAT_GROUP_FULL", "that group is full");
+  const nameOf = (row) => row.display || row.username;
+
+  function targetGate(target, row) {
+    if (!isChatTarget(target)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
+    if (isConversationKey(target)) return canRead(target, row) ? null : conversationMissing();
+    return canPostIn(row.role, target) ? null : httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+  }
+
+  function hasStream(userId) {
+    for (const stream of streams.values()) if (stream.user.id === userId) return true;
+    return false;
+  }
+
+  function preview(row) {
+    const text = row.text ? replySnippet(row.text) : row.party ? "[watch party]" : row.attachment_type ? "[image]" : "";
+    return { author: String(row.user_id), name: row.display || row.username, text };
+  }
+
+  function conversationView(stored) {
+    return {
+      key: conversationKey(stored.id),
+      kind: stored.kind,
+      ...(stored.name && { name: stored.name }),
+      ...(stored.kind === "group" && stored.owner && { owner: String(stored.owner) }),
+      members: stored.members.map(member),
+      createdAt: stored.createdAt,
+      lastAt: stored.lastAt,
+      ...(stored.last && { last: preview(stored.last) }),
+      unread: stored.unread,
+    };
+  }
+
+  const viewFor = (id, userId) => conversationView(store.conversation(id, userId));
+
+  function sendConversation(id, userIds = [...membersOf(id)]) {
+    for (const userId of userIds) {
+      if (!hasStream(userId)) continue;
+      const stored = store.conversation(id, userId);
+      if (stored && !stored.hidden) sendTo(userId, frame("conversation", conversationView(stored)));
+    }
+  }
+
+  function dropConversationFor(userId, id) {
+    sendTo(userId, frame("conversation-remove", { key: conversationKey(id) }));
+  }
+
+  function insertInto(entry) {
+    const conversation = isConversationKey(entry.channel) ? conversationIdOf(entry.channel) : 0;
+    const hidden = conversation && !entry.notice ? store.hiddenMembers(conversation) : [];
+    const message = store.message(store.insertMessage(entry));
+    if (hidden.length) sendConversation(conversation, hidden);
+    return message;
+  }
+
+  function postNotice(id, userId, notice, time) {
+    const message = insertInto({ channel: conversationKey(id), userId, text: "", time, notice });
+    broadcast(frame("message", message), message.channel);
+  }
+
+  function endPartiesIn(target) {
+    for (const party of parties.list()) if (party.target === target) parties.end(party);
+  }
+
+  function revokeParties(userId) {
+    const row = store.user(userId);
+    const lost = (party) => !row || !canRead(party.target, row);
+    parties.closeStreams(userId, lost);
+    for (const party of parties.list()) if (party.host === userId && lost(party)) parties.end(party);
+  }
+
+  function dropParties(userId) {
+    parties.closeStreams(userId, () => true);
+    for (const party of parties.list()) if (party.host === userId) parties.end(party);
+  }
+
+  function forgetUser(userId, memberships) {
+    memberCache.clear();
+    for (const stream of [...streams.values()]) if (stream.user.id === userId) stream.close();
+    dropParties(userId);
+    for (const { id, kind, members: ids } of memberships) {
+      const exists = !!store.conversationInfo(id);
+      if (!exists) endPartiesIn(conversationKey(id));
+      if (kind === "dm") for (const other of ids) if (other !== userId) dropConversationFor(other, id);
+      if (kind === "group" && exists) sendConversation(id);
     }
   }
 
@@ -194,7 +336,10 @@ export function createChatRoom({
       return { failure: httpError(503, "CHAT_AUTH_UNAVAILABLE", "chat login check is unavailable right now") };
     }
     if (!identity) return { failure: httpError(401, "CHAT_LOGIN_REQUIRED", "log in to use chat") };
+    const previous = store.user(identity.id);
+    const recycled = previous && previous.username !== identity.username ? store.memberships(identity.id) : null;
     const row = store.identify(identity, now());
+    if (recycled) forgetUser(row.id, recycled);
     if (row.banned_until > now()) {
       return {
         failure: httpError(403, "CHAT_BANNED", "you are banned from chat", {
@@ -212,13 +357,19 @@ export function createChatRoom({
   function activityOf(userId, time) {
     let entry = activity.get(userId);
     if (!entry) {
-      entry = { sends: [], reacts: [], profiles: [], drafts: [], typedAt: 0, last: undefined, draft: undefined };
+      entry = {
+        sends: [], reacts: [], profiles: [], drafts: [], socials: [], searches: [], states: [],
+        typedAt: 0, last: undefined, draft: undefined,
+      };
       activity.set(userId, entry);
     }
     entry.sends = entry.sends.filter((at) => time - at < sendWindowMs);
     entry.reacts = entry.reacts.filter((at) => time - at < sendWindowMs);
     entry.drafts = entry.drafts.filter((at) => time - at < sendWindowMs);
     entry.profiles = entry.profiles.filter((at) => time - at < profileWindowMs);
+    entry.socials = entry.socials.filter((at) => time - at < profileWindowMs);
+    entry.searches = entry.searches.filter((at) => time - at < sendWindowMs);
+    entry.states = entry.states.filter((at) => time - at < partyStateWindowMs);
     return entry;
   }
 
@@ -262,12 +413,12 @@ export function createChatRoom({
     });
   }
 
-  async function screenText(text, mine) {
+  async function screenText(text, mine, options) {
     const key = mine && createHash("sha256").update(text).digest("base64");
     if (key && mine.draft?.key === key) return mine.draft.verdict;
     const reading = readModeration(text);
     if (!reading.verdict.allowed || (!reading.screen && !reading.suspect)) return reading.verdict;
-    const scores = await checkText(text);
+    const scores = await checkText(text, options);
     const verdict = textVerdict(reading, scores);
     if (key && scores) mine.draft = { key, verdict };
     return verdict;
@@ -302,7 +453,7 @@ export function createChatRoom({
   function findMessage(id, row) {
     const numeric = typeof id === "string" && /^\d{1,15}$/.test(id) ? Number(id) : NaN;
     const message = Number.isSafeInteger(numeric) ? store.message(numeric) : null;
-    return message && canReadChannel((store.user(row.id) ?? row).role, message.channel)
+    return message && canRead(message.channel, store.user(row.id) ?? row)
       ? { message, numeric }
       : { failure: httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone") };
   }
@@ -319,8 +470,8 @@ export function createChatRoom({
   }
 
   async function send(payload, row, ip, time, file) {
-    if (!isChatChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
-    if (!canPostIn(row.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    const gate = targetGate(payload.channel, row);
+    if (gate) return gate;
     const mine = activityOf(row.id, time);
     const source = sourceWindow(ip, time);
     if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) {
@@ -353,7 +504,7 @@ export function createChatRoom({
         id: parent.numeric,
         userId: Number(parent.message.author),
         name: parent.message.name,
-        text: replySnippet(parent.message.text || (parent.message.attachment ? "[image]" : "")),
+        text: replySnippet(parent.message.text || (parent.message.attachment ? "[image]" : parent.message.party ? "[watch party]" : "")),
       };
     }
     mine.sends.push(time);
@@ -368,12 +519,13 @@ export function createChatRoom({
     const fresh = store.user(row.id);
     const silencedAfterCheck = silenced(row);
     if (silencedAfterCheck) return silencedAfterCheck;
-    if (!fresh || !canPostIn(fresh.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    const lost = fresh ? targetGate(payload.channel, fresh) : httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    if (lost) return lost;
     mine.last = { text: comparable, at: time };
     mine.typedAt = 0;
-    const id = store.insertMessage({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo, attachment });
+    const stored = insertInto({ channel: payload.channel, userId: row.id, text: written.text, time, reply: replyTo, attachment });
     const nonce = typeof payload.nonce === "string" && payload.nonce.length <= 40 ? payload.nonce : undefined;
-    const message = { ...store.message(id), ...(nonce && { nonce }) };
+    const message = { ...stored, ...(nonce && { nonce }) };
     broadcast(frame("message", message), message.channel);
     return ok({ message });
   }
@@ -381,8 +533,11 @@ export function createChatRoom({
   async function edit(payload, row, time) {
     const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
-    if (message.notice || message.author !== String(row.id)) return httpError(403, "CHAT_FORBIDDEN", "you can only edit your own messages");
-    if (!canPostIn(row.role, message.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    if (message.notice || message.party || message.author !== String(row.id)) {
+      return httpError(403, "CHAT_FORBIDDEN", "you can only edit your own messages");
+    }
+    const gate = targetGate(message.channel, row);
+    if (gate) return gate;
     const mine = activityOf(row.id, time);
     if (mine.sends.length >= sendLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     const written = readText(payload, !!message.attachment);
@@ -391,7 +546,8 @@ export function createChatRoom({
     if (written.text === message.text) return ok({ message });
     const refused = await screenMessage(written.text, row, time, message.channel);
     if (refused) return refused;
-    if (!canPostIn((store.user(row.id) ?? row).role, message.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    const lost = targetGate(message.channel, store.user(row.id) ?? row);
+    if (lost) return lost;
     if (!store.message(numeric)) return httpError(404, "CHAT_MESSAGE_NOT_FOUND", "that message is gone");
     store.editMessage(numeric, written.text, time);
     const updated = store.message(numeric);
@@ -403,7 +559,7 @@ export function createChatRoom({
     const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
     const own = !message.notice && message.author === String(row.id);
-    if (!own && !(canDeleteAny(row.role) && outranks(row.role, message.role))) {
+    if (!own && !(isChatChannel(message.channel) && canDeleteAny(row.role) && outranks(row.role, message.role))) {
       return httpError(403, "CHAT_FORBIDDEN", "you can not delete that message");
     }
     store.deleteMessage(numeric);
@@ -429,8 +585,8 @@ export function createChatRoom({
   }
 
   function typing(payload, row, time) {
-    if (!isChatChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
-    if (!canPostIn(row.role, payload.channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    const gate = targetGate(payload.channel, row);
+    if (gate) return gate;
     warmText();
     const mine = activityOf(row.id, time);
     if (time - mine.typedAt >= typingGapMs) {
@@ -446,7 +602,7 @@ export function createChatRoom({
     if (!text) return ok();
     if (mine.drafts.length >= draftLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     mine.drafts.push(time);
-    const verdict = await screenText(text, mine);
+    const verdict = await screenText(text, mine, { draft: true, userId: row.id });
     return ok({ ok: true, ...(!verdict.allowed && { category: verdict.category }) });
   }
 
@@ -473,6 +629,8 @@ export function createChatRoom({
       store.setRole(target.id, role);
       audit(`${target.role} -> ${role}`);
       for (const stream of streams.values()) if (stream.user.id === target.id) stream.user = { ...stream.user, role };
+      parties.refresh(target.id, { role });
+      revokeParties(target.id);
       broadcast(frame("role", { author: String(target.id), role }));
       sendTo(target.id, frame("viewer", viewer({ ...target, role })));
       if (canReadChannel(target.role, "staff-chat") !== canReadChannel(role, "staff-chat")) {
@@ -528,6 +686,7 @@ export function createChatRoom({
         stream.send(banned);
         stream.close();
       }
+      dropParties(target.id);
       announce(channel, target, { action, ...(until < PERMANENT && { until }) }, time);
       return ok({ user: member(target), removed: removed.length });
     }
@@ -578,6 +737,8 @@ export function createChatRoom({
         stream.send(frame("viewer", viewer(row)));
         stream.send(frame("history", visibleHistory(row.role)));
         stream.send(frame("members", members()));
+        stream.send(frame("conversations", store.conversations(row.id).map(conversationView)));
+        stream.send(frame("parties", parties.list().filter((party) => canRead(party.target, row)).map(parties.view)));
         announcePresence();
       },
       cancel() {
@@ -616,6 +777,7 @@ export function createChatRoom({
 
   function announceProfile(updated) {
     for (const stream of streams.values()) if (stream.user.id === updated.id) stream.user = streamUser(updated);
+    parties.refresh(updated.id, streamUser(updated));
     broadcast(frame("profile", member(updated)));
   }
 
@@ -731,11 +893,371 @@ export function createChatRoom({
 
   function history(url, row) {
     const channel = url.searchParams.get("channel");
-    if (!isChatChannel(channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
-    if (!canReadChannel(row.role, channel)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can access this channel");
-    const before = Number(url.searchParams.get("before"));
-    if (!Number.isSafeInteger(before) || before < 1) return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
+    if (!isChatTarget(channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
+    if (isConversationKey(channel)) {
+      if (!canRead(channel, row)) return conversationMissing();
+    } else if (!canReadChannel(row.role, channel)) {
+      return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can access this channel");
+    }
+    const raw = url.searchParams.get("before");
+    const before = raw === null || raw === "" ? Number.MAX_SAFE_INTEGER : Number(raw);
+    if (!Number.isSafeInteger(before) || before < 1) return invalid();
     return ok({ messages: store.recent(channel, historySize, before) });
+  }
+
+  function users(url, row) {
+    const time = now();
+    const query = (url.searchParams.get("q") ?? "").trim();
+    if (!query || [...query].length > USER_QUERY_MAX) return invalid();
+    const mine = activityOf(row.id, time);
+    if (mine.searches.length >= searchLimit) return rateLimited();
+    mine.searches.push(time);
+    const found = store.searchUsers(query, row.id, time, CHAT_CONVERSATION_LIMITS.userSearch * 2)
+      .filter((user) => nameAllowed(user.username))
+      .slice(0, CHAT_CONVERSATION_LIMITS.userSearch);
+    return ok({ users: found.map(member) });
+  }
+
+  function socialGate(row, time) {
+    const mine = activityOf(row.id, time);
+    if (mine.socials.length >= socialLimit) return rateLimited();
+    mine.socials.push(time);
+    return null;
+  }
+
+  function findConversation(key, row) {
+    const id = isConversationKey(key) ? conversationIdOf(key) : 0;
+    const info = id && membersOf(id).has(row.id) ? store.conversationInfo(id) : null;
+    return info ? { id, info } : { failure: conversationMissing() };
+  }
+
+  function findGroup(key, row) {
+    const found = findConversation(key, row);
+    return found.failure || found.info.kind === "group" ? found : { failure: invalid() };
+  }
+
+  function readMemberIds(value, row) {
+    if (!Array.isArray(value) || value.length > CHAT_CONVERSATION_LIMITS.groupMembers * 2) return { failure: invalid() };
+    const ids = [];
+    for (const entry of value) {
+      const { row: target, failure } = findTarget(entry);
+      if (failure) return { failure };
+      if (target.id !== row.id && !ids.includes(target.id)) ids.push(target.id);
+    }
+    return ids.length ? { ids } : { failure: invalid() };
+  }
+
+  function groupCap(ids, viewerId) {
+    const limit = CHAT_CONVERSATION_LIMITS.groups;
+    if (viewerId && store.groupCount(viewerId) >= limit) return httpError(429, "CHAT_GROUP_LIMIT", "you are in too many groups");
+    const busy = ids.find((id) => store.groupCount(id) >= limit);
+    return busy ? httpError(429, "CHAT_GROUP_LIMIT", "that user is in too many groups", { target: String(busy) }) : null;
+  }
+
+  function readGroupName(value) {
+    const name = value === undefined || value === null ? "" : cleanConversationName(value);
+    if (name === null) {
+      return { failure: httpError(400, "CHAT_NAME_INVALID", `group names can be up to ${CHAT_CONVERSATION_LIMITS.name} characters`) };
+    }
+    return { name };
+  }
+
+  async function screenName(name, row, time) {
+    if (name) {
+      const verdict = await screenText(name);
+      if (!verdict.allowed) {
+        const until = strike(row, verdict.strikes, time);
+        return httpError(422, "CHAT_NAME_BLOCKED", blockedNotice("group name", verdict.category), {
+          category: verdict.category,
+          ...(until && { until }),
+        });
+      }
+    }
+    return silenced(row);
+  }
+
+  function readMessageId(value) {
+    const numeric = typeof value === "number" ? value : typeof value === "string" && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
+    return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : 0;
+  }
+
+  function markRead(payload, row) {
+    const { id, failure } = findConversation(payload.channel, row);
+    if (failure) return failure;
+    const messageId = readMessageId(payload.id);
+    if (!messageId) return invalid();
+    const stored = store.markRead(id, row.id, messageId);
+    if (stored) sendTo(row.id, frame("read", { channel: conversationKey(id), id: String(stored) }));
+    return ok();
+  }
+
+  function openDm(payload, row, time) {
+    const { row: target, failure } = findTarget(payload.target);
+    if (failure) return failure;
+    if (target.id === row.id) return httpError(403, "CHAT_FORBIDDEN", "you can not message yourself");
+    const limited = socialGate(row, time);
+    if (limited) return limited;
+    const opened = store.openDm(row.id, target.id, time);
+    memberCache.delete(opened.id);
+    if (opened.created) sendConversation(opened.id);
+    else if (opened.unhidden) sendConversation(opened.id, [row.id]);
+    return ok({ conversation: viewFor(opened.id, row.id) });
+  }
+
+  async function createGroup(payload, row, time) {
+    const named = readGroupName(payload.name);
+    if (named.failure) return named.failure;
+    const picked = readMemberIds(payload.members, row);
+    if (picked.failure) return picked.failure;
+    if (picked.ids.length >= CHAT_CONVERSATION_LIMITS.groupMembers) return groupFull();
+    const capped = groupCap(picked.ids, row.id);
+    if (capped) return capped;
+    const limited = socialGate(row, time);
+    if (limited) return limited;
+    const refused = await screenName(named.name, row, time);
+    if (refused) return refused;
+    const recapped = groupCap(picked.ids, row.id);
+    if (recapped) return recapped;
+    const id = store.createGroup(row.id, named.name, picked.ids, time);
+    memberCache.delete(id);
+    sendConversation(id);
+    postNotice(id, row.id, { action: "create", ...(named.name && { name: named.name }) }, time);
+    return ok({ conversation: viewFor(id, row.id) });
+  }
+
+  function groupAdd(payload, row, time) {
+    const { id, failure } = findGroup(payload.channel, row);
+    if (failure) return failure;
+    const picked = readMemberIds(payload.members, row);
+    if (picked.failure) return picked.failure;
+    const current = membersOf(id);
+    const added = picked.ids.filter((userId) => !current.has(userId));
+    if (current.size + added.length > CHAT_CONVERSATION_LIMITS.groupMembers) return groupFull();
+    const capped = groupCap(added);
+    if (capped) return capped;
+    const limited = socialGate(row, time);
+    if (limited) return limited;
+    if (added.length) {
+      store.addMembers(id, added, time);
+      memberCache.delete(id);
+      for (const userId of added) postNotice(id, userId, { action: "add", by: nameOf(row) }, time);
+      sendConversation(id);
+    }
+    return ok({ conversation: viewFor(id, row.id) });
+  }
+
+  function groupRemove(payload, row, time) {
+    const { id, info, failure } = findGroup(payload.channel, row);
+    if (failure) return failure;
+    if (info.owner_id !== row.id) return httpError(403, "CHAT_FORBIDDEN", "only the group owner can remove people");
+    const { row: target, failure: missing } = findTarget(payload.target);
+    if (missing) return missing;
+    if (target.id === row.id) return httpError(403, "CHAT_FORBIDDEN", "you can not do that to yourself");
+    if (!membersOf(id).has(target.id)) return httpError(404, "CHAT_USER_NOT_FOUND", "that user is not in this group");
+    const limited = socialGate(row, time);
+    if (limited) return limited;
+    store.leaveGroup(id, target.id);
+    memberCache.delete(id);
+    postNotice(id, target.id, { action: "remove", by: nameOf(row) }, time);
+    sendConversation(id);
+    dropConversationFor(target.id, id);
+    revokeParties(target.id);
+    return ok({ conversation: viewFor(id, row.id) });
+  }
+
+  async function groupRename(payload, row, time) {
+    const { id, info, failure } = findGroup(payload.channel, row);
+    if (failure) return failure;
+    const named = readGroupName(payload.name);
+    if (named.failure) return named.failure;
+    if (named.name === (info.name ?? "")) return ok({ conversation: viewFor(id, row.id) });
+    const limited = socialGate(row, time);
+    if (limited) return limited;
+    const refused = await screenName(named.name, row, time);
+    if (refused) return refused;
+    if (!membersOf(id).has(row.id)) return conversationMissing();
+    store.renameConversation(id, named.name);
+    postNotice(id, row.id, { action: "rename", ...(named.name && { name: named.name }) }, time);
+    sendConversation(id);
+    return ok({ conversation: viewFor(id, row.id) });
+  }
+
+  function leave(payload, row, time) {
+    const { id, info, failure } = findConversation(payload.channel, row);
+    if (failure) return failure;
+    if (info.kind === "dm") {
+      store.hideConversation(id, row.id);
+      dropConversationFor(row.id, id);
+      return ok();
+    }
+    const left = store.leaveGroup(id, row.id);
+    memberCache.delete(id);
+    if (left.deleted) endPartiesIn(conversationKey(id));
+    else {
+      postNotice(id, row.id, { action: "leave" }, time);
+      sendConversation(id);
+    }
+    dropConversationFor(row.id, id);
+    revokeParties(row.id);
+    return ok();
+  }
+
+  function findParty(id, row) {
+    const party = isPartyId(id) ? parties.get(id) : undefined;
+    return party && canRead(party.target, row) ? { party } : { failure: partyMissing() };
+  }
+
+  function partyLimit() {
+    return httpError(429, "CHAT_PARTY_LIMIT", `you already have ${CHAT_PARTY_LIMITS.hosted} watch parties running`);
+  }
+
+  function partyChannels(payload, row) {
+    const channels = payload.channels === undefined ? [payload.channel] : payload.channels;
+    if (!Array.isArray(channels) || !channels.length || channels.length > CHAT_CHANNELS.length) return { failure: invalid() };
+    if (payload.channels !== undefined && channels.some((channel) => !isChatChannel(channel))) return { failure: invalid() };
+    for (const channel of channels) {
+      const failure = targetGate(channel, row);
+      if (failure) return { failure };
+    }
+    return { channels: [...new Set(channels)].sort((a, b) => Number(a === "staff-chat") - Number(b === "staff-chat")) };
+  }
+
+  function postPartyInvites(party, channels, row, time) {
+    const media = party.media;
+    const invite = {
+      id: party.id,
+      title: media.title,
+      kind: media.kind,
+      ...(media.poster && { poster: media.poster }),
+      ...(media.label && { label: media.label }),
+    };
+    return channels.map((channel) => {
+      const message = insertInto({ channel, userId: row.id, text: "", time, party: invite });
+      broadcast(frame("message", message), channel);
+      return message;
+    });
+  }
+
+  async function startParty(payload, row, ip, time) {
+    const picked = partyChannels(payload, row);
+    if (picked.failure) return picked.failure;
+    const media = readPartyMedia(payload.path, payload.query);
+    if (!media) return httpError(400, "CHAT_PARTY_INVALID", "that video can not be shared");
+    if (parties.hostedBy(row.id) >= CHAT_PARTY_LIMITS.hosted) return partyLimit();
+    const mine = activityOf(row.id, time);
+    const source = sourceWindow(ip, time);
+    if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) return rateLimited();
+    mine.sends.push(time);
+    source.push(time);
+    sourceSends.set(ip, source);
+    const refused = await screenMessage(media.title, row, time, picked.channels[0]);
+    if (refused) return refused;
+    const fresh = store.user(row.id);
+    const lost = fresh ? partyChannels(payload, fresh).failure : httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    if (lost) return lost;
+    if (parties.hostedBy(row.id) >= CHAT_PARTY_LIMITS.hosted) return partyLimit();
+    const party = parties.create({ target: picked.channels[0], host: fresh, media });
+    if (payload.position !== undefined) {
+      const position = typeof payload.position === "number" && Number.isFinite(payload.position) ? payload.position : 0;
+      party.playback = { paused: true, position: Math.min(PARTY_POSITION_MAX, Math.max(0, position)), at: time };
+    }
+    const current = parties.view(party);
+    broadcast(frame("party", current), party.target);
+    const [message] = postPartyInvites(party, picked.channels, row, time);
+    return ok({ message, party: current });
+  }
+
+  function inviteParty(payload, row, ip, time) {
+    const { party, failure } = findParty(payload.id, row);
+    if (failure) return failure;
+    const picked = partyChannels(payload, row);
+    if (picked.failure) return picked.failure;
+    if ((isConversationKey(party.target) || party.target === "staff-chat") && picked.channels.some((channel) => channel !== party.target)) {
+      return httpError(403, "CHAT_FORBIDDEN", "private watch parties can only be shared in their original channel");
+    }
+    const mine = activityOf(row.id, time);
+    const source = sourceWindow(ip, time);
+    if (mine.sends.length >= sendLimit || source.length >= sourceSendLimit) return rateLimited();
+    mine.sends.push(time);
+    source.push(time);
+    sourceSends.set(ip, source);
+    const [message] = postPartyInvites(party, picked.channels, row, time);
+    return ok({ message, party: parties.view(party) });
+  }
+
+  function partyGate(party, row, time) {
+    if (!parties.isWatching(party, row.id)) return httpError(403, "CHAT_FORBIDDEN", "join the watch party first");
+    if (party.control === "host" && party.host !== row.id) {
+      return httpError(403, "CHAT_FORBIDDEN", "only the host can control this watch party");
+    }
+    const mine = activityOf(row.id, time);
+    if (mine.states.length >= partyStateLimit) return rateLimited();
+    mine.states.push(time);
+    return null;
+  }
+
+  function partyState(payload, row, time) {
+    const { party, failure } = findParty(payload.id, row);
+    if (failure) return failure;
+    if (typeof payload.paused !== "boolean" || typeof payload.position !== "number" || !Number.isFinite(payload.position)) {
+      return invalid();
+    }
+    const denied = partyGate(party, row, time);
+    if (denied) return denied;
+    const position = Math.min(PARTY_POSITION_MAX, Math.max(0, payload.position));
+    parties.setPlayback(party, { paused: payload.paused, position, at: time }, row);
+    return ok({ party: parties.view(party) });
+  }
+
+  function partyMedia(payload, row, time) {
+    const { party, failure } = findParty(payload.id, row);
+    if (failure) return failure;
+    const media = readPartyMedia(payload.path, payload.query);
+    if (!media || media.title !== party.media.title) {
+      return httpError(400, "CHAT_PARTY_INVALID", "a watch party can only switch episodes of the same title");
+    }
+    const denied = partyGate(party, row, time);
+    if (denied) return denied;
+    parties.setMedia(party, media, row);
+    return ok({ party: parties.view(party) });
+  }
+
+  function partyHost(payload, row) {
+    const found = findParty(payload.id, row);
+    if (found.failure) return found;
+    return found.party.host === row.id ? found : { failure: httpError(403, "CHAT_FORBIDDEN", "only the host can do that") };
+  }
+
+  function partyControl(payload, row) {
+    const { party, failure } = partyHost(payload, row);
+    if (failure) return failure;
+    if (!isPartyControl(payload.control)) return invalid();
+    if (party.control !== payload.control) parties.setControl(party, payload.control);
+    return ok({ party: parties.view(party) });
+  }
+
+  function partyEnd(payload, row) {
+    const { party, failure } = partyHost(payload, row);
+    if (failure) return failure;
+    parties.end(party);
+    return ok();
+  }
+
+  function partyInfo(url, row) {
+    const { party, failure } = findParty(url.searchParams.get("id"), row);
+    return failure ?? ok({ party: parties.view(party) });
+  }
+
+  function watchParty(url, row, signal) {
+    const { party, failure } = findParty(url.searchParams.get("party"), row);
+    if (failure) return reply(failure);
+    if (parties.streamsOf(row.id) >= maxPartyStreamsPerUser) {
+      return reply(httpError(429, "RATE_LIMITED", "too many watch party tabs are open"));
+    }
+    if (!parties.isWatching(party, row.id) && parties.watcherCount(party) >= partyWatchers) {
+      return reply(httpError(409, "CHAT_PARTY_FULL", "that watch party is full"));
+    }
+    return parties.connect(party, streamUser(row), signal);
   }
 
   async function action(request, row, ip) {
@@ -782,12 +1304,25 @@ export function createChatRoom({
       if (failure) return failure;
       return moderateUser(row, target, type, payload, time);
     }
+    if (type === "read") return markRead(payload, row);
+    if (type === "dm") return openDm(payload, row, time);
+    if (type === "leave") return leave(payload, row, time);
+    if (type === "group-remove") return groupRemove(payload, row, time);
+    if (type === "party-state") return partyState(payload, row, time);
+    if (type === "party-media") return partyMedia(payload, row, time);
+    if (type === "party-control") return partyControl(payload, row);
+    if (type === "party-end") return partyEnd(payload, row);
     if (row.muted_until > time) return httpError(403, "CHAT_MUTED", "you are timed out for a bit", { until: row.muted_until });
     if (type === "send") return send(payload, row, ip, time);
     if (type === "edit") return edit(payload, row, time);
     if (type === "react") return react(payload, row, time);
     if (type === "typing") return typing(payload, row, time);
     if (type === "draft") return draft(payload, row, time);
+    if (type === "group") return createGroup(payload, row, time);
+    if (type === "group-add") return groupAdd(payload, row, time);
+    if (type === "group-rename") return groupRename(payload, row, time);
+    if (type === "party") return startParty(payload, row, ip, time);
+    if (type === "party-invite") return inviteParty(payload, row, ip, time);
     return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
   }
 
@@ -799,10 +1334,10 @@ export function createChatRoom({
     const attachmentRoute = ATTACHMENT_ROUTE.exec(route);
     if (attachmentRoute && (method === "GET" || method === "HEAD")) {
       const message = store.message(Number(attachmentRoute[1]));
-      if (message && !canReadChannel("member", message.channel)) {
+      if (message && (isConversationKey(message.channel) || !canReadChannel("member", message.channel))) {
         const { row, failure } = await session(request, ip);
         if (failure) return reply(failure);
-        if (!canReadChannel(row.role, message.channel)) return reply(httpError(404, "CHAT_MEDIA_NOT_FOUND", "that image is gone"));
+        if (!canRead(message.channel, row)) return reply(httpError(404, "CHAT_MEDIA_NOT_FOUND", "that image is gone"));
       }
       return media(request, "message", attachmentRoute[1]);
     }
@@ -810,14 +1345,16 @@ export function createChatRoom({
     const known =
       (["message", "profile"].includes(route) && method === "POST") ||
       (mediaRoute && !mediaRoute[2] && method === "POST") ||
-      (["stream", "me", "history", "profile"].includes(route) && method === "GET");
+      (["stream", "me", "history", "profile", "users", "party"].includes(route) && method === "GET");
     if (!known) return reply(httpError(404, "CHAT_ROUTE_NOT_FOUND", "not found"));
     const { row, failure } = await session(request, ip);
     if (failure) return reply(failure);
-    if (route === "stream") return connect(row, request.signal);
+    if (route === "stream") return url.searchParams.has("party") ? watchParty(url, row, request.signal) : connect(row, request.signal);
     if (route === "me") return json(200, { viewer: viewer(row) });
     let result;
     if (route === "history") result = history(url, row);
+    else if (route === "users") result = users(url, row);
+    else if (route === "party") result = partyInfo(url, row);
     else if (route === "profile") result = method === "POST" ? await editProfile(request, row) : profile(url, row);
     else if (mediaRoute) result = await upload(request, mediaRoute[1], row);
     else result = await action(request, row, ip);
@@ -859,6 +1396,8 @@ export function createChatRoom({
     heartbeat = undefined;
     presenceTimer = undefined;
     for (const stream of [...streams.values()]) stream.close();
+    parties.close();
+    memberCache.clear();
   }
 
   return { handle, control, close, count: () => streams.size };

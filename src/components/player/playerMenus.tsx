@@ -3,7 +3,15 @@ import type { SubtitleTrack, AudioTrack } from "./tracks.ts";
 import type { StreamQualityOption } from "./streamInfo.ts";
 import type { PlayerSelector } from "./playerState.ts";
 import { PlayerMenu, PlayerOption } from "./PlayerMenu.tsx";
-import { IconBubbleText, IconChevronBottom } from "../icons/index.tsx";
+import { IconBubbleText, IconChevronBottom, IconPeople } from "../icons/index.tsx";
+import ChatAvatar from "../chat/ChatAvatar.tsx";
+import PlayerPartyInvite from "./PlayerPartyInvite.tsx";
+import {
+  displayName,
+  type ChatParty,
+  type ChatPartyControl,
+  type ChatChannel,
+} from "../../features/chat/chatProtocol.ts";
 import EpisodePickerModal from "../anime/EpisodePickerModal.tsx";
 import TitleEpisodePicker from "../watch/TitleEpisodePicker.tsx";
 import type { AnimeProvider } from "../../features/anime/animeIdentity.ts";
@@ -21,10 +29,12 @@ import {
   isDefaultCaptionStyle,
 } from "./captionStyle.ts";
 
+export type PlayerMenuSelector = PlayerSelector | "party" | "party-invite";
+
 interface QualityMenuContext {
   qualityOptions: StreamQualityOption[];
   hasRemote4k: boolean;
-  openSelector: PlayerSelector | null;
+  openSelector: PlayerMenuSelector | null;
   refreshAutoQuality: () => void;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   selectedQualityLabel: string;
@@ -88,7 +98,7 @@ export function renderQualityMenu({
 }
 
 interface SubtitleMenuContext {
-  openSelector: PlayerSelector | null;
+  openSelector: PlayerMenuSelector | null;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   activeSubtitle: number;
   subtitleTracks: SubtitleTrack[];
@@ -211,7 +221,7 @@ interface AudioMenuContext {
   streamProvider: string | null;
   audioTracksReady: boolean;
   audioTracks: AudioTrack[];
-  openSelector: PlayerSelector | null;
+  openSelector: PlayerMenuSelector | null;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   activeAudioLabel: string;
   loadingStreamInfo: boolean;
@@ -270,7 +280,7 @@ export interface LanguageOption {
 
 interface LanguageMenuContext {
   visible: boolean;
-  openSelector: PlayerSelector | null;
+  openSelector: PlayerMenuSelector | null;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   changingLanguage: boolean;
   loadingStreamInfo: boolean;
@@ -318,7 +328,7 @@ interface ProviderMenuContext {
   providers: string[];
   activeProvider: string | null;
   providerChoice: string;
-  openSelector: PlayerSelector | null;
+  openSelector: PlayerMenuSelector | null;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
   changingProvider: boolean;
   changeProvider: (provider: string) => Promise<void>;
@@ -475,5 +485,101 @@ export function renderEpisodeMenu({
         </div>
       </div>
     )
+  );
+}
+
+interface PartyMenuContext {
+  party: ChatParty | null;
+  isHost: boolean;
+  openSelector: PlayerMenuSelector | null;
+  setOpenSelector: Dispatch<StateUpdater<PlayerMenuSelector | null>>;
+  setControl: (control: ChatPartyControl) => void;
+  copyInvite: () => void;
+  leave: () => void;
+  end: () => void;
+  invite: (channels: ChatChannel[]) => Promise<boolean>;
+}
+
+export function renderPartyMenu({
+  party, isHost, openSelector, setOpenSelector, setControl, copyInvite, leave,
+  end, invite,
+}: PartyMenuContext) {
+  const sharing = !party || openSelector === "party-invite";
+  const open = openSelector === "party" || openSelector === "party-invite";
+  const choose = (action: () => void) => () => {
+    setOpenSelector(null);
+    action();
+  };
+  const details = party ? [party.label, `hosted by ${party.hostName}`].filter(Boolean).join(" · ") : "";
+  return (
+    <PlayerMenu
+      className="player-party-control"
+      open={open}
+      onToggle={() =>
+        setOpenSelector(open ? null : "party")
+      }
+      triggerClassName="player-btn player-btn-party"
+      panelClassName="player-party-options"
+      panelRole="group"
+      ariaLabel={party ? `watch party, ${party.watchers.length} watching` : "start a watch party"}
+      label={
+        <>
+          <IconPeople size={24} />
+          {party && <span class="player-party-count">{party.watchers.length}</span>}
+        </>
+      }
+    >
+      {sharing ? <PlayerPartyInvite open={open} target={party?.target} invite={invite} onDone={() => setOpenSelector(null)} /> : party && <>
+      <div class="player-party-heading">
+        <strong>{party.title}</strong>
+        <span>{details}</span>
+      </div>
+      <div class="player-party-watchers" role="list" aria-label="watching">
+        {party.watchers.map((member) => (
+          <div key={member.author} class="player-party-watcher" role="listitem">
+            <ChatAvatar member={member} size={20} />
+            <span class="player-party-name">{displayName(member)}</span>
+            {member.author === party.host && <span class="player-party-host">host</span>}
+          </div>
+        ))}
+      </div>
+      <div class="player-menu-divider" role="separator" />
+      {isHost && (
+        <>
+          <PlayerOption
+            open={open}
+            selected={party.control === "everyone"}
+            solid
+            onSelect={choose(() => setControl("everyone"))}
+          >
+            everyone can control
+          </PlayerOption>
+          <PlayerOption
+            open={open}
+            selected={party.control === "host"}
+            solid
+            onSelect={choose(() => setControl("host"))}
+          >
+            only i control
+          </PlayerOption>
+          <div class="player-menu-divider" role="separator" />
+        </>
+      )}
+      <PlayerOption open={open} onSelect={choose(copyInvite)}>
+        copy invite link
+      </PlayerOption>
+      <PlayerOption open={open} onSelect={() => setOpenSelector("party-invite")}>
+        invite in chat
+      </PlayerOption>
+      <PlayerOption open={open} onSelect={choose(leave)}>
+        leave party
+      </PlayerOption>
+      {isHost && (
+        <PlayerOption open={open} onSelect={choose(end)}>
+          end party
+        </PlayerOption>
+      )}
+      </>}
+    </PlayerMenu>
   );
 }

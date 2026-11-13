@@ -1,12 +1,20 @@
 import { memo } from "preact/compat";
 import { useEffect, useState } from "preact/hooks";
-import { CHAT_REACTIONS, CHAT_REACTION_FACES, displayName, type ChatMember } from "../../features/chat/chatProtocol.ts";
+import {
+  CHAT_REACTIONS,
+  CHAT_REACTION_FACES,
+  displayName,
+  type ChatMember,
+  type ChatParty,
+  type ChatPartyInvite,
+} from "../../features/chat/chatProtocol.ts";
 import type { ChatEntry } from "../../features/chat/chatRoom.ts";
 import { IconArrowCornerUpLeft, IconCrossMedium, IconFaceSmilePlus, IconGhost, IconPencil } from "../icons";
 import MessageText from "./MessageText.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
 import { appPath } from "../../core/runtime/hosting.ts";
 import { RoleBadge } from "./ChatProfile.tsx";
+import ChatPartyCard from "./ChatPartyCard.tsx";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -24,6 +32,8 @@ export interface ChatMessageActions {
   openProfile: (member: ChatMember) => void;
   openLink: (url: string) => void;
   select: (id: string | null) => void;
+  joinParty: (invite: ChatPartyInvite) => void;
+  endParty: (id: string) => void;
 }
 
 interface ChatMessageProps {
@@ -38,10 +48,11 @@ interface ChatMessageProps {
   mentioned: boolean;
   selected: boolean;
   editing: boolean;
+  party?: ChatParty | undefined;
   actions: ChatMessageActions;
 }
 
-function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, mentioned, selected, editing, actions }: ChatMessageProps) {
+function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, mentioned, selected, editing, party, actions }: ChatMessageProps) {
   const [picking, setPicking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -111,16 +122,28 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           <span class="chat-message-time">{timeFormat.format(entry.at).toLowerCase()}</span>
         </div>
       )}
-      <div class="chat-message-text">
-        <MessageText
-          text={entry.text}
-          selfName={selfName}
-          mentionMembers={mentionMembers}
-          onOpenProfile={actions.openProfile}
-          onOpenLink={actions.openLink}
+      {(entry.text || !entry.party) && (
+        <div class="chat-message-text">
+          <MessageText
+            text={entry.text}
+            selfName={selfName}
+            mentionMembers={mentionMembers}
+            onOpenProfile={actions.openProfile}
+            onOpenLink={actions.openLink}
+          />
+          {entry.editedAt && <span class="chat-edited"> (edited)</span>}
+        </div>
+      )}
+      {entry.party && (
+        <ChatPartyCard
+          invite={entry.party}
+          party={party}
+          hostName={displayName(entry)}
+          viewerAuthor={author}
+          onJoin={actions.joinParty}
+          onEnd={actions.endParty}
         />
-        {entry.editedAt && <span class="chat-edited"> (edited)</span>}
-      </div>
+      )}
       {entry.attachment && (
         <a class="chat-attachment" href={appPath(`/api/chat/media/message/${encodeURIComponent(entry.id)}`)} target="_blank" rel="noopener noreferrer">
           <img
@@ -183,7 +206,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
                   <IconArrowCornerUpLeft size={16} />
                 </button>
               )}
-              {mine && canPost && (
+              {mine && canPost && !entry.party && (
                 <button type="button" class="chat-tool" data-tooltip="edit" aria-label="edit" onClick={() => actions.edit(entry)}>
                   <IconPencil size={16} />
                 </button>

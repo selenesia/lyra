@@ -60,6 +60,7 @@ const forbiddenText = [
   "lyra-shell",
   "lyra-runtime",
 ];
+const domNameToken = /^x[0-9a-f]{12}$/;
 const signalLimits = [
   { label: "older-brand", pattern: olderBrandPattern, maximum: 0 },
   { label: "previous-brand", pattern: previousBrandPattern, maximum: 0 },
@@ -88,6 +89,28 @@ async function collectFiles(directory) {
   return files;
 }
 
+function readableStyleNames(css) {
+  const names = [];
+  for (const [, prelude] of css.matchAll(/(?:^|[{};])([^{};@]+)(?=\{)/g)) {
+    const selector = prelude.replace(/\[[^\]]*\]|"[^"]*"|'[^']*'/g, "");
+    for (const [, name] of selector.matchAll(/[.#](-?[_a-zA-Z][\w-]*)/g)) {
+      if (!domNameToken.test(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
+function readableMarkupNames(html) {
+  const names = [];
+  const markup = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, "");
+  for (const [, , value] of markup.matchAll(/\s(class|id)\s*=\s*["']([^"']*)["']/gi)) {
+    for (const name of value.split(/\s+/).filter(Boolean)) {
+      if (!domNameToken.test(name)) names.push(name);
+    }
+  }
+  return names;
+}
+
 function fail(message, values = []) {
   const detail = values.length > 0 ? `: ${values.join(", ")}` : "";
   throw new Error(`${message}${detail}${NEGATIVE}`);
@@ -96,7 +119,7 @@ function fail(message, values = []) {
 const packageMetadata = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
-if (packageMetadata.name !== "lyra" || packageMetadata.version !== "0.1.7") {
+if (packageMetadata.name !== "lyra" || packageMetadata.version !== "0.1.8") {
   fail("application metadata does not match the lyra release");
 }
 
@@ -147,6 +170,7 @@ if (invalidAssetNames.length > 0) {
 }
 
 const leakedFiles = [];
+const readableNames = [];
 const signalCounts = new Map(signalLimits.map(({ label }) => [label, 0]));
 for (const filePath of distFiles) {
   const extension = path.extname(filePath).toLowerCase();
@@ -173,6 +197,13 @@ for (const filePath of distFiles) {
   ) {
     leakedFiles.push(`${relativePath}:css-identifier`);
   }
+  const pageNames =
+    extension === ".css"
+      ? readableStyleNames(source)
+      : extension === ".html"
+        ? readableMarkupNames(source)
+        : [];
+  for (const name of new Set(pageNames)) readableNames.push(`${relativePath}:${name}`);
   for (const text of forbiddenText) {
     if (source.includes(text)) leakedFiles.push(`${relativePath}:${text}`);
   }
@@ -185,6 +216,9 @@ for (const filePath of distFiles) {
 }
 if (leakedFiles.length > 0) {
   fail("production artifacts contain blocked static signals", leakedFiles);
+}
+if (readableNames.length > 0) {
+  fail("production class or id names are readable", readableNames.slice(0, 20));
 }
 
 const excessiveSignals = signalLimits

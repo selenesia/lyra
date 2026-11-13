@@ -5,6 +5,7 @@ import {
   useCallback,
   useMemo,
   useLayoutEffect,
+  type StateUpdater,
 } from "preact/hooks";
 import Hls from "hls.js";
 import type { PlayerStatus } from "../../state/store.ts";
@@ -151,15 +152,19 @@ import {
   renderLanguageMenu,
   renderProviderMenu,
   renderEpisodeMenu,
+  renderPartyMenu,
+  type PlayerMenuSelector,
 } from "./playerMenus.tsx";
 import {
   renderVolumeControl,
   renderAutoNextNotice,
 } from "./playerControls.tsx";
 import { togglePlayback } from "./playerPlayback.ts";
+import { readPartyParam, useWatchParty } from "./watchParty.ts";
 
 export default function Player() {
   const params = useRef(new URLSearchParams(window.location.search)).current;
+  const partyId = readPartyParam(params);
   const title = params.get("title") || "";
   const poster = params.get("poster") || "";
   const titlePlayback = useMemo(() => parseTitlePlayback(params), [params]);
@@ -368,7 +373,7 @@ export default function Player() {
   const pendingSeekRef = useRef<number | null>(null);
   const sourceSwitchTimeRef = useRef<number | null>(null);
   const playAfterSeekRef = useRef(true);
-  const playIntentRef = useRef(true);
+  const playIntentRef = useRef(!partyId);
   const playRequestRef = useRef(0);
   const sourceContextGenerationRef = useRef(0);
   const sourceContextRef = useRef(sourceContextKey);
@@ -581,8 +586,20 @@ export default function Player() {
   const lastSubtitlePreferenceRef = useRef(
     subtitlePreference === "off" ? "" : subtitlePreference,
   );
-  const [openSelector, setOpenSelector] = useState<PlayerSelector | null>(
+  const [openSelector, setSelectorState] = useState<PlayerMenuSelector | null>(
     null,
+  );
+  const setOpenSelector = useCallback(
+    (next: StateUpdater<PlayerSelector | null>) =>
+      setSelectorState(
+        typeof next === "function"
+          ? (current) => {
+              if (current !== "party" && current !== "party-invite") return next(current);
+              return next(null) ?? current;
+            }
+          : next,
+      ),
+    [],
   );
   const [episodeSelectorMounted, setEpisodeSelectorMounted] = useState(false);
   const episodeSelectorOpen = openSelector === "episodes";
@@ -878,6 +895,40 @@ export default function Player() {
     [],
   );
 
+  const watchParty = useWatchParty(partyId, {
+    path: titleMode ? "watch" : "anime",
+    source: videoSrc,
+    videoRef, hlsRef, playIntentRef, playAfterSeekRef, playRequestRef,
+    pendingSeekRef, mediaHintsRef, displayDurationRef, syncMediaState, seekTo,
+    followEpisode: (episode) => {
+      const before = window.location.search;
+      changeEpisode(episode);
+      return window.location.search !== before;
+    },
+  });
+  const {
+    active: partyActive,
+    allowIntent: allowPartyIntent,
+    catchUp: catchUpParty,
+    reportPlayback: reportPartyPlayback,
+    reportMedia: reportPartyMedia,
+  } = watchParty;
+
+  const userTogglePlay = useCallback(() => {
+    if (catchUpParty() || !allowPartyIntent()) return;
+    togglePlay();
+    reportPartyPlayback();
+  }, [togglePlay, catchUpParty, allowPartyIntent, reportPartyPlayback]);
+
+  const userSeek = useCallback(
+    (seconds: number) => {
+      if (!allowPartyIntent()) return;
+      seekTo(seconds);
+      reportPartyPlayback();
+    },
+    [seekTo, allowPartyIntent, reportPartyPlayback],
+  );
+
   useEffect(() => {
     const bar = seekBarRef.current;
     const preview = seekPreviewRef.current;
@@ -886,7 +937,7 @@ export default function Player() {
       duration: () => displayDurationRef.current,
       currentTime: () => pendingSeekRef.current ?? currentTimeRef.current,
       render: (time) => renderPlaybackTime(time, true),
-      commit: seekTo,
+      commit: userSeek,
       interaction: (active) => {
         scrubbingRef.current = active;
         resetTimer();
@@ -894,7 +945,7 @@ export default function Player() {
       preview,
       format: formatTime,
     });
-  }, [videoSrc, seekTo, renderPlaybackTime, resetTimer]);
+  }, [videoSrc, userSeek, renderPlaybackTime, resetTimer]);
 
   const applyVolumeLevel = useCallback(
     (level: number) => {
@@ -984,13 +1035,13 @@ export default function Player() {
 
   const skipBack = useCallback(() => {
     const video = videoRef.current;
-    if (video) seekTo((pendingSeekRef.current ?? video.currentTime) - 10);
-  }, [seekTo]);
+    if (video) userSeek((pendingSeekRef.current ?? video.currentTime) - 10);
+  }, [userSeek]);
 
   const skipForward = useCallback(() => {
     const video = videoRef.current;
-    if (video) seekTo((pendingSeekRef.current ?? video.currentTime) + 10);
-  }, [seekTo]);
+    if (video) userSeek((pendingSeekRef.current ?? video.currentTime) + 10);
+  }, [userSeek]);
 
   const setSpeed = useCallback(
     (speed: number) => {
@@ -1043,37 +1094,64 @@ export default function Player() {
     ],
   );
 
+  const requestEpisode = useCallback(
+    (nextEpisode: number, autoplay = false) => {
+      if (!allowPartyIntent()) {
+        setOpenSelector(null);
+        return;
+      }
+      const video = videoRef.current;
+      const keepPlaying =
+        autoplay ||
+        Boolean(video && !video.paused && !video.ended) ||
+        playIntentRef.current;
+      const before = window.location.search;
+      changeEpisode(nextEpisode, autoplay);
+      if (partyActive && window.location.search !== before) {
+        void reportPartyMedia(window.location.search, keepPlaying);
+      }
+    },
+    [allowPartyIntent, setOpenSelector, changeEpisode, partyActive, reportPartyMedia],
+  );
+
   const continueNextSeason = useCallback(() => {
-    if (!titlePlayback || nextSeason === null) return;
+    if (!titlePlayback || nextSeason === null || !allowPartyIntent()) return;
     const video = videoRef.current;
     if (video && video.currentTime > 0) {
       persistProgress(video.currentTime, mediaStateRef.current.duration || 0, true);
     }
-    window.location.assign(
-      buildTitlePlaybackUrl({
-        ...titlePlayback,
-        season: nextSeason,
-        episode: 1,
-        title,
-        posterUrl: poster,
-        year: Number(params.get("year")) || undefined,
-        language,
-      }),
-    );
-  }, [titlePlayback, nextSeason, persistProgress, title, poster, params, language]);
+    const nextUrl = buildTitlePlaybackUrl({
+      ...titlePlayback,
+      season: nextSeason,
+      episode: 1,
+      title,
+      posterUrl: poster,
+      year: Number(params.get("year")) || undefined,
+      language,
+    });
+    if (partyActive) {
+      void reportPartyMedia(new URL(nextUrl, window.location.href).search, true, nextUrl);
+    } else {
+      window.location.assign(nextUrl);
+    }
+  }, [titlePlayback, nextSeason, persistProgress, title, poster, params, language, allowPartyIntent, partyActive, reportPartyMedia]);
 
-  const startAutoNext = useCallback(() => scheduleAutoNext({
-    episodeNumber, autoPlayNextEpisode, episodeCount, clearAutoNext,
-    setAutoNext, autoNextTimerRef, changeEpisode, nextSeason,
-    continueNextSeason,
-  }), [
+  const startAutoNext = useCallback(() => {
+    if (!watchParty.canControl) return;
+    scheduleAutoNext({
+      episodeNumber, autoPlayNextEpisode, episodeCount, clearAutoNext,
+      setAutoNext, autoNextTimerRef, changeEpisode: requestEpisode, nextSeason,
+      continueNextSeason,
+    });
+  }, [
     autoPlayNextEpisode,
     clearAutoNext,
-    changeEpisode,
+    requestEpisode,
     episodeCount,
     episodeNumber,
     nextSeason,
     continueNextSeason,
+    watchParty.canControl,
   ]);
   const startAutoNextRef = useRef(startAutoNext);
   startAutoNextRef.current = startAutoNext;
@@ -1096,6 +1174,10 @@ export default function Player() {
     playIntentRef, mediaHintsRef, baseVideoSrc, renderPlaybackTime,
     syncMediaState,
   }), [baseVideoSrc, clearAutoNext, renderPlaybackTime, syncMediaState]);
+
+  useLayoutEffect(() => {
+    resumeAppliedRef.current = partyActive;
+  }, [baseVideoSrc, partyActive]);
 
   useEffect(() => attachPlayerSource({
     videoRef, videoSrc, hlsSessionRef, tracksSourceRef, sourceContextKey,
@@ -1374,14 +1456,15 @@ export default function Player() {
 
   useEffect(() => attachPlayerShortcuts({
     selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
-    displayDurationRef, seekTo, togglePlay, pendingSeekRef, stepVolume,
-    toggleMute, toggleFullscreen, toggleCaptions, setSpeed,
+    displayDurationRef, seekTo: userSeek, togglePlay: userTogglePlay,
+    pendingSeekRef, stepVolume, toggleMute, toggleFullscreen, toggleCaptions,
+    setSpeed,
   }), [
-    togglePlay,
+    userTogglePlay,
     toggleMute,
     toggleFullscreen,
     toggleCaptions,
-    seekTo,
+    userSeek,
     stepVolume,
     setSpeed,
     resetTimer,
@@ -1569,21 +1652,24 @@ export default function Player() {
     (playerUrl: string) => {
       const next = new URL(playerUrl, window.location.origin);
       if (Number(next.searchParams.get("season")) === currentSeason.number) {
-        changeEpisode(Number(next.searchParams.get("episode")));
-      } else {
+        requestEpisode(Number(next.searchParams.get("episode")));
+      } else if (!partyActive) {
         window.location.assign(playerUrl);
+      } else if (allowPartyIntent()) {
+        void reportPartyMedia(next.search, true, playerUrl);
       }
     },
-    [currentSeason.number, changeEpisode],
+    [currentSeason.number, requestEpisode, partyActive, allowPartyIntent, reportPartyMedia],
   );
   const activeSkipKey = activeSkip
     ? `${activeSkip.label}:${activeSkip.end}`
     : null;
   const activeSkipEnd = activeSkip?.end ?? null;
+  const autoSkip = autoSkipIntroOutro && !partyActive;
 
   useEffect(() => {
-    if (!autoSkipIntroOutro || !activeSkipKey || activeSkipEnd === null) {
-      if (!autoSkipIntroOutro || !activeSkipKey) {
+    if (!autoSkip || !activeSkipKey || activeSkipEnd === null) {
+      if (!autoSkip || !activeSkipKey) {
         autoSkippedMarkerRef.current = null;
       }
       return;
@@ -1591,7 +1677,7 @@ export default function Player() {
     if (autoSkippedMarkerRef.current === activeSkipKey) return;
     autoSkippedMarkerRef.current = activeSkipKey;
     seekTo(activeSkipEnd);
-  }, [activeSkipEnd, activeSkipKey, autoSkipIntroOutro, seekTo]);
+  }, [activeSkipEnd, activeSkipKey, autoSkip, seekTo]);
 
   return (
     <div class="player-page is-visible">
@@ -1609,7 +1695,7 @@ export default function Player() {
           aria-label={title || "video player"}
           preload="metadata"
           crossOrigin="anonymous"
-          onClick={togglePlay}
+          onClick={userTogglePlay}
         >
           {selectedSidecar &&
             loadedSubtitle?.source === videoSrc &&
@@ -1646,13 +1732,14 @@ export default function Player() {
           <button
             type="button"
             class="player-skip-marker"
-            onClick={() => seekTo(activeSkip.end)}
+            onClick={() => userSeek(activeSkip.end)}
           >
             {activeSkip.label}
           </button>
         )}
         {renderAutoNextNotice({
-          autoNext, clearAutoNext, changeEpisode, continueNextSeason,
+          autoNext, clearAutoNext, changeEpisode: requestEpisode,
+          continueNextSeason,
         })}
 
         <div class={`player-controls${controlsVisible ? "" : " is-hidden"}`}>
@@ -1676,7 +1763,7 @@ export default function Player() {
             <button
               class="player-btn player-btn-play"
               aria-label={playControlActive ? "pause" : "play"}
-              onClick={togglePlay}
+              onClick={userTogglePlay}
             >
               {playControlActive ? (
                 <IconPause size={24} />
@@ -1738,6 +1825,14 @@ export default function Player() {
               providers: streamProviders, activeProvider: streamProvider,
               providerChoice, openSelector, setOpenSelector, changingProvider,
               changeProvider,
+            })}
+            {renderPartyMenu({
+              party: watchParty.party, isHost: watchParty.isHost, openSelector,
+              setOpenSelector: setSelectorState,
+              setControl: watchParty.setControl,
+              copyInvite: watchParty.copyInvite, leave: watchParty.leave,
+              end: watchParty.end,
+              invite: watchParty.invite,
             })}
             <button
               class="player-btn"
