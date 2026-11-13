@@ -68,7 +68,7 @@ const signalLimits = [
   { label: "proxy", pattern: /proxy/gi, maximum: 0 },
   { label: "rivet", pattern: /rivet/gi, maximum: 10 },
   { label: "folio", pattern: /folio/gi, maximum: 100 },
-  { label: "anime", pattern: /anime/gi, maximum: 30 },
+  { label: "anime", pattern: /anime/gi, maximum: 60 },
   { label: "lyra", pattern: /lyra/gi, maximum: 20 },
 ];
 
