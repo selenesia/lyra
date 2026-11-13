@@ -89,7 +89,8 @@
   top: -5px;
 }
 
-.chat-tool.danger {
+.chat-tool.danger,
+.chat-tool.danger:not(:disabled):is(:hover, :focus-visible) {
   color: var(--status-error-text);
 }
 

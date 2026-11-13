@@ -17,6 +17,7 @@ import EditableField from "../EditableField.tsx";
 import { useMenuView } from "../../hooks/useMenuView.ts";
 import { useSlidingPill } from "../../hooks/useSlidingPill.ts";
 import { settingsViewSignal } from "../../core/ui/uiSignals.ts";
+import { svgIcon } from "../../core/ui/svgIcon.ts";
 import { toast } from "../../core/ui/toast.ts";
 import { switchTheme } from "../../core/ui/theme.ts";
 import { SEARCH_ENGINE_OPTIONS } from "../../core/config/config.ts";
@@ -79,6 +80,9 @@ import {
 import type { InstalledExtensionSummary } from "../../../packages/rivet/src/index";
 import "../../assets/styles/catalog/catalog.css";
 import "../../assets/styles/settings/settings-page.css";
+
+const SVG_SETTINGS = svgIcon("IconSettingsGear4", { solid: true });
+const SVG_SEARCH = svgIcon("IconMagnifyingGlass2");
 
 type SectionId =
   | "preferences"
@@ -597,6 +601,9 @@ export default function SettingsPage({
   const { visible, searchBarRef, show, hide, toggle } = useMenuView({
     bodyClass: "settings-view",
     signal: settingsViewSignal,
+    iconId: "settings-icon",
+    inactiveIcon: SVG_SETTINGS,
+    activeIcon: SVG_SEARCH,
     hideOtherViews: () => {
       window.hideGameMenu?.();
       window.hideWatchMenu?.();

@@ -3,9 +3,10 @@ import {
   gamesViewSignal,
   watchViewSignal,
   chatViewSignal,
+  settingsViewSignal,
   useUiSignal,
 } from "../../core/ui/uiSignals.ts";
-import { IconCloud, IconSettingsGear4 } from "../icons";
+import { IconCloud } from "../icons";
 import { svgIcon } from "../../core/ui/svgIcon";
 import { isManagedModalOpen } from "../../core/ui/modal.ts";
 import { invokeWindowAction } from "../../core/browser/windowActions.ts";import { isStatic } from "../../core/runtime/hosting.ts";
@@ -42,6 +43,7 @@ export default function TopBar() {
   const gamesView = useUiSignal(gamesViewSignal);
   const watchView = useUiSignal(watchViewSignal);
   const chatView = useUiSignal(chatViewSignal);
+  const settingsView = useUiSignal(settingsViewSignal);
 
   useEffect(() => {
     const username = isStatic ? null : cloudSyncUsername();
@@ -60,6 +62,10 @@ export default function TopBar() {
     const chatIcon = document.getElementById("chat-icon");
     if (chatIcon && !chatIcon.innerHTML) {
       chatIcon.innerHTML = svgIcon("IconChat", { solid: true });
+    }
+    const settingsIcon = document.getElementById("settings-icon");
+    if (settingsIcon && !settingsIcon.innerHTML) {
+      settingsIcon.innerHTML = svgIcon("IconSettingsGear4", { solid: true });
     }
   }, []);
 
@@ -162,12 +168,12 @@ export default function TopBar() {
           href="#"
           id="settings"
           class="icon-btn"
-          data-tooltip="settings"
+          data-tooltip={settingsView ? "search" : "settings"}
           onPointerEnter={() => void loadSettingsPage()}
           onFocus={() => void loadSettingsPage()}
           onClick={handleSettingsClick}
         >
-          <IconSettingsGear4 solid class="settings" />
+          <span id="settings-icon" />
         </a>
       </div>
     </>

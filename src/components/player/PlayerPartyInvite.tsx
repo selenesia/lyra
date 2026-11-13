@@ -80,7 +80,7 @@ export default function PlayerPartyInvite({ open, target, invite, onDone }: {
             setSending(false);
           }
         }}
-      >{sending ? `sending ${inviteWord}` : target ? `send ${inviteWord}` : `start party and send ${inviteWord}`}</button>
+      >{sending ? `sending ${inviteWord}...` : target ? `send ${inviteWord}` : `start party and send ${inviteWord}`}</button>
     </>
   );
 }

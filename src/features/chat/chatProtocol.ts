@@ -3,7 +3,7 @@ import { roleRank, type ChatRole } from "./chatRoles.ts";
 export const CHAT_LIMITS = { text: 500, replySnippet: 120, page: 50 } as const;
 export const CHAT_CATEGORIES = [
   { name: "info", channels: ["rules", "announcements", "updates"] },
-  { name: "social", channels: ["general", "general-2", "introductions", "art", "music", "debating", "photography", "pets"] },
+  { name: "social", channels: ["general", "general-2", "introductions", "art", "music", "debating"] },
   { name: "support", channels: ["help", "suggestions", "bugs"] },
   { name: "staff", channels: ["staff-chat"] },
 ] as const;

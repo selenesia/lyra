@@ -17,7 +17,7 @@ body.settings-view .chat-page {
   display: none !important;
 }
 
-body.settings-view #settings .settings {
+body.settings-view #settings svg {
   color: var(--color-tab-active);
 }
 

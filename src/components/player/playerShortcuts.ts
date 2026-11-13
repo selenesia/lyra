@@ -5,6 +5,7 @@ interface PlayerShortcutsContext {
   selectorOpenRef: MutableRef<boolean>;
   containerRef: MutableRef<HTMLDivElement | null>;
   setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
+  setPartyChatOpen: Dispatch<StateUpdater<boolean>>;
   resetTimer: () => void;
   videoRef: MutableRef<HTMLVideoElement | null>;
   displayDurationRef: MutableRef<number>;
@@ -19,8 +20,8 @@ interface PlayerShortcutsContext {
 }
 
 export function attachPlayerShortcuts({
-  selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
-  displayDurationRef, seekTo, togglePlay, pendingSeekRef, stepVolume,
+  selectorOpenRef, containerRef, setOpenSelector, setPartyChatOpen, resetTimer,
+  videoRef, displayDurationRef, seekTo, togglePlay, pendingSeekRef, stepVolume,
   toggleMute, toggleFullscreen, toggleCaptions, setSpeed,
 }: PlayerShortcutsContext) {
   const handleKeydown = (event: KeyboardEvent) => {
@@ -38,6 +39,7 @@ export function attachPlayerShortcuts({
         ?.querySelector<HTMLElement>('[aria-expanded="true"]')
         ?.focus();
       setOpenSelector(null);
+      setPartyChatOpen(false);
       resetTimer();
       return;
     }

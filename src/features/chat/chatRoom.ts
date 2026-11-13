@@ -292,7 +292,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   const conversationsRef = useRef(conversations);
   conversationsRef.current = conversations;
   const syncedRef = useRef(false);
-  const loadingOlderRef = useRef(false);
+  const loadingOlderRef = useRef(new Set<ChatTarget>());
   const freshRef = useRef(new Set<ChatConversationKey>());
   const readRef = useRef(new Map<ChatConversationKey, number>());
   const foreground = useForegroundTab();
@@ -851,10 +851,10 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   );
 
   const loadOlder = useCallback(
-    async (target: ChatTarget): Promise<number> => {
-      const oldest = (history[target] ?? NO_ENTRIES).find((entry) => !entry.pending);
-      if (!oldest || exhausted[target] || loadingOlderRef.current) return 0;
-      loadingOlderRef.current = true;
+    async (target: ChatTarget, beforePrepend?: () => void): Promise<number> => {
+      const oldest = (historyRef.current[target] ?? NO_ENTRIES).find((entry) => !entry.pending);
+      if (!oldest || exhausted[target] || loadingOlderRef.current.has(target)) return 0;
+      loadingOlderRef.current.add(target);
       try {
         const response = await fetch(
           appPath(`/api/chat/history?channel=${encodeURIComponent(target)}&before=${encodeURIComponent(oldest.id)}`),
@@ -863,6 +863,8 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         if (!response.ok) return 0;
         const { messages } = (await response.json()) as { messages: ChatMessage[] };
         if (!readable(viewRef.current.viewer?.role ?? "member", target)) return 0;
+        if (isConversationKey(target) && !conversationsRef.current.some((conversation) => conversation.key === target)) return 0;
+        if (messages.length) beforePrepend?.();
         if (messages.length < CHAT_LIMITS.page) setExhausted((current) => ({ ...current, [target]: true }));
         setHistory((current) =>
           patchTarget(current, target, (entries) => {
@@ -874,10 +876,10 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
       } catch {
         return 0;
       } finally {
-        loadingOlderRef.current = false;
+        loadingOlderRef.current.delete(target);
       }
     },
-    [exhausted, history],
+    [exhausted],
   );
 
   const loadProfile = useCallback(async (id: string): Promise<ChatProfile | null> => {

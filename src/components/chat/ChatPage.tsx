@@ -74,15 +74,15 @@ const CHANNEL_ICONS: Partial<Record<ChatChannel, CanonicalIconName>> = {
 };
 const GROUP_WINDOW_MS = 5 * 60_000;
 const NEAR_BOTTOM_PX = 80;
-const NEAR_TOP_PX = 60;
+const NEAR_TOP_PX = 600;
 const TYPING_SEND_MS = 2_500;
 const DRAFT_CHECK_MS = 300;
 const MENTION_QUERY = /(?:^|[\s([{])@([\p{L}\p{N}._-]*)$/u;
 const CHANNEL_QUERY = /(?:^|[\s([{])#([a-z0-9-]*)$/i;
 const UPLOAD_STATUS: Record<ChatAttachmentKind, string> = {
-  image: "checking image and sending",
-  video: "checking video and sending",
-  audio: "uploading audio",
+  image: "checking image and sending...",
+  video: "checking video and sending...",
+  audio: "uploading audio...",
 };
 const ROLE_COMMAND = /^\/role(?=\s|$)/i;
 const ROLE_ARGUMENTS = /^\/role\s+@?(\w+)\s+(\w+)$/i;
@@ -625,10 +625,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       return;
     }
     stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < NEAR_BOTTOM_PX;
-    if (list.scrollTop > NEAR_TOP_PX || exhausted[target] || !entries.length) return;
-    const anchor = { height: list.scrollHeight, top: list.scrollTop };
-    void room.loadOlder(target).then((count) => {
-      if (count && !stickToBottomRef.current) anchorRef.current = anchor;
+    if (stickToBottomRef.current || list.scrollTop > Math.max(NEAR_TOP_PX, list.clientHeight * 2) || exhausted[target] || !entries.length) return;
+    void room.loadOlder(target, () => {
+      if (scrollTargetRef.current === target && listRef.current === list && !stickToBottomRef.current) {
+        anchorRef.current = { height: list.scrollHeight, top: list.scrollTop };
+      }
     });
   }, [target, entries.length, exhausted, room.loadOlder]);
 

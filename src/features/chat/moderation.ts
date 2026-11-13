@@ -19,6 +19,8 @@ export interface ModerationReading {
   suspect?: ModerationSuspect;
   playful: boolean;
   hyperbole: boolean;
+  selfHarmIntent: boolean;
+  disputedHate: boolean;
   screen: boolean;
 }
 
@@ -129,6 +131,10 @@ function negated(plain: string, index: number): boolean {
   return wordsBefore(plain, index, 3).some((word) => NEGATIONS.has(word));
 }
 
+function affirmed(pattern: RegExp, plain: string): boolean {
+  return [...plain.matchAll(new RegExp(pattern.source, "g"))].some((match) => !negated(plain, match.index + 1));
+}
+
 function compactHas(text: ModerationText, needles: string[]): boolean {
   for (const needle of needles) {
     let at = text.compact.indexOf(needle);
@@ -164,6 +170,7 @@ const GAMING = phrases([
   "game", "games", "match", "round", "lobby", "pvp", "fortnite", "minecraft", "roblox", "valorant", "ranked", "ivi",
   "spawn", "server", "boss", "level", "smash", "chess", "among us", "warzone", "cod", "apex", "overwatch", "league",
   "rivals", "the next round", "bedwars", "skywars", "duel", "duels", "raid", "dungeon", "npc", "mob", "mobs", "respawn",
+  "tennis", "basketball", "football", "soccer", "baseball", "volleyball", "badminton", "ping pong",
 ]);
 const FICTION = phrases([
   "episode", "episodes", "season", "chapter", "arc", "anime", "manga", "manhwa", "webtoon", "show", "movie", "film", "series",
@@ -232,13 +239,24 @@ const SUICIDAL_THOUGHTS = phrases(["suicidal thoughts", "suicidal again", "i hav
 const SEEKING_METHODS = phrases([
   "how to kill yourself", "how to kill myself", "how do i kill myself", "how can i kill myself", "best way to kill yourself",
   "best way to kill myself", "best way to die", "painless way to die", "painless suicide", "easiest way to die",
-  "how many pills", "how much tylenol", "how to overdose", "how deep to cut", "how to cut yourself", "how to cut myself",
+  "how to overdose", "how deep to cut", "how to cut yourself", "how to cut myself",
   "suicide method", "suicide methods", "ways to commit suicide", "how to commit suicide", "how to hang yourself",
   "how to hang myself", "how to slit", "what pills can kill",
 ]);
+const DOSAGE_QUESTION = phrases(["how many pills", "how much tylenol"]);
+const DOSAGE_HARM = phrases(["to die", "to kill", "to overdose", "fatal", "lethal"]);
+const SELF_HARM_INTENT = new RegExp(` ${alt([
+  "i will", "ill", "im going to", "i am going to", "im gonna", "i am gonna", "i want to", "i wanna", "i might", "i plan to",
+  "im planning to", "i am planning to", "im about to", "i am about to", "i need to", "i should", "im ready to", "i am ready to",
+])} ${AFFIRMING_GAP(2)}${alt([
+  "jump", "hurt myself", "harm myself", "kill myself", "end my life", "die", "overdose", "cut myself", "hang myself",
+  "shoot myself", "poison myself", "step in front", "walk into traffic", "starve myself", "take all my pills", "end it",
+])} `, "g");
+const RECOVERY = phrases(["got help", "doing better", "in recovery", "recovering"]);
+const PAST_ATTEMPT = new RegExp(` ${alt(["used to", "tried to", "attempted to"])} $`);
 const KILOMETERS = /\d\s*kms\b/;
 
-const WATCH_YOUR_BACK = phrases(["watch your back", "watch ur back"]);
+const WATCH_YOUR_BACK = new RegExp(`^ ${alt(["watch your back", "watch ur back"])}(?: ${alt(["tomorrow", "tonight"])})? $`);
 const THREATS = phrases([
   "i know where you live", "i know where u live", "i know where you go to school", "sleep with one eye open",
   "your family is next", "i will leak your nudes", "ill leak your nudes", "ill leak your pics", "i will leak your pics",
@@ -339,6 +357,9 @@ const HATE_DEMEANING = [
 ];
 const HATE_DISLIKE = new RegExp(
   ` i ${alt(["hate", "despise", "cant stand"])} (?:${alt(["all", "every", "those", "these", "the", "fucking"])} )?${GROUPS} `,
+);
+const DISPUTED_HATE = new RegExp(
+  `^ ${alt(["not all", "i disagree that"])} ${GROUPS} ${alt(["are", "r", "is"])} ${DEMEANING} $`,
 );
 const HATE_NUMBERS = /(?<!\d)(?:14\s*\/?\s*88|1488)(?!\d)/;
 
@@ -524,7 +545,7 @@ function selfHarmHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
     matched = true;
     const before = wordsBefore(text.plain, match.index, 3);
     if (before.some((word) => NEGATIONS.has(word)) || REPORTED.test(before.join(" "))) continue;
-    if (!before.some((word) => SECOND_PERSON.has(word)) && before.some((word) => FIRST_PERSON.has(word))) {
+    if (!before.some((word) => SECOND_PERSON.has(word)) && wordsBefore(text.plain, match.index, 5).some((word) => FIRST_PERSON.has(word))) {
       if (hyperbole || match[0] === phrase("go die")) continue;
       return blocked("crisis", 0);
     }
@@ -535,12 +556,14 @@ function selfHarmHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
 
 function hasCrisis(text: ModerationText, hyperbole: boolean): boolean {
   if (SEEKING_METHODS.test(text.plain) || SUICIDAL_THOUGHTS.test(text.plain)) return true;
+  if (DOSAGE_QUESTION.test(text.plain) && DOSAGE_HARM.test(text.plain)) return true;
   if (hyperbole) return false;
   if (SUICIDAL.test(text.plain) && !negated(text.plain, text.plain.indexOf(" suicidal ") + 1)) return true;
   let matched = false;
   for (const match of text.plain.matchAll(CRISIS)) {
     matched = true;
     if (negated(text.plain, match.index)) continue;
+    if (PAST_ATTEMPT.test(text.plain.slice(0, match.index)) && RECOVERY.test(text.plain.slice(match.index + match[0].length))) continue;
     if (match[0] === "kms" && KILOMETERS.test(text.folded)) continue;
     return true;
   }
@@ -549,6 +572,7 @@ function hasCrisis(text: ModerationText, hyperbole: boolean): boolean {
 
 function ambiguousCrisisHit(text: ModerationText, hyperbole: boolean): RuleHit | null {
   if (hyperbole) return null;
+  if (DOSAGE_QUESTION.test(text.plain)) return suspected("crisis", 0);
   for (const match of text.plain.matchAll(ENDING_IT)) {
     if (!negated(text.plain, match.index)) return suspected("crisis", 0);
   }
@@ -574,6 +598,7 @@ function threatHit(text: ModerationText, playful: boolean): RuleHit | null {
 
 function hateHit(text: ModerationText): RuleHit | null {
   if (HATE_RULES.some((rule) => rule.test(text.plain)) || HATE_NUMBERS.test(text.folded)) return blocked("hate", 3);
+  if (DISPUTED_HATE.test(text.plain)) return null;
   if (HATE_DEMEANING.some((rule) => rule.test(text.plain)) || HATE_DISLIKE.test(text.plain)) return suspected("hate", 2);
   return null;
 }
@@ -601,7 +626,7 @@ function sexualHit(text: ModerationText): RuleHit | null {
   }
   if (MINOR_SEXUAL.test(plain) || CP_TRADE.test(plain)) return blocked("sexual", 3);
   if (explicit && (MINORS.test(plain) || MINOR_AGE.test(text.folded))) return blocked("sexual", 3);
-  if (SEXUAL.test(plain) || SEND_BODY.test(plain) || CUM.test(plain) || RULE_34.test(text.folded)) return blocked("sexual", 2);
+  if (affirmed(SEXUAL, plain) || affirmed(SEND_BODY, plain) || CUM.test(plain) || RULE_34.test(text.folded)) return blocked("sexual", 2);
   let ambiguous = false;
   for (const match of text.folded.matchAll(ROLEPLAY_ACTION)) {
     const action = readModerationText(match[1] ?? "").plain;
@@ -620,7 +645,9 @@ export function readModeration(input: string): ModerationReading {
   const text = readModerationText(input);
   const playful = [GAMING, FICTION, JOKING].some((rule) => rule.test(text.plain)) || JOKING_SYMBOLS.test(text.folded);
   const hyperbole = playful || HYPERBOLE.test(text.plain);
-  const reading: ModerationReading = { verdict: ALLOWED, playful, hyperbole, screen: text.contentTokens.length > 0 };
+  const selfHarmIntent = [...text.plain.matchAll(SELF_HARM_INTENT)].some((match) => !negated(text.plain, match.index + 1));
+  const disputedHate = DISPUTED_HATE.test(text.plain);
+  const reading: ModerationReading = { verdict: ALLOWED, playful, hyperbole, selfHarmIntent, disputedHate, screen: text.contentTokens.length > 0 };
   if (!text.tokens.length && !/\d/.test(text.folded)) return reading;
 
   const sexual = sexualHit(text);

@@ -135,13 +135,15 @@ body.browser-view .main-nav {
 
 #games-icon,
 #watch-icon,
-#chat-icon {
+#chat-icon,
+#settings-icon {
   display: flex;
 }
 
 body.games-view #games-icon svg path,
 body.watch-view #watch-icon svg path,
-body.chat-view #chat-icon svg path {
+body.chat-view #chat-icon svg path,
+body.settings-view #settings-icon svg path {
   stroke-width: 2;
 }
 

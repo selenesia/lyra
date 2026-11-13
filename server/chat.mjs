@@ -340,7 +340,7 @@ export function createChatRoom({
     return verdict.allowed || verdict.strikes < 2;
   }
 
-  async function session(request, ip) {
+  async function session(request, ip, browser) {
     let identity;
     try {
       identity = await identify(request, ip);
@@ -351,9 +351,14 @@ export function createChatRoom({
     if (!identity) return { failure: httpError(401, "CHAT_LOGIN_REQUIRED", "log in to use chat") };
     const previous = store.user(identity.id);
     const recycled = previous && previous.username !== identity.username ? store.memberships(identity.id) : null;
-    const row = store.identify(identity, now());
+    let row = store.identify(identity, now());
     if (recycled) forgetUser(row.id, recycled);
+    store.guard.observe(row, browser, now());
+    if (row.banned_until > now()) store.guard.restrict(row, "ban", row.banned_until);
+    if (row.muted_until > now()) store.guard.restrict(row, "timeout", row.muted_until);
+    row = store.guard.apply(row, now());
     if (row.banned_until > now()) {
+      refreshRestrictions();
       return {
         failure: httpError(403, "CHAT_BANNED", "you are banned from chat", {
           ...(row.banned_until < PERMANENT && { until: row.banned_until }),
@@ -411,9 +416,12 @@ export function createChatRoom({
       mutedUntil = time + Math.min(maxMuteMs, muteMs * 2 ** mutes);
       mutes += 1;
       current = 0;
-      sendTo(row.id, frame("muted", { until: mutedUntil }));
     }
     store.setStrikes(row.id, { points: current, updated: time, mutes, mutedUntil });
+    if (mutes > row.mute_count) {
+      store.guard.restrict(row, "timeout", mutedUntil);
+      refreshRestrictions();
+    }
     if (mutes > row.mute_count) announce(channel, row, { action: "timeout", until: mutedUntil }, time);
     return mutedUntil > time ? mutedUntil : 0;
   }
@@ -438,7 +446,7 @@ export function createChatRoom({
   }
 
   function silenced(row) {
-    const fresh = store.user(row.id) ?? row;
+    const fresh = store.guard.apply(store.user(row.id) ?? row, now());
     const time = now();
     if (fresh.banned_until > time) {
       return httpError(403, "CHAT_BANNED", "you are banned from chat", {
@@ -448,6 +456,33 @@ export function createChatRoom({
     }
     if (fresh.muted_until > time) return httpError(403, "CHAT_MUTED", "you are timed out for a bit", { until: fresh.muted_until });
     return null;
+  }
+
+  function refreshRestrictions() {
+    const ids = new Set([...streams.values()].map((stream) => stream.user.id));
+    for (const party of parties.list()) {
+      ids.add(party.host);
+      for (const stream of party.streams.values()) ids.add(stream.user.id);
+    }
+    for (const id of ids) {
+      const row = store.user(id);
+      if (!row) continue;
+      const fresh = store.guard.apply(row, now());
+      if (fresh.banned_until > now()) {
+        const banned = frame("banned", {
+          ...(fresh.banned_until < PERMANENT && { until: fresh.banned_until }),
+          ...(fresh.ban_reason && { reason: fresh.ban_reason }),
+        });
+        for (const stream of [...streams.values()]) {
+          if (stream.user.id !== id) continue;
+          stream.send(banned);
+          stream.close();
+        }
+        dropParties(id);
+      } else {
+        sendTo(id, frame("muted", { until: fresh.muted_until > now() ? fresh.muted_until : 0 }));
+      }
+    }
   }
 
   function readText(payload, hasAttachment = false) {
@@ -666,8 +701,9 @@ export function createChatRoom({
         until = time + minutes * 60_000;
       }
       store.setMute(target.id, until);
+      store.guard.restrict(target, "timeout", until);
       audit(until ? `${Math.round((until - time) / 60_000)} min` : null);
-      sendTo(target.id, frame("muted", { until }));
+      refreshRestrictions();
       if (until) announce(channel, target, { action, until }, time);
       else if (target.muted_until > time) announce(channel, target, { action }, time);
       return ok({ user: { ...member(target), ...(until && { mutedUntil: until }) } });
@@ -685,6 +721,7 @@ export function createChatRoom({
       if (!fromConsole && !canBan(actorRole, target.role)) return httpError(403, "CHAT_FORBIDDEN", "you can not ban that user");
       if (action === "unban") {
         store.setBan(target.id, 0, null);
+        store.guard.restrict(target, "ban", 0);
         audit(null);
         if (target.banned_until > time) announce(channel, target, { action }, time);
         return ok({ user: member(target) });
@@ -694,15 +731,11 @@ export function createChatRoom({
       const until = minutes === null ? PERMANENT : time + minutes * 60_000;
       const reason = typeof payload.reason === "string" ? cleanChatText(payload.reason).slice(0, 200) || null : null;
       store.setBan(target.id, until, reason);
+      store.guard.restrict(target, "ban", until);
       const removed = payload.purge ? store.purge(target.id, time - PURGE_WINDOW_MS) : [];
       audit([minutes === null ? "permanent" : `${minutes} min`, reason, removed.length && `${removed.length} removed`].filter(Boolean).join(", "));
       for (const entry of removed) broadcast(frame("remove", entry), entry.channel);
-      const banned = frame("banned", { ...(until < PERMANENT && { until }), ...(reason && { reason }) });
-      for (const stream of [...streams.values()]) {
-        if (stream.user.id !== target.id) continue;
-        stream.send(banned);
-        stream.close();
-      }
+      refreshRestrictions();
       dropParties(target.id);
       announce(channel, target, { action, ...(until < PERMANENT && { until }) }, time);
       return ok({ user: member(target), removed: removed.length });
@@ -1360,7 +1393,9 @@ export function createChatRoom({
     const payload = await readJson(request);
     if (!payload) return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
     const time = now();
-    row = store.user(row.id) ?? row;
+    row = store.guard.apply(store.user(row.id) ?? row, time);
+    const refused = silenced(row);
+    if (refused?.body.code === "CHAT_BANNED") return refused;
     const type = payload.type ?? "send";
     if (type === "delete") return remove(payload, row, time);
     if (["role", "timeout", "untimeout", "ban", "unban", "clearprofile"].includes(type)) {
@@ -1392,7 +1427,7 @@ export function createChatRoom({
     return httpError(400, "CHAT_REQUEST_INVALID", "this request is not valid");
   }
 
-  async function handle(request, { ip = "unknown" } = {}) {
+  async function handleRequest(request, ip, browser) {
     const url = new URL(request.url);
     const route = url.pathname.replace(/^\/api\/chat\//, "");
     const method = request.method;
@@ -1401,7 +1436,7 @@ export function createChatRoom({
     if (attachmentRoute && (method === "GET" || method === "HEAD")) {
       const message = store.message(Number(attachmentRoute[1]));
       if (message && (isConversationKey(message.channel) || !canReadChannel("member", message.channel))) {
-        const { row, failure } = await session(request, ip);
+        const { row, failure } = await session(request, ip, browser);
         if (failure) return reply(failure);
         if (!canRead(message.channel, row)) return reply(httpError(404, "CHAT_MEDIA_NOT_FOUND", "that image is gone"));
       }
@@ -1413,7 +1448,7 @@ export function createChatRoom({
       (mediaRoute && !mediaRoute[2] && method === "POST") ||
       (["stream", "me", "history", "profile", "users", "party"].includes(route) && method === "GET");
     if (!known) return reply(httpError(404, "CHAT_ROUTE_NOT_FOUND", "not found"));
-    const { row, failure } = await session(request, ip);
+    const { row, failure } = await session(request, ip, browser);
     if (failure) return reply(failure);
     if (route === "stream") return url.searchParams.has("party") ? watchParty(url, row, request.signal) : connect(row, request.signal);
     if (route === "me") return json(200, { viewer: viewer(row) });
@@ -1425,6 +1460,13 @@ export function createChatRoom({
     else if (mediaRoute) result = await upload(request, mediaRoute[1], row);
     else result = await action(request, row, ip);
     return json(result.status, result.body);
+  }
+
+  async function handle(request, { ip = "unknown" } = {}) {
+    const browser = store.guard.browser(request);
+    const response = await handleRequest(request, ip, browser);
+    if (browser.authenticated) response.headers.append("Set-Cookie", browser.cookie);
+    return response;
   }
 
   function describe(row) {

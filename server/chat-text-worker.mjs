@@ -76,24 +76,29 @@ function keepHighest(target, scores) {
 
 async function readText(loaded, text) {
   const readings = { moderation: {}, toxicity: {} };
+  const scores = {};
   const { labels } = TEXT_CLASSIFIERS.toxicity;
   for (const ids of textWindows(loaded.tokenize(text.normalize("NFKC").replace(HIDDEN, "")))) {
     const moderation = calibrate(await classify(loaded.moderation, TEXT_CLASSIFIERS.moderation, ids), loaded.calibration);
-    const toxicity = await classify(loaded.toxicity, TEXT_CLASSIFIERS.toxicity, ids);
+    const odds = await classify(loaded.toxicity, TEXT_CLASSIFIERS.toxicity, ids);
+    const toxicity = Object.fromEntries(labels.map((label, index) => [label, odds[index]]));
     keepHighest(readings.moderation, moderation);
-    keepHighest(readings.toxicity, Object.fromEntries(labels.map((label, index) => [label, toxicity[index]])));
+    keepHighest(readings.toxicity, toxicity);
+    keepHighest(scores, scoreText({ moderation, toxicity }));
   }
-  return readings;
+  return { scores, readings };
 }
 
 export async function scanText(loaded, text) {
   const readings = { moderation: {}, toxicity: {} };
+  const scores = {};
   for (const variant of modelTextVariants(text)) {
     const result = await readText(loaded, variant);
-    keepHighest(readings.moderation, result.moderation);
-    keepHighest(readings.toxicity, result.toxicity);
+    keepHighest(readings.moderation, result.readings.moderation);
+    keepHighest(readings.toxicity, result.readings.toxicity);
+    keepHighest(scores, result.scores);
   }
-  return { scores: scoreText(readings), readings };
+  return { scores, readings };
 }
 
 async function check({ id, text }) {

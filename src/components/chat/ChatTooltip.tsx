@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 
 export default function ChatTooltip({ containerRef }: { containerRef: RefObject<HTMLElement> }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
+  const [label, setLabel] = useState("");
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -11,7 +12,9 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
     if (!container) return;
     const show = (event: Event) => {
       const button = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-tooltip]") : null;
-      if (button && !button.matches(":disabled")) setTarget(button);
+      if (!button || button.matches(":disabled")) return;
+      setTarget(button);
+      setLabel(button.dataset.tooltip ?? "");
     };
     const leave = (event: Event) => {
       const related = (event as MouseEvent | FocusEvent).relatedTarget;
@@ -19,6 +22,17 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
       setTarget(null);
     };
     const hide = () => setTarget(null);
+    const sync = (records: MutationRecord[]) => {
+      for (const record of records) {
+        const button = record.target;
+        if (!(button instanceof HTMLElement) || !button.matches("[data-tooltip]") || button.matches(":disabled")) continue;
+        if (!button.matches(":hover, :focus-visible")) continue;
+        setTarget(button);
+        setLabel(button.dataset.tooltip ?? "");
+      }
+    };
+    const observer = new MutationObserver(sync);
+    observer.observe(container, { attributes: true, attributeFilter: ["data-tooltip"], subtree: true });
     container.addEventListener("pointerover", show);
     container.addEventListener("focusin", show);
     container.addEventListener("pointerout", leave);
@@ -28,6 +42,7 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
     window.addEventListener("scroll", hide, true);
     window.addEventListener("resize", hide);
     return () => {
+      observer.disconnect();
       container.removeEventListener("pointerover", show);
       container.removeEventListener("focusin", show);
       container.removeEventListener("pointerout", leave);
@@ -51,10 +66,10 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
     tooltip.classList.toggle("is-below", below);
     target.setAttribute("aria-describedby", "chat-tooltip");
     return () => target.removeAttribute("aria-describedby");
-  }, [target]);
+  }, [target, label]);
 
   return target && createPortal(
-    <div id="chat-tooltip" class="chat-tooltip" role="tooltip" ref={tooltipRef}>{target.dataset.tooltip}</div>,
+    <div id="chat-tooltip" class="chat-tooltip" role="tooltip" ref={tooltipRef}>{label}</div>,
     document.body,
   );
 }

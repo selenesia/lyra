@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import EditableField from "../EditableField.tsx";
 import ChatAvatar from "../chat/ChatAvatar.tsx";
-import { IconCrossMedium } from "../icons/index.tsx";
 import { negativeMessage } from "../../core/runtime/messages.ts";
 import {
   CHAT_LIMITS,
@@ -70,6 +69,7 @@ export default function PlayerPartyChat({ open, messages, watching, say, onClose
   return (
     <section
       class={`player-party-chat${open ? " is-open" : ""}`}
+      role="dialog"
       aria-label="party chat"
       aria-hidden={!open}
       inert={!open}
@@ -79,9 +79,6 @@ export default function PlayerPartyChat({ open, messages, watching, say, onClose
           <strong>party chat</strong>
           <span>{watching} watching</span>
         </div>
-        <button type="button" class="modal-close-btn" aria-label="close party chat" onClick={onClose}>
-          <IconCrossMedium />
-        </button>
       </div>
       <div
         ref={feedRef}
@@ -132,7 +129,7 @@ export default function PlayerPartyChat({ open, messages, watching, say, onClose
           }}
         />
         <p class={`player-party-chat-status${error ? " is-error" : ""}`} aria-live="polite">
-          {error ?? (sending ? "sending" : "")}
+          {error ?? ""}
         </p>
       </div>
     </section>

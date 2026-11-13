@@ -2,10 +2,10 @@ export const TEXT_RULES = [
   { score: "minors", category: "sexual", limit: 0.65, strikes: 2 },
   { score: "sexual", category: "sexual", limit: 0.98, strikes: 1 },
   { score: "sexual", category: "sexual", limit: 0.85, strikes: 1, unless: "playful" },
-  { score: "selfHarm", category: "crisis", limit: 0.9, strikes: 0, unless: "hyperbole" },
+  { score: "selfHarm", category: "crisis", limit: 0.9, strikes: 0, unless: "hyperbole", requires: "selfHarmIntent" },
   { score: "threat", category: "threat", limit: 0.85, strikes: 1, unless: "playful" },
   { score: "threatening", category: "threat", limit: 0.8, strikes: 1, unless: "playful" },
-  { score: "hate", category: "hate", limit: 0.6, strikes: 1 },
+  { score: "hate", category: "hate", limit: 0.6, strikes: 1, unless: "disputedHate" },
 ];
 
 export const TEXT_CONFIRM = {
@@ -20,7 +20,7 @@ export const TEXT_SCORES = [...new Set([...TEXT_RULES, ...Object.values(TEXT_CON
 export function scoreText({ moderation, toxicity }) {
   return {
     hate: Math.min(moderation.hate, toxicity.identity_attack),
-    identity: Math.max(moderation.hate, toxicity.identity_attack),
+    identity: Math.min(moderation.hate, toxicity.identity_attack),
     threat: Math.min(moderation["harassment/threatening"], toxicity.threat),
     threatening: moderation["harassment/threatening"],
     minors: moderation["sexual/minors"],
@@ -43,6 +43,7 @@ export function textVerdict(reading, scores) {
   let worstRatio = 0;
   for (const rule of TEXT_RULES) {
     if (rule.unless && reading[rule.unless]) continue;
+    if (rule.requires && !reading[rule.requires]) continue;
     const ratio = scores[rule.score] / rule.limit;
     if (ratio >= 1 && ratio > worstRatio) {
       worst = rule;

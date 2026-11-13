@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Database } from "bun:sqlite";
+import { createChatGuard } from "./chat-guard.mjs";
 import { CHAT_REACTION_FACES, conversationIdOf, conversationKey, isConversationKey } from "../src/features/chat/chatProtocol.ts";
 import { mentionsName } from "../src/features/chat/chatText.ts";
 
@@ -462,6 +463,7 @@ export function createChatStore(file) {
   });
 
   return {
+    guard: createChatGuard(db),
     identify: (user, time) => identify({ id: user.id, username: user.username, createdAt: user.createdAt ?? null, time }),
     user: (id) => statements.user.get({ id }) ?? null,
     userByName: (username) => statements.userByName.get({ username }) ?? null,

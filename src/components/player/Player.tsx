@@ -606,6 +606,7 @@ export default function Player() {
   const [episodeSelectorMounted, setEpisodeSelectorMounted] = useState(false);
   const episodeSelectorOpen = openSelector === "episodes";
   const episodeSelectorRendered = episodeSelectorOpen || episodeSelectorMounted;
+  const [partyChatOpen, setPartyChatOpen] = useState(false);
   const [changingLanguage, setChangingLanguage] = useState(false);
   const [loadingEpisodeCount, setLoadingEpisodeCount] = useState(false);
   const [loadingStreamInfo, setLoadingStreamInfo] = useState(false);
@@ -804,19 +805,20 @@ export default function Player() {
   }, []);
 
   useEffect(() => {
-    selectorOpenRef.current = openSelector !== null;
-    if (openSelector) {
+    const menuOpen = openSelector !== null || partyChatOpen;
+    selectorOpenRef.current = menuOpen;
+    if (menuOpen) {
       clearHideTimer();
       setShowControls(true);
     } else resetTimer();
-  }, [openSelector, resetTimer, clearHideTimer]);
+  }, [openSelector, partyChatOpen, resetTimer, clearHideTimer]);
 
   useEffect(() => {
     if (episodeSelectorOpen) setEpisodeSelectorMounted(true);
   }, [episodeSelectorOpen]);
 
   useEffect(() => {
-    if (!openSelector) return;
+    if (!openSelector && !partyChatOpen) return;
     const close = (event: MouseEvent) => {
       const insideMenu = event
         .composedPath()
@@ -825,10 +827,16 @@ export default function Player() {
             node instanceof Element &&
             node.classList.contains("player-control-popover"),
         );
-      if (!insideMenu) setOpenSelector(null);
+      if (insideMenu) return;
+      setOpenSelector(null);
+      setPartyChatOpen(false);
     };
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
+  }, [openSelector, partyChatOpen]);
+
+  useEffect(() => {
+    if (openSelector) setPartyChatOpen(false);
   }, [openSelector]);
 
   useEffect(() => loadEpisodeCount({
@@ -915,13 +923,20 @@ export default function Player() {
     reportPlayback: reportPartyPlayback,
     reportMedia: reportPartyMedia,
   } = watchParty;
-  const [partyChatOpen, setPartyChatOpen] = useState(false);
   const partyChatToggleRef = useRef<HTMLButtonElement | null>(null);
   const partyChatUnread = usePartyChatUnread(watchParty.messages, watchParty.viewer, partyChatOpen);
   const closePartyChat = useCallback(() => {
     setPartyChatOpen(false);
     partyChatToggleRef.current?.focus({ preventScroll: true });
   }, []);
+  const togglePartyChat = useCallback(() => {
+    if (partyChatOpen) {
+      setPartyChatOpen(false);
+      return;
+    }
+    setSelectorState(null);
+    setPartyChatOpen(true);
+  }, [partyChatOpen]);
 
   const userTogglePlay = useCallback(() => {
     if (catchUpParty() || !allowPartyIntent()) return;
@@ -1464,10 +1479,10 @@ export default function Player() {
   ]);
 
   useEffect(() => attachPlayerShortcuts({
-    selectorOpenRef, containerRef, setOpenSelector, resetTimer, videoRef,
-    displayDurationRef, seekTo: userSeek, togglePlay: userTogglePlay,
-    pendingSeekRef, stepVolume, toggleMute, toggleFullscreen, toggleCaptions,
-    setSpeed,
+    selectorOpenRef, containerRef, setOpenSelector, setPartyChatOpen,
+    resetTimer, videoRef, displayDurationRef, seekTo: userSeek,
+    togglePlay: userTogglePlay, pendingSeekRef, stepVolume, toggleMute,
+    toggleFullscreen, toggleCaptions, setSpeed,
   }), [
     userTogglePlay,
     toggleMute,
@@ -1550,6 +1565,7 @@ export default function Player() {
     mediaState.ended ||
     Boolean(loadError) ||
     openSelector !== null ||
+    partyChatOpen ||
     !playbackStarted;
   const [captionStyle, setCaptionStyle] = useState(readCaptionStyle);
   const captionVariables = useMemo(
@@ -1750,16 +1766,6 @@ export default function Player() {
           autoNext, clearAutoNext, changeEpisode: requestEpisode,
           continueNextSeason,
         })}
-        {watchParty.party && (
-          <PlayerPartyChat
-            open={partyChatOpen}
-            messages={watchParty.messages}
-            watching={watchParty.watchers.length}
-            say={watchParty.say}
-            onClose={closePartyChat}
-          />
-        )}
-
         <div class={`player-controls${controlsVisible ? "" : " is-hidden"}`}>
           <div
             ref={seekBarRef}
@@ -1845,17 +1851,27 @@ export default function Player() {
               changeProvider,
             })}
             {watchParty.party && (
-              <button
-                ref={partyChatToggleRef}
-                type="button"
-                class={`player-btn player-btn-party${partyChatOpen ? " is-open" : ""}`}
-                aria-label={partyChatUnread ? `party chat, ${partyChatUnread} new` : "party chat"}
-                aria-pressed={partyChatOpen}
-                onClick={() => setPartyChatOpen((open) => !open)}
-              >
-                <IconChat size={24} />
-                {partyChatUnread > 0 && <span class="player-party-count">{partyChatUnread}</span>}
-              </button>
+              <div class="player-control-popover player-party-chat-control">
+                <button
+                  ref={partyChatToggleRef}
+                  type="button"
+                  class={`player-btn player-btn-party${partyChatOpen ? " is-open" : ""}`}
+                  aria-label={partyChatUnread ? `party chat, ${partyChatUnread} new` : "party chat"}
+                  aria-haspopup="dialog"
+                  aria-expanded={partyChatOpen}
+                  onClick={togglePartyChat}
+                >
+                  <IconChat size={24} />
+                  {partyChatUnread > 0 && <span class="player-party-count">{partyChatUnread}</span>}
+                </button>
+                <PlayerPartyChat
+                  open={partyChatOpen}
+                  messages={watchParty.messages}
+                  watching={watchParty.watchers.length}
+                  say={watchParty.say}
+                  onClose={closePartyChat}
+                />
+              </div>
             )}
             {renderPartyMenu({
               party: watchParty.party, isHost: watchParty.isHost, openSelector,
