@@ -516,7 +516,7 @@ done < <(
 )
 sudo systemctl stop "pm2-$USER.service" 2>/dev/null || true
 stop_pm2
-for svc in tls-approval lyra waves ask cloudsync isao mochi nuru nuru-route.timer nuru-route wg-quick@wg0 caddy eturnal coturn; do
+for svc in tls-approval lyra waves ask cloudsync isao mochi nuru nuru-route.timer nuru-route lyra-cosmetics.timer lyra-cosmetics wg-quick@wg0 caddy eturnal coturn; do
   sudo systemctl stop "$svc" 2>/dev/null || true
   sudo systemctl disable "$svc" 2>/dev/null || true
 done
@@ -1106,6 +1106,11 @@ fi
 sudo cp "$ROOT/target/release/mochi" /usr/local/bin/mochi
 sudo chmod 755 /usr/local/bin/mochi
 sudo mkdir -p /var/cache/lyra-mochi
+COSMETICS_DIR=/var/cache/lyra-mochi/cosmetics
+sudo mkdir -p "$COSMETICS_DIR"
+if [ ! -s "$ROOT/services/mochi/cosmetics/shop_skus.json" ]; then
+  fail "services/mochi/cosmetics/shop_skus.json is missing, profile cosmetics will stay empty"
+fi
 sudo chown -R mochi:mochi /var/cache/lyra-mochi
 CACHE_AVAILABLE_KB=$(df -Pk /var/cache/lyra-mochi | awk 'NR == 2 { print $4 }')
 if [[ ! "$CACHE_AVAILABLE_KB" =~ ^[1-9][0-9]*$ ]]; then
@@ -1256,10 +1261,47 @@ Environment=MIMALLOC_ALLOW_THP=0
 Environment=MOCHI_INSTANCES=$MOCHI_INSTANCES
 Environment=MOCHI_STREAM_CACHE_GB=$ANIME_CACHE_GB
 Environment=MOCHI_STREAM_CACHE_TTL_DAYS=$ANIME_CACHE_TTL_DAYS
+Environment=MOCHI_COSMETICS_DIR=$COSMETICS_DIR
+Environment=MOCHI_COSMETICS_SOURCE=$COSMETICS_DIR/source.json
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
+EOF
+sudo tee /etc/systemd/system/lyra-cosmetics.service >/dev/null <<EOF
+[Unit]
+Description=lyra profile cosmetics mirror refresh
+After=network-online.target$MOCHI_VPN_AFTER
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=mochi
+Group=mochi
+Slice=lyra-proxy.slice
+Nice=10
+WorkingDirectory=$COSMETICS_DIR
+$MOCHI_VPN_PRESTART
+ExecStartPre=-+/usr/bin/install -p -o mochi -g mochi -m 644 "$ROOT/services/mochi/cosmetics/shop_skus.json" "$COSMETICS_DIR/source.json"
+ExecStart=/usr/local/bin/mochi --cosmetics-sync
+TimeoutStartSec=4h
+Restart=on-failure
+RestartSec=20min
+Environment=RUST_LOG=mochi=info
+Environment=MOCHI_COSMETICS_DIR=$COSMETICS_DIR
+Environment=MOCHI_COSMETICS_SOURCE=$COSMETICS_DIR/source.json
+EOF
+sudo tee /etc/systemd/system/lyra-cosmetics.timer >/dev/null <<EOF
+[Unit]
+Description=refresh lyra profile cosmetics
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=20min
+
+[Install]
+WantedBy=timers.target
 EOF
 sudo mkdir -p /etc/mochi
 for ((i = 0; i < MOCHI_INSTANCES; i++)); do
@@ -1523,7 +1565,7 @@ http://127.0.0.1:4001 {
     }
 
     @mochi_routes {
-        path /!!raw/* /!!/* /!!folio/* /!cover!/*
+        path /!!raw/* /!!/* /!!folio/* /!!cosmetics/* /!cover!/*
     }
     reverse_proxy @mochi_routes $MOCHI_UPSTREAMS {
         lb_policy uri_hash
@@ -1553,6 +1595,7 @@ http://127.0.0.1:4001 {
     }
 
     handle /api/chat/* {
+        header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         reverse_proxy 127.0.0.1:4444 {
             header_up X-Real-IP {lyra_client_ip}
             flush_interval -1
@@ -1894,6 +1937,28 @@ if [ -z "$PROXY_CGROUP" ] || ! retry 5 proxy_limits_active "/sys/fs/cgroup$PROXY
     fail "proxy resource limits could not be activated"
     exit 1
 fi
+log "mirroring profile cosmetics into $COSMETICS_DIR, the first run downloads a few gb"
+sudo journalctl -u lyra-cosmetics.service -f -n 0 -o cat &
+COSMETICS_LOG_PID=$!
+COSMETICS_READY=0
+for attempt in 1 2 3; do
+  if sudo systemctl start lyra-cosmetics.service; then
+    COSMETICS_READY=1
+    break
+  fi
+  if [ "$attempt" -lt 3 ]; then
+    log "some cosmetics are still missing, retrying ($attempt/3)"
+    sleep 15
+  fi
+done
+if [ "$COSMETICS_READY" -eq 1 ]; then
+  success "every profile cosmetic is mirrored"
+else
+  fail "some profile cosmetics did not download, lyra-cosmetics will keep retrying"
+fi
+kill "$COSMETICS_LOG_PID" 2>/dev/null || true
+wait "$COSMETICS_LOG_PID" 2>/dev/null || true
+sudo systemctl enable --now lyra-cosmetics.timer >/dev/null 2>&1
 sudo systemctl enable "${MOCHI_SERVICES[@]}" >/dev/null 2>&1
 sudo systemctl restart "${MOCHI_SERVICES[@]}"
 for svc in "${MOCHI_SERVICES[@]}"; do

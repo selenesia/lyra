@@ -29,7 +29,6 @@ declare const VERSION: string;
 const REWRITE_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024;
 const REWRITE_CACHE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const HTML_STREAM_SNIFF_BYTES = 1024;
-const STREAMED_SCRIPT_BYTES = 2 * 1024 * 1024;
 type RewriteCacheBody = string | Uint8Array<ArrayBuffer>;
 type RewriteCacheEntry = {
 	body: RewriteCacheBody;
@@ -269,25 +268,47 @@ async function rewriteHtmlStream(
 	}, { highWaterMark: 0 });
 }
 
-async function serverRewrittenBytes(
+function bufferedRewriteStream(
+	response: BareResponse,
+	rewrite: (bytes: Uint8Array<ArrayBuffer>) => BodyType | Promise<BodyType>
+): ReadableStream<Uint8Array> {
+	let chunks: Uint8Array[] = [];
+	return response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+		transform(chunk) {
+			chunks.push(chunk);
+		},
+		async flush(controller) {
+			const bytes = concatChunks(chunks) as Uint8Array<ArrayBuffer>;
+			chunks = [];
+			const rewritten = await rewrite(bytes);
+			if (typeof rewritten === "string") controller.enqueue(new TextEncoder().encode(rewritten));
+			else if (rewritten instanceof Uint8Array) controller.enqueue(rewritten);
+			else controller.enqueue(new Uint8Array(await new Response(rewritten).arrayBuffer()));
+		},
+	}));
+}
+
+function serverRewrittenStream(
 	handler: FolioFetchHandler,
+	request: FolioFetchRequest,
 	parsed: FolioFetchParsed,
 	response: BareResponse,
 	mode: ServerRewriteMode,
+	rewrite: (bytes: Uint8Array<ArrayBuffer>) => BodyType,
 	refetch?: () => Promise<BareResponse>
-): Promise<Uint8Array<ArrayBuffer> | BareResponse> {
-	const bytes = new Uint8Array(await response.arrayBuffer());
-	if (mode === "final") return bytes;
-	try {
-		return applyImportUrls(
-			bytes,
-			handler.context,
-			parsed.meta
-		) as Uint8Array<ArrayBuffer>;
-	} catch (error) {
-		if (!(error instanceof ServerRewriteError) || !refetch) throw error;
-		return refetch();
-	}
+): ReadableStream<Uint8Array> {
+	return bufferedRewriteStream(response, async bytes => {
+		if (mode === "patch") {
+			try {
+				bytes = applyImportUrls(bytes, handler.context, parsed.meta) as Uint8Array<ArrayBuffer>;
+			} catch (error) {
+				if (!(error instanceof ServerRewriteError) || !refetch) throw error;
+				request.signal?.throwIfAborted();
+				return rewriteBody(handler, request, parsed, await refetch());
+			}
+		}
+		return rewrite(bytes);
+	});
 }
 
 export async function rewriteBody(
@@ -312,27 +333,29 @@ export async function rewriteBody(
 				request.method,
 				response
 			);
+			const sourceURL = flagEnabled("debugSourceURL", handler.context, parsed.meta.origin)
+				? `\n//# sourceURL=${parsed.url.href}`
+				: "";
 			if (served === "final") {
-				const length = Number(response.headers.get("content-length"));
-				return length >= STREAMED_SCRIPT_BYTES
-					? response.body
-					: response.arrayBuffer();
+				if (sourceURL) {
+					return response.body.pipeThrough(new TransformStream({
+						flush(controller) {
+							controller.enqueue(new TextEncoder().encode(sourceURL));
+						},
+					}));
+				}
+				return response.body;
 			}
 			if (served) {
-				const patched = await serverRewrittenBytes(
+				return serverRewrittenStream(
 					handler,
+					request,
 					parsed,
 					response,
 					served,
+					bytes => sourceURL ? new Blob([bytes, sourceURL]) : bytes,
 					refetch
 				);
-				if (patched instanceof Uint8Array) {
-					return patched.buffer.slice(
-						patched.byteOffset,
-						patched.byteOffset + patched.byteLength
-					);
-				}
-				response = patched;
 			}
 			if (response.ok) {
 				const ct = response.headers.get("content-type");
@@ -350,13 +373,11 @@ export async function rewriteBody(
 						parsed.isModule
 					);
 
-					if (
-						flagEnabled("debugSourceURL", handler.context, parsed.meta.origin)
-					) {
+					if (sourceURL) {
 						if (rewritten instanceof Uint8Array) {
 							rewritten = new TextDecoder().decode(rewritten);
 						}
-						rewritten += `\n//# sourceURL=${parsed.url.href}`;
+						rewritten += sourceURL;
 					}
 
 					return ownRewriteBody(rewritten);
@@ -383,24 +404,15 @@ export async function rewriteBody(
 					response
 				);
 				if (served) {
-					const rewritten = await serverRewrittenBytes(
+					return serverRewrittenStream(
 						handler,
+						request,
 						parsed,
 						response,
 						served,
+						bytes => rewriteWorkers(bytes, response.url, handler.context, parsed.meta, parsed.isModule, true),
 						refetch
 					);
-					if (rewritten instanceof Uint8Array) {
-						return rewriteWorkers(
-							rewritten,
-							response.url,
-							handler.context,
-							parsed.meta,
-							parsed.isModule,
-							true
-						);
-					}
-					response = rewritten;
 				}
 				const cacheKey = rewriteCacheKey(handler, parsed, response, "worker");
 				const rewritten = await cachedOrPendingRewrite(cacheKey, async () =>

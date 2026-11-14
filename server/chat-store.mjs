@@ -67,6 +67,10 @@ const SCHEMA = `
     accent TEXT,
     avatar_hash TEXT,
     banner_hash TEXT,
+    decoration TEXT,
+    effect TEXT,
+    nameplate TEXT,
+    frame TEXT,
     updated_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS chat_media (
@@ -108,12 +112,14 @@ const SCHEMA = `
 const MESSAGE_COLUMNS = `
   m.id, m.channel, m.user_id, m.text, m.created_at, m.edited_at,
   m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, m.notice, m.party, u.username, u.role, p.display, p.avatar_hash,
-  a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
+  p.decoration, a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
 `;
 const MESSAGE_SOURCE = "chat_messages m JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id LEFT JOIN chat_attachments a ON a.message_id = m.id";
-const USER_COLUMNS = "u.*, p.display, p.pronouns, p.status, p.bio, p.accent, p.avatar_hash, p.banner_hash";
+const USER_COLUMNS =
+  "u.*, p.display, p.pronouns, p.status, p.bio, p.accent, p.avatar_hash, p.banner_hash, p.decoration, p.effect, p.nameplate, p.frame";
 const USER_SOURCE = "chat_users u LEFT JOIN chat_profiles p ON p.user_id = u.id";
-const PROFILE_FIELDS = ["display", "pronouns", "status", "bio", "accent"];
+const COSMETIC_FIELDS = ["decoration", "effect", "nameplate", "frame"];
+const PROFILE_FIELDS = ["display", "pronouns", "status", "bio", "accent", ...COSMETIC_FIELDS];
 
 export function createChatStore(file) {
   if (file !== ":memory:") {
@@ -131,6 +137,11 @@ export function createChatStore(file) {
   if (!db.query("SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'party'").get()) {
     db.exec("ALTER TABLE chat_messages ADD COLUMN party TEXT");
   }
+  for (const field of COSMETIC_FIELDS) {
+    if (!db.query("SELECT 1 FROM pragma_table_info('chat_profiles') WHERE name = $field").get({ field })) {
+      db.exec(`ALTER TABLE chat_profiles ADD COLUMN ${field} TEXT`);
+    }
+  }
   if (file !== ":memory:") fs.chmodSync(file, 0o600);
 
   const statements = {
@@ -141,7 +152,7 @@ export function createChatStore(file) {
     ensureProfile: db.query("INSERT OR IGNORE INTO chat_profiles (user_id, updated_at) VALUES ($id, $time)"),
     setProfile: db.query(
       `UPDATE chat_profiles SET display = $display, pronouns = $pronouns, status = $status, bio = $bio, accent = $accent,
-        updated_at = $time WHERE user_id = $id`,
+        decoration = $decoration, effect = $effect, nameplate = $nameplate, frame = $frame, updated_at = $time WHERE user_id = $id`,
     ),
     setAvatarHash: db.query("UPDATE chat_profiles SET avatar_hash = $hash, updated_at = $time WHERE user_id = $id"),
     setBannerHash: db.query("UPDATE chat_profiles SET banner_hash = $hash, updated_at = $time WHERE user_id = $id"),
@@ -200,7 +211,8 @@ export function createChatStore(file) {
       "INSERT INTO chat_audit (at, actor_id, action, target_id, detail) VALUES ($time, $actorId, $action, $targetId, $detail)",
     ),
     auditLog: db.query(
-      `SELECT a.*, actor.username AS actor_name, target.username AS target_name FROM chat_audit a
+      `SELECT a.id, a.at, a.actor_id, a.action, a.target_id, CASE WHEN a.action != 'delete' THEN a.detail END AS detail,
+        actor.username AS actor_name, target.username AS target_name FROM chat_audit a
         LEFT JOIN chat_users actor ON actor.id = a.actor_id LEFT JOIN chat_users target ON target.id = a.target_id
         ORDER BY a.id DESC LIMIT $limit`,
     ),
@@ -297,6 +309,7 @@ export function createChatStore(file) {
       ...(row.attachment_type && { attachment: { type: row.attachment_type, width: row.attachment_width, height: row.attachment_height } }),
       ...(row.display && { display: row.display }),
       ...(row.avatar_hash && { avatar: row.avatar_hash }),
+      ...(row.decoration && { decoration: row.decoration }),
       ...(row.edited_at && { editedAt: row.edited_at }),
       ...(row.reply_id && {
         reply: { id: String(row.reply_id), author: String(row.reply_user_id), name: row.reply_name, text: row.reply_text },

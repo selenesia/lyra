@@ -274,7 +274,7 @@ export class Controller {
 	private cookieSyncChannel = new BroadcastChannel(BROADCASTCHANNEL_NAME);
 	private requestAborts = new Map<string, AbortController>();
 
-	private wasmAlreadyFetched = false;
+	private wasmBytes: Promise<Uint8Array> | null = null;
 	private wasmPayload: string | null = null;
 	private onTabChannelMessage: (e: MessageEvent) => void = (e) => {
 		this.rpc.recieve(e.data);
@@ -292,14 +292,17 @@ export class Controller {
 		void this.loadSavedCookies();
 	};
 
-	private async loadFolioWasm() {
-		if (this.wasmAlreadyFetched) {
-			return;
-		}
-
-		const resp = await fetch(this.config.wasmPath);
-		setWasm(await resp.arrayBuffer());
-		this.wasmAlreadyFetched = true;
+	private loadFolioWasm() {
+		return this.wasmBytes ??= fetch(this.config.wasmPath)
+			.then(async (response) => {
+				if (!response.ok) throw new Error("rewriter wasm is unavailable... /ᐠ - ˕ -マ");
+				const bytes = new Uint8Array(await response.arrayBuffer());
+				setWasm(bytes);
+				return bytes;
+			}).catch((error) => {
+				this.wasmBytes = null;
+				throw error;
+			});
 	}
 
 	private methods: MethodsDefinition<Controllerbound> = {
@@ -315,16 +318,15 @@ export class Controller {
 				if (!frame) throw new Error("no frame found for request /ᐠ - ˕ -マ");
 			const abort = new AbortController();
 			this.requestAborts.set(data.requestId, abort);
+			let streaming = false;
 			try {
 				await this.loadSavedCookies();
 
 				if (path === frame.prefix + this.config.virtualWasmPath) {
 					if (!this.wasmPayload) {
-						const resp = await fetch(this.config.wasmPath);
-						const buf = await resp.arrayBuffer();
-						const b64 = bytesToBase64(new Uint8Array(buf));
-
-						this.wasmPayload = `self.WASM = '${b64}';`;
+						const bytes = await this.loadFolioWasm();
+						this.wasmPayload ??= `self.WASM = '${bytesToBase64(bytes)}';`;
+						this.wasmBytes = null;
 					}
 
 					return [
@@ -357,6 +359,38 @@ export class Controller {
 					clientId: data.clientId,
 				});
 
+				if (fetchresponse.body instanceof ReadableStream) {
+					const reader = fetchresponse.body.getReader();
+					let complete = false;
+					const finish = () => {
+						complete = true;
+						this.requestAborts.delete(data.requestId);
+						reader.releaseLock();
+					};
+					fetchresponse.body = new ReadableStream({
+						async pull(controller) {
+							try {
+								const result = await reader.read();
+								if (complete) return;
+								if (result.done) {
+									finish();
+									controller.close();
+								} else controller.enqueue(result.value);
+							} catch (error) {
+								if (complete) return;
+								finish();
+								controller.error(error);
+							}
+						},
+						async cancel(reason) {
+							complete = true;
+							abort.abort(reason);
+							try { await reader.cancel(reason); } finally { finish(); }
+						},
+					}, { highWaterMark: 0 });
+					streaming = true;
+				}
+
 				return [
 					{
 						body: fetchresponse.body,
@@ -387,7 +421,7 @@ export class Controller {
 				}
 				throw e;
 			} finally {
-				this.requestAborts.delete(data.requestId);
+				if (!streaming) this.requestAborts.delete(data.requestId);
 			}
 		},
 		cancelRequest: async ({ requestId }) => {
@@ -774,7 +808,7 @@ export class Frame {
 					(()=>{
 						const { FolioClient, CookieJar, setWasm } = $folio;
 
-						setWasm(Uint8Array.fromBase64 ? Uint8Array.fromBase64(self.WASM) : Uint8Array.from(atob(self.WASM), (c) => c.charCodeAt(0)));
+						setWasm(self.WASM);
 						delete self.WASM;
 
 						const flconfig = ${JSON.stringify(this.controller.folioConfig)};

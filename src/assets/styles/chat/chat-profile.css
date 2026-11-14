@@ -2,8 +2,31 @@
   --chat-card-tint: var(--chat-card-accent, var(--bg-surface-10));
   --chat-card-surface: var(--bg-body);
   --chat-card-raised: color-mix(in srgb, var(--text-primary) 6%, var(--chat-card-surface));
-  max-width: 440px;
-  padding-top: 0;
+  background: none;
+  contain: layout style;
+  container-type: inline-size;
+  --profile-width: min(440px, calc((100vw - 32px) / (1 + var(--profile-frame-side, 0))));
+  max-width: var(--profile-width);
+  max-height: min(80%, 80dvh, calc(100% - 32px - var(--profile-width) * var(--profile-frame-overflow, 0)));
+  top: calc(50% + var(--profile-width) * var(--profile-frame-offset, 0) / 2);
+  overflow: visible;
+  padding: 0;
+}
+
+.popup.chat-profile[data-tutorial-preview] {
+  animation: none;
+}
+
+.chat-profile-card {
+  background-color: var(--chat-card-surface);
+  border-radius: inherit;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+  overflow-y: auto;
+  padding: 0 30px 25px;
+  position: relative;
 }
 
 .chat-card-banner {
@@ -96,6 +119,11 @@
   position: absolute;
   right: 1px;
   width: 14px;
+  z-index: 2;
+}
+
+.chat-card-avatar .chat-avatar-decoration {
+  z-index: 1;
 }
 
 .chat-card-avatar-edit {
@@ -147,7 +175,7 @@
   transform: scale(1);
 }
 
-.popup.chat-profile > h2 {
+.popup.chat-profile .chat-profile-card > h2 {
   margin-bottom: 0;
   overflow-wrap: anywhere;
   padding-right: 0;
@@ -296,8 +324,44 @@
   font-weight: 300;
 }
 
-.popup.chat-profile .input-container {
+.popup.chat-profile .input-container,
+.popup.chat-profile .chat-profile-card > .episode-season-tabs {
   margin-top: 20px;
+}
+
+.chat-profile-images {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.popup.chat-profile .chat-profile-field > .chat-cosmetic-picker:first-child {
+  margin-top: 0;
+}
+
+.chat-profile-card.is-picking > .input-container,
+.chat-profile-card.is-picking .chat-profile-field,
+.chat-profile-card.is-picking .chat-cosmetic-picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.chat-profile-card.is-picking .chat-cosmetic-grid {
+  min-height: 120px;
+}
+
+.popup.chat-profile .input-container > .chat-profile-savebar {
+  background-color: var(--chat-card-surface);
+  bottom: -25px;
+  margin: 8px -30px -25px;
+  padding: 12px 30px 25px;
+  position: sticky;
+  z-index: 2;
+}
+
+.chat-profile-savebar .chat-profile-notice {
+  margin-bottom: 12px;
 }
 
 .popup.chat-profile .input-container > * + *,
@@ -402,6 +466,7 @@
 }
 
 .chat-profile-row + .chat-profile-row,
+.chat-cosmetic-picker + .chat-profile-row,
 .popup.chat-profile .input-container input + .chat-profile-row,
 .popup.chat-conversation .input-container :is(input, .chat-picker, .chat-picker-empty) + .chat-profile-row {
   margin-top: 8px;

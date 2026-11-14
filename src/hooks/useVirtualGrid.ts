@@ -41,6 +41,7 @@ export function useVirtualGrid<T>(
     viewportHeight: 0,
   });
   const frameRef = useRef<number | null>(null);
+  const updateRef = useRef<(() => void) | null>(null);
   const [range, setRange] = useState<VirtualGridRange>(() => ({
     start: 0,
     end: Math.min(INITIAL_ITEM_COUNT, items.length),
@@ -76,9 +77,11 @@ export function useVirtualGrid<T>(
       const card = Array.from(grid.children).find(
         (child) =>
           !child.classList.contains("catalog-virtual-spacer") &&
-          !child.classList.contains("episode-picker-virtual-spacer"),
+          !child.classList.contains("episode-picker-virtual-spacer") &&
+          !child.classList.contains("chat-cosmetic-virtual-spacer"),
       ) as HTMLElement | undefined;
-      const rowHeight = card?.getBoundingClientRect().height ?? 0;
+      const zoom = grid.getBoundingClientRect().width / grid.offsetWidth || 1;
+      const rowHeight = (card?.getBoundingClientRect().height ?? 0) / zoom;
       const rowGap = Number.parseFloat(style.rowGap) || 0;
       if (rowHeight <= 0) return false;
 
@@ -88,7 +91,7 @@ export function useVirtualGrid<T>(
         columns,
         rowHeight,
         rowGap,
-        gridOffset: gridRect.top - viewport.top + getScrollTop(scrollTarget),
+        gridOffset: scrollTarget === grid ? 0 : (gridRect.top - viewport.top) / zoom + getScrollTop(scrollTarget),
         viewportHeight: viewport.height,
       };
       return true;
@@ -140,6 +143,7 @@ export function useVirtualGrid<T>(
       needsMeasure = true;
       scheduleUpdate();
     };
+    updateRef.current = scheduleUpdate;
 
     const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(grid);
@@ -153,6 +157,7 @@ export function useVirtualGrid<T>(
       window.removeEventListener("resize", scheduleMeasure);
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
+      updateRef.current = null;
     };
   }, [enabled, items.length, scrollContainerRef]);
 
@@ -161,5 +166,17 @@ export function useVirtualGrid<T>(
     [items, range.end, range.start],
   );
 
-  return { gridRef, range, visibleItems };
+  const scrollToIndex = (index: number) => {
+    const { columns, rowHeight, rowGap, gridOffset, viewportHeight } = layoutRef.current;
+    if (!rowHeight) return;
+    const target = scrollContainerRef?.current ?? getDefaultScrollTarget();
+    const top = gridOffset + Math.floor(index / columns) * (rowHeight + rowGap);
+    const current = getScrollTop(target);
+    const next = top < current ? top : top + rowHeight > current + viewportHeight ? top + rowHeight - viewportHeight : current;
+    if (target instanceof HTMLElement) target.scrollTop = next;
+    else target.scrollTo({ top: next, behavior: "instant" });
+    updateRef.current?.();
+  };
+
+  return { gridRef, range, visibleItems, scrollToIndex };
 }

@@ -39,10 +39,7 @@ import {
   resolveGameSource,
   resolveTheme,
 } from "../../core/config/settingsOptions.ts";
-import {
-  warmExtensionRuntime,
-  warmProxyRuntime,
-} from "../../core/proxy/proxyRuntime.ts";
+import { warmExtensionRuntime } from "../../core/proxy/proxyRuntime.ts";
 import { getRivet } from "../../core/proxy/rivetBridge.ts";
 import { NEGATIVE, negativeMessage } from "../../core/runtime/messages.ts";
 import { fetchServiceMetadata } from "../../core/runtime/serviceMetadata.ts";
@@ -332,7 +329,7 @@ function applySetting(key: string, value: SettingValue): void {
       if (!value) localStorage.removeItem(HISTORY_STORAGE_KEY);
       break;
     case ADVANCED_SETTING_KEYS.preloadProxy:
-      if (value) warmProxyRuntime();
+      if (value) warmExtensionRuntime();
       break;
     case ADVANCED_SETTING_KEYS.fallingLeaves:
       announce("fallingLeavesUpdated");

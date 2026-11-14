@@ -11,6 +11,7 @@ import { moderate, readModeration } from "../src/features/chat/moderation.ts";
 import { blockedNotice } from "../src/features/chat/moderationNotice.ts";
 import {
   CHAT_CHANNELS,
+  CHAT_COSMETIC_SLOTS,
   CHAT_LIMITS,
   CHAT_MEDIA,
   CHAT_MEDIA_TYPES,
@@ -28,6 +29,7 @@ import {
   conversationIdOf,
   conversationKey,
   isChatAccent,
+  isCosmeticId,
   isChatChannel,
   isChatReaction,
   isChatTarget,
@@ -166,6 +168,8 @@ export function createChatRoom({
     ...(row.display && { display: row.display }),
     ...(row.avatar_hash && { avatar: row.avatar_hash }),
     ...(row.status && { status: row.status }),
+    ...(row.decoration && { decoration: row.decoration }),
+    ...(row.nameplate && { nameplate: row.nameplate }),
   });
   const streamUser = (row) => ({
     id: row.id,
@@ -174,6 +178,8 @@ export function createChatRoom({
     display: row.display,
     avatar_hash: row.avatar_hash,
     status: row.status,
+    decoration: row.decoration,
+    nameplate: row.nameplate,
   });
   const memberCache = new Map();
   const parties = createPartyRegistry({
@@ -623,7 +629,7 @@ export function createChatRoom({
     }
     store.deleteMessage(numeric);
     if (!own) {
-      store.audit({ time, actorId: row.id, action: "delete", targetId: Number(message.author), detail: message.text });
+      store.audit({ time, actorId: row.id, action: "delete", targetId: Number(message.author) });
     }
     broadcast(frame("remove", { id: message.id, channel: message.channel }), message.channel);
     return ok();
@@ -820,6 +826,8 @@ export function createChatRoom({
       ...(target.bio && { bio: target.bio }),
       ...(target.accent && { accent: target.accent }),
       ...(target.banner_hash && { banner: target.banner_hash }),
+      ...(target.effect && { effect: target.effect }),
+      ...(target.frame && { frame: target.frame }),
       ...(staff && target.muted_until > now() && { mutedUntil: target.muted_until }),
       ...(staff && target.banned_until > now() && { bannedUntil: target.banned_until }),
       ...(staff && target.ban_reason && target.banned_until > now() && { banReason: target.ban_reason }),
@@ -865,6 +873,13 @@ export function createChatRoom({
         return httpError(400, "CHAT_PROFILE_INVALID", "that color is not valid", { field: "accent" });
       }
       fields.accent = payload.accent;
+    }
+    for (const slot of CHAT_COSMETIC_SLOTS) {
+      if (payload[slot] === undefined) continue;
+      if (payload[slot] !== null && !isCosmeticId(payload[slot])) {
+        return httpError(400, "CHAT_PROFILE_INVALID", "that cosmetic is not valid", { field: slot });
+      }
+      fields[slot] = payload[slot];
     }
     for (const kind of Object.keys(CHAT_MEDIA)) {
       if (payload[kind] === undefined) continue;

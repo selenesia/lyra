@@ -6,6 +6,7 @@
   }
 
   .chat-members,
+  .chat-self-bar,
   .chat-category-title {
     display: none;
   }
@@ -50,6 +51,16 @@
 
   .chat-card-banner {
     margin: 0 -18px;
+  }
+
+  .chat-profile-card {
+    padding: 0 18px 20px;
+  }
+
+  .popup.chat-profile .input-container > .chat-profile-savebar {
+    bottom: -20px;
+    margin: 8px -18px -20px;
+    padding: 12px 18px 20px;
   }
 
   .chat-party {

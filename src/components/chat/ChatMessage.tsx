@@ -20,7 +20,18 @@ import { RoleBadge } from "./ChatProfile.tsx";
 import ChatPartyCard from "./ChatPartyCard.tsx";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const dateFormat = new Intl.DateTimeFormat("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
 const MEDIA_MAX_HEIGHT = 360;
+
+function messageTime(at: number): string {
+  const time = timeFormat.format(at).toLowerCase();
+  const day = new Date(at).toDateString();
+  const today = new Date();
+  if (day === today.toDateString()) return time;
+  today.setDate(today.getDate() - 1);
+  if (day === today.toDateString()) return `yesterday at ${time}`;
+  return `${dateFormat.format(at)}, ${time}`;
+}
 
 function plainPreview(text: string): string {
   return text.replace(/\|\|.+?(?:\|\||$)/g, "[spoiler]").replace(/\*\*|~~|`/g, "");
@@ -77,6 +88,7 @@ interface ChatMessageProps {
 function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, channels, mentioned, selected, editing, party, actions }: ChatMessageProps) {
   const [picking, setPicking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
     if (!selected) {
@@ -93,6 +105,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
 
   const reactions = Object.entries(entry.reactions ?? {});
   const showMeta = !grouped || !!entry.reply;
+  const replyMember = entry.reply && (mentionMembers.get(entry.reply.name.toLowerCase()) ?? entry.reply);
   const classes = ["chat-message"];
   if (!showMeta) classes.push("grouped");
   if (entry.pending) classes.push("pending");
@@ -108,17 +121,20 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
         if ((event.target as HTMLElement).closest("a, button, [role='button'], video, audio")) return;
         actions.select(selected ? null : entry.id);
       }}
+      onMouseEnter={entry.decoration && showMeta ? () => setHovered(true) : undefined}
       onMouseLeave={() => {
+        setHovered(false);
         if (selected) actions.select(null);
       }}
     >
-      {entry.reply && (
+      {entry.reply && replyMember && (
         <button
           type="button"
           class={`chat-reply-preview${!mine && entry.reply.author === author ? " self" : ""}`}
           onClick={() => actions.jumpTo(entry.reply!.id)}
         >
-          <span class="chat-reply-name">{displayName(mentionMembers.get(entry.reply.name.toLowerCase()) ?? entry.reply)}</span>
+          <ChatAvatar member={replyMember} size={16} />
+          <span class="chat-reply-name">{displayName(replyMember)}</span>
           <span class="chat-reply-text">{plainPreview(entry.reply.text)}</span>
         </button>
       )}
@@ -131,7 +147,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
             aria-hidden="true"
             onClick={() => actions.openProfile(entry)}
           >
-            <ChatAvatar member={entry} size={40} />
+            <ChatAvatar member={entry} size={40} decoration={entry.decoration} animate={hovered} />
           </button>
           <button
             type="button"
@@ -141,7 +157,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
             {displayName(entry)}
           </button>
           <RoleBadge role={entry.role} />
-          <span class="chat-message-time">{timeFormat.format(entry.at).toLowerCase()}</span>
+          <span class="chat-message-time">{messageTime(entry.at)}</span>
         </div>
       )}
       {(entry.text || !entry.party) && (

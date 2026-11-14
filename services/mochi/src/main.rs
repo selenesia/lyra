@@ -1,6 +1,7 @@
 mod admission;
 mod cache;
 mod constants;
+mod cosmetics;
 mod encoding;
 mod deadline;
 mod folio;
@@ -73,6 +74,10 @@ fn main() -> AppResult<()> {
             .unwrap_or_else(|_| "mochi=info".into()))
         .with_ansi(false)
         .init();
+
+    if let Some(code) = cosmetics::run_if_requested() {
+        std::process::exit(code);
+    }
 
     let tuning = tuning::detect();
 
@@ -321,6 +326,9 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
 
     memory::spawn_monitor(state.clone());
 
+    let cosmetics = cosmetics::Cosmetics::new(cosmetics::Config::from_env(), cosmetics::client()?);
+    cosmetics::spawn_refresh(cosmetics.clone());
+
     let port = std::env::var("MOCHI_PORT").unwrap_or_else(|_| "4002".to_string());
     let port = port.parse::<u16>().unwrap_or(4002);
     let host = std::env::var("MOCHI_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -366,6 +374,26 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
         .route(
             &format!("{}*target", folio::REQUEST_PREFIX),
             any(folio::request_handler),
+        )
+        .route(
+            &format!("{}catalog", cosmetics::PREFIX),
+            axum::routing::get({
+                let cosmetics = cosmetics.clone();
+                move |method: axum::http::Method, headers: axum::http::HeaderMap| {
+                    cosmetics::serve::catalog_handler(cosmetics.clone(), method, headers)
+                }
+            }),
+        )
+        .route(
+            &format!("{}a/:name", cosmetics::PREFIX),
+            axum::routing::get({
+                let cosmetics = cosmetics.clone();
+                move |axum::extract::Path(name): axum::extract::Path<String>,
+                      method: axum::http::Method,
+                      headers: axum::http::HeaderMap| {
+                    cosmetics::serve::asset_handler(cosmetics.clone(), name, method, headers)
+                }
+            }),
         )
         .route(
             "/stream/metrics",

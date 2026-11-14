@@ -8,6 +8,7 @@ import {
   CHAT_AUDIO,
   CHAT_CHANNELS,
   CHAT_CONVERSATION_LIMITS,
+  CHAT_COSMETIC_SLOTS,
   CHAT_LIMITS,
   CHAT_PARTY_LIMITS,
   CHAT_VIDEO,
@@ -16,6 +17,7 @@ import {
   type ChatChannel,
   type ChatConversation,
   type ChatConversationKey,
+  type ChatCosmeticSlot,
   type ChatMediaKind,
   type ChatMember,
   type ChatMessage,
@@ -68,7 +70,7 @@ export type ChatResult = {
   removed?: number;
 };
 export type ChatModeration = "role" | "timeout" | "untimeout" | "ban" | "unban" | "clearprofile";
-export type ChatProfileEdit = Partial<Record<"display" | "pronouns" | "status" | "bio", string | null>> &
+export type ChatProfileEdit = Partial<Record<"display" | "pronouns" | "status" | "bio" | ChatCosmeticSlot, string | null>> &
   Partial<Record<ChatMediaKind, null>>;
 
 const PROFILE_FIELD_LABELS: Record<string, string> = {
@@ -96,8 +98,10 @@ function readBlocked(): ChatMember[] {
   }
 }
 
-function withCard<T extends ChatMember | ChatMessage>(entry: T, card: ChatMember, keys: ReadonlyArray<"display" | "avatar" | "status">): T {
-  const next: Partial<Record<"display" | "avatar" | "status", string>> = { ...entry };
+type CardKey = "display" | "avatar" | "status" | "decoration" | "nameplate";
+
+function withCard<T extends ChatMember | ChatMessage>(entry: T, card: ChatMember, keys: ReadonlyArray<CardKey>): T {
+  const next: Partial<Record<CardKey, string>> = { ...entry };
   for (const key of keys) {
     const value = card[key];
     if (value) next[key] = value;
@@ -230,6 +234,7 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
     case "CHAT_PROFILE_BLOCKED":
       return failure(blockedText(field ?? "profile text"));
     case "CHAT_PROFILE_INVALID":
+      if ((CHAT_COSMETIC_SLOTS as readonly unknown[]).includes(body.field)) return failure("that cosmetic is not valid");
       return failure(`that ${field ?? "profile text"} is too long`);
     case "CHAT_MEDIA_TOO_LARGE":
       return failure(`that ${media} is too large`);
@@ -517,7 +522,9 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
           const card = parse<ChatMember>(event);
           setMembers((current) => current.map((member) => (member.author === card.author ? card : member)));
           setViewer((current) =>
-            current?.author === card.author ? withCard(current, card, ["display", "avatar", "status"]) : current,
+            current?.author === card.author
+              ? withCard(current, card, ["display", "avatar", "status", "decoration", "nameplate"])
+              : current,
           );
           setHistory((current) => {
             let next: ChatHistory | undefined;
@@ -526,7 +533,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
               if (!entries.some((entry) => entry.author === card.author || entry.reactors?.[card.author])) continue;
               next ??= { ...current };
               next[key] = entries.map((entry) => {
-                const shown = entry.author === card.author ? withCard(entry, card, ["display", "avatar"]) : entry;
+                const shown = entry.author === card.author ? withCard(entry, card, ["display", "avatar", "decoration"]) : entry;
                 const reactor = shown.reactors?.[card.author];
                 if (!reactor) return shown;
                 const face = { name: reactor.name, ...(card.display && { display: card.display }), ...(card.avatar && { avatar: card.avatar }) };
@@ -766,6 +773,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         role: viewer.role,
         ...(viewer.display && { display: viewer.display }),
         ...(viewer.avatar && { avatar: viewer.avatar }),
+        ...(viewer.decoration && { decoration: viewer.decoration }),
         text,
         at: Date.now(),
         nonce,

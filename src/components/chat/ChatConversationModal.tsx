@@ -16,6 +16,7 @@ import type { ChatResult, useChatRoom } from "../../features/chat/chatRoom.ts";
 import { IconCheckCircle2, IconCrossMedium } from "../icons";
 import ChatAvatar from "./ChatAvatar.tsx";
 import { ChatMemberRow, RoleBadge } from "./ChatProfile.tsx";
+import { useChatDialogNotice } from "./useChatDialogNotice.ts";
 
 const SEARCH_DELAY_MS = 250;
 const CONFIRM_MS = 3_000;
@@ -30,8 +31,6 @@ type ConversationRoom = Pick<
   ReturnType<typeof useChatRoom>,
   "searchUsers" | "openDm" | "createGroup" | "addMembers" | "removeMember" | "renameGroup" | "leaveConversation"
 >;
-
-type Notice = { text: string; tone: "error" | "success" } | null;
 
 function peopleLabel(count: number): string {
   return `${count} ${count === 1 ? "person" : "people"}`;
@@ -58,7 +57,7 @@ interface PeoplePickerProps {
 function PeoplePicker({ id, label, inputRef, candidates, excluded, picked, limit, disabled, searchUsers, onToggle }: PeoplePickerProps) {
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<{ query: string; users: ChatMember[] } | null>(null);
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState(-1);
   const wanted = query.trim();
 
   useEffect(() => {
@@ -94,17 +93,17 @@ function PeoplePicker({ id, label, inputRef, candidates, excluded, picked, limit
 
   const searching = !!wanted && found?.query !== wanted;
   const full = picked.length >= limit;
-  const current = Math.max(0, Math.min(active, options.length - 1));
+  const current = Math.max(-1, Math.min(active, options.length - 1));
   const optionId = (member: ChatMember) => `${id}-option-${member.author}`;
   const isPicked = (member: ChatMember) => picked.some((entry) => entry.author === member.author);
 
   const toggle = (member: ChatMember) => {
     const chosen = isPicked(member);
     if (disabled || (!chosen && full)) return;
+    setActive(-1);
     onToggle(member);
     if (!chosen && wanted) {
       setQuery("");
-      setActive(0);
     }
   };
 
@@ -112,8 +111,10 @@ function PeoplePicker({ id, label, inputRef, candidates, excluded, picked, limit
     if (!options.length) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((current + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
-    } else if (event.key === "Enter") {
+      setActive(current < 0
+        ? event.key === "ArrowDown" ? 0 : options.length - 1
+        : (current + (event.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+    } else if (event.key === "Enter" && current >= 0) {
       event.preventDefault();
       toggle(options[current]!);
     }
@@ -137,12 +138,13 @@ function PeoplePicker({ id, label, inputRef, candidates, excluded, picked, limit
         disabled={disabled}
         onInput={(event) => {
           setQuery(event.currentTarget.value);
-          setActive(0);
+          setActive(-1);
         }}
         onKeyDown={onKeyDown}
+        onBlur={() => setActive(-1)}
       />
       {options.length > 0 ? (
-        <div id={`${id}-options`} class="chat-picker" role="listbox" aria-label={label} aria-multiselectable="true">
+        <div id={`${id}-options`} class="chat-picker" role="listbox" aria-label={label} aria-multiselectable="true" onMouseMove={() => setActive(-1)}>
           {options.map((member, index) => {
             const chosen = isPicked(member);
             const unavailable = !chosen && full;
@@ -161,7 +163,7 @@ function PeoplePicker({ id, label, inputRef, candidates, excluded, picked, limit
                 {member.display && <span class="chat-suggestion-name">{member.display}</span>}
                 <span class={member.display ? "chat-suggestion-handle" : undefined}>@{member.name}</span>
                 <RoleBadge role={member.role} />
-                {chosen && <IconCheckCircle2 size={16} class="chat-suggestion-check" />}
+                {chosen && <IconCheckCircle2 size={16} solid class="chat-suggestion-check" />}
               </div>
             );
           })}
@@ -203,7 +205,7 @@ export default function ChatConversationModal({
   const [groupName, setGroupName] = useState("");
   const [rename, setRename] = useState(conversation?.name ?? "");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice, setNotice] = useChatDialogNotice();
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const closingRef = useRef(false);
@@ -361,9 +363,9 @@ export default function ChatConversationModal({
     </p>
   );
 
-  const memberRows = (members: ChatMember[]) => (
+  const memberRows = (members: ChatMember[], heading?: string) => members.length > 0 && (
     <div class="chat-member-group">
-      <p class="chat-panel-title">{settings?.kind === "dm" ? "direct message with" : `members · ${members.length}`}</p>
+      <p class="chat-panel-title">{settings?.kind === "dm" ? "direct message with" : `${heading ?? "members"} · ${members.length}`}</p>
       {members.map((member) => {
         const self = member.author === viewer.author;
         const removable = !!group && group.owner === viewer.author && !self;
@@ -375,7 +377,6 @@ export default function ChatConversationModal({
               online={onlineAuthors.has(member.author) || self}
               self={self}
               blocked={blocked.has(member.author)}
-              tag={self ? "you" : group?.owner === member.author ? "owner" : undefined}
               onOpen={openProfile}
             />
             {removable && (
@@ -488,7 +489,12 @@ export default function ChatConversationModal({
               </div>
             </div>
           )}
-          {memberRows(group ? settings.members : others)}
+          {group ? (
+            <>
+              {memberRows(settings.members.filter((member) => member.author === group.owner), "group owner")}
+              {memberRows(settings.members.filter((member) => member.author !== group.owner))}
+            </>
+          ) : memberRows(others)}
           <div class="input-container">
             {group && limit > 0 && (
               <div class="chat-profile-field">

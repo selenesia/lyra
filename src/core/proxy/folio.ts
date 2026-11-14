@@ -62,7 +62,6 @@ type FolioControllerConstructor = new (init: {
 type FolioRuntimeGlobals = {
   defaultConfigDev?: unknown;
   defaultConfig?: unknown;
-  prewarmRewriter?: () => boolean;
 };
 
 interface FolioGlobals {
@@ -773,9 +772,6 @@ export async function initializeFolioController(options: {
       });
       await readyController.wait();
       controller = readyController;
-      try {
-        folioGlobals?.prewarmRewriter?.();
-      } catch {}
     }
 
     const app = ((window as unknown as Record<string, unknown>)["Lyra"] ??=

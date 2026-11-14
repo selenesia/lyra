@@ -70,6 +70,7 @@
   max-width: calc(100vw - 16px);
   box-sizing: border-box;
   animation-name: tooltip-edge-in;
+  z-index: 1000000;
 }
 
 .chat-tooltip::before {
@@ -83,6 +84,10 @@
   transform: translateX(-50%) rotate(45deg);
   width: 10px;
   z-index: -1;
+}
+
+.chat-tooltip:not(.is-below)::before {
+  border-radius: 0 0 var(--radius-detail);
 }
 
 .chat-tooltip.is-below::before {
@@ -189,7 +194,7 @@
   width: 100%;
 }
 
-.chat-gif-frame img {
+.chat-gif-frame > :is(img, .chat-cosmetic-media) {
   filter: brightness(var(--game-cover-brightness));
   height: 100%;
   inset: 0;
@@ -201,7 +206,7 @@
   width: 100%;
 }
 
-.chat-gif:not(:disabled):is(:hover, :focus-visible, .active) .chat-gif-frame img {
+.chat-gif:not(:disabled):is(:hover, :focus-visible, .active) .chat-gif-frame > :is(img, .chat-cosmetic-media) {
   filter: brightness(1);
   transform: scale(var(--motion-hover-scale, 1.05));
 }
@@ -224,11 +229,10 @@
   padding: 8px 10px 8px 16px;
 }
 
-.chat-context > span {
+.chat-context-text {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-context strong {

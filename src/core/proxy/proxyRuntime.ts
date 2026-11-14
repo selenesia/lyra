@@ -66,12 +66,6 @@ export function ensureProxyRuntime(): Promise<void> {
   return runtimePromise;
 }
 
-export function warmProxyRuntime(): void {
-  void ensureProxyRuntime().catch((error) => {
-    console.warn("proxy runtime warmup failed:", error, NEGATIVE);
-  });
-}
-
 export function warmExtensionRuntime(): void {
   extensionRuntimePromise ??= ensureProxyRuntime()
     .then(() => window.Lyra?.waitForTransport?.(10000))

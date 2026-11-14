@@ -10,18 +10,25 @@ import {
   type ChatRole,
 } from "../../features/chat/chatRoles.ts";
 import {
+  CHAT_COSMETIC_SLOTS,
   CHAT_MEDIA,
   CHAT_PROFILE_LIMITS,
   displayName,
+  type ChatCosmeticSlot,
   type ChatMediaKind,
   type ChatMember,
   type ChatProfile as Profile,
   type ChatViewer,
 } from "../../features/chat/chatProtocol.ts";
 import { avatarColor, chatMediaUrl, encodeChatImage } from "../../features/chat/chatMedia.ts";
+import { useCosmetics } from "../../features/chat/chatCosmetics.ts";
 import type { ChatModeration, ChatProfileEdit, ChatResult } from "../../features/chat/chatRoom.ts";
 import { IconCrossMedium, IconPencil } from "../icons";
+import type { TutorialProfileStage } from "../layout/Tutorial.tsx";
 import ChatAvatar, { avatarHue } from "./ChatAvatar.tsx";
+import { CosmeticPicker, MemberNameplate, ProfileEffect, ProfileFrame } from "./ChatCosmetics.tsx";
+import { SeasonTabs } from "../watch/SeasonTabs.tsx";
+import { useChatDialogNotice } from "./useChatDialogNotice.ts";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
 const timeFormat = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -61,32 +68,65 @@ interface ChatMemberRowProps {
   online: boolean;
   self: boolean;
   blocked: boolean;
-  tag?: string | undefined;
   onOpen: (member: ChatMember) => void;
 }
 
-export function ChatMemberRow({ member, online, self, blocked, tag, onOpen }: ChatMemberRowProps) {
+export function ChatMemberRow({ member, online, self, blocked, onOpen }: ChatMemberRowProps) {
+  const [hovered, setHovered] = useState(false);
+  const decorated = !!(member.decoration || member.nameplate);
   return (
     <button
       type="button"
-      class={`chat-member chat-member-${member.role}${self ? " self" : ""}${blocked ? " blocked" : ""}`}
+      class={`chat-member chat-member-${member.role}${self ? " self" : ""}${blocked ? " blocked" : ""}${member.nameplate ? " has-nameplate" : ""}`}
       onClick={() => onOpen(member)}
+      onMouseEnter={decorated ? () => setHovered(true) : undefined}
+      onMouseLeave={decorated ? () => setHovered(false) : undefined}
+      onFocus={decorated ? () => setHovered(true) : undefined}
+      onBlur={decorated ? () => setHovered(false) : undefined}
     >
+      {member.nameplate && <MemberNameplate id={member.nameplate} active={hovered} />}
       <span class="chat-member-face">
-        <ChatAvatar member={member} size={32} />
+        <ChatAvatar member={member} size={32} decoration={member.decoration} animate={hovered} />
         {online && <span class="chat-member-dot" />}
       </span>
       <span class="chat-member-text">
         <span class="chat-member-name">{displayName(member)}</span>
         {online && member.status && <span class="chat-member-status">{member.status}</span>}
       </span>
-      {tag && <span class="chat-member-tag">{tag}</span>}
     </button>
   );
 }
 
 type TextDraft = Record<TextField, string>;
 type MediaDraft = Partial<Record<ChatMediaKind, { blob: Blob; url: string } | null>>;
+type CosmeticDraft = Partial<Record<ChatCosmeticSlot, string | null>>;
+
+const COSMETIC_LABELS: Record<ChatCosmeticSlot, string> = {
+  decoration: "avatar decoration",
+  effect: "profile effect",
+  nameplate: "nameplate",
+  frame: "profile frame",
+};
+
+type EditTab = "profile" | ChatCosmeticSlot;
+
+const EDIT_TABS: Array<{ key: EditTab; label: string }> = [
+  { key: "profile", label: "profile" },
+  { key: "decoration", label: "decoration" },
+  { key: "effect", label: "effect" },
+  { key: "nameplate", label: "nameplate" },
+  { key: "frame", label: "frame" },
+];
+
+function withCosmetics(profile: Profile, draft: CosmeticDraft): Profile {
+  const next: Profile = { ...profile };
+  for (const slot of CHAT_COSMETIC_SLOTS) {
+    const value = draft[slot];
+    if (value) next[slot] = value;
+    else if (value === null) delete next[slot];
+  }
+  return next;
+}
 
 function draftOf(profile: Profile): TextDraft {
   return {
@@ -121,6 +161,7 @@ interface ChatProfileProps {
   onMessage: (member: ChatMember) => Promise<ChatResult>;
   onToggleBlock: (member: ChatMember) => void;
   onClose: () => void;
+  tutorialStage?: TutorialProfileStage | undefined;
 }
 
 export default function ChatProfile({
@@ -137,15 +178,18 @@ export default function ChatProfile({
   onMessage,
   onToggleBlock,
   onClose,
+  tutorialStage,
 }: ChatProfileProps) {
   const [isClosing, setIsClosing] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; tone: "error" | "success" } | null>(null);
-  const [draft, setDraft] = useState<TextDraft | null>(null);
+  const [notice, setNotice] = useChatDialogNotice();
+  const [profileDraft, setDraft] = useState<TextDraft | null>(null);
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [media, setMedia] = useState<MediaDraft>({});
+  const [cosmetics, setCosmetics] = useState<CosmeticDraft>({});
+  const [tab, setTab] = useState<EditTab>("profile");
   const [sampled, setSampled] = useState<{ src: string; color: string | null } | null>(null);
   const closingRef = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -164,13 +208,18 @@ export default function ChatProfile({
     isClosing,
     onRequestClose: requestClose,
     onCloseComplete: onClose,
+    closeOnEscape: !tutorialStage,
+    closeOnOverlay: !tutorialStage,
+    useOverlay: !tutorialStage,
   });
 
   const refresh = useCallback(() => {
     void loadProfile(author).then((next) => setProfile(next));
   }, [author, loadProfile]);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    if (!tutorialStage) refresh();
+  }, [refresh, tutorialStage]);
 
   useEffect(
     () => () => {
@@ -181,6 +230,7 @@ export default function ChatProfile({
 
   const shown: Profile = profile ?? { ...fallback, joinedAt: 0 };
   const self = viewer.author === author;
+  const draft = tutorialStage === "edit" ? draftOf(shown) : profileDraft;
   const editing = self && !!draft;
   const timeoutAllowed = !self && canTimeout(viewer.role, shown.role);
   const banAllowed = !self && canBan(viewer.role, shown.role);
@@ -220,6 +270,8 @@ export default function ChatProfile({
 
   const stopEditing = useCallback(() => {
     for (const kind of MEDIA_KINDS) replaceMedia(kind, undefined);
+    setCosmetics({});
+    setTab("profile");
     setDraft(null);
   }, [replaceMedia]);
 
@@ -299,6 +351,10 @@ export default function ChatProfile({
       const value = draft[key].trim();
       if (value !== base[key]) fields[key] = value || null;
     }
+    for (const slot of CHAT_COSMETIC_SLOTS) {
+      const value = cosmetics[slot];
+      if (value !== undefined && value !== (shown[slot] ?? null)) fields[slot] = value;
+    }
     const steps: Array<() => Promise<ChatResult>> = [];
     for (const kind of MEDIA_KINDS) {
       const pick = media[kind];
@@ -327,9 +383,10 @@ export default function ChatProfile({
     if (latest) setProfile(latest);
     stopEditing();
     setNotice({ text: positiveMessage("profile saved"), tone: "success" });
-  }, [draft, media, saveProfile, shown, stopEditing, uploadMedia]);
+  }, [cosmetics, draft, media, saveProfile, shown, stopEditing, uploadMedia]);
 
-  const look = editing ? previewOf(shown, draft) : shown;
+  const look = editing ? withCosmetics(previewOf(shown, draft), cosmetics) : shown;
+  const frame = useCosmetics(!!look.frame)?.find("frame", look.frame);
   const statusValue = editing ? draft.status : (liveStatus ?? shown.status ?? "");
   const avatarSrc = media.avatar === undefined ? undefined : (media.avatar?.url ?? null);
   const bannerSrc =
@@ -385,7 +442,7 @@ export default function ChatProfile({
       <label>{label}</label>
       <div class="chat-profile-row">
         <button type="button" class="chat-secondary-btn" disabled={busy} onClick={() => choose(kind)}>
-          upload image
+          upload
         </button>
         <button
           type="button"
@@ -399,271 +456,334 @@ export default function ChatProfile({
     </div>
   );
 
+  const cosmeticField = (slot: ChatCosmeticSlot) => {
+    const label = COSMETIC_LABELS[slot];
+    return (
+      <div class="chat-profile-field">
+        <CosmeticPicker
+          key={slot}
+          slot={slot}
+          label={label}
+          value={look[slot]}
+          member={look}
+          disabled={busy}
+          onPick={(id) => setCosmetics((current) => ({ ...current, [slot]: id }))}
+        />
+        <div class="chat-profile-row">
+          <button
+            type="button"
+            class="chat-secondary-btn"
+            disabled={busy || !look[slot]}
+            onClick={() => setCosmetics((current) => ({ ...current, [slot]: null }))}
+          >
+            remove {label}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div
       id="chat-profile-modal"
+      data-tutorial-preview={tutorialStage}
       class={`popup chat-profile ${modalStateClass}`}
-      style={bannerColor ? `--chat-card-accent:${bannerColor}` : undefined}
+      style={{
+        "--chat-card-accent": bannerColor ?? undefined,
+        "--profile-frame-side": frame ? 2 * frame.side / frame.inner : 0,
+        "--profile-frame-overflow": frame ? (frame.top + frame.bottom) / frame.inner : 0,
+        "--profile-frame-offset": frame ? (frame.top - frame.bottom) / frame.inner : 0,
+      }}
       onAnimationEnd={onAnimationEnd}
     >
-      <div class={`chat-card-banner${bannerSrc ? " has-image" : ""}`}>
-        {bannerSrc && <img src={bannerSrc} alt="" decoding="async" draggable={false} />}
-        {editing && (
-          <button type="button" class="chat-card-change" disabled={busy} onClick={() => choose("banner")}>
-            <IconPencil size={16} />
-            change banner
-          </button>
-        )}
-      </div>
-      <div class="chat-card-head">
-        <button
-          type="button"
-          class="chat-card-avatar"
-          disabled={!editing || busy}
-          aria-label={editing ? "change avatar" : undefined}
-          onClick={() => choose("avatar")}
-        >
-          <ChatAvatar member={look} size={84} src={avatarSrc} />
-          {online && <span class="chat-member-dot chat-card-dot" />}
+      <ProfileFrame id={look.frame} front={false} />
+      <div class={`chat-profile-card${editing && tab !== "profile" ? " is-picking" : ""}`}>
+        <div class={`chat-card-banner${bannerSrc ? " has-image" : ""}`}>
+          {bannerSrc && <img src={bannerSrc} alt="" decoding="async" draggable={false} />}
           {editing && (
-            <span class="chat-card-avatar-edit">
-              <IconPencil size={22} />
-            </span>
+            <button type="button" class="chat-card-change" disabled={busy} onClick={() => choose("banner")}>
+              <IconPencil size={16} />
+              change banner
+            </button>
           )}
-        </button>
-        {self ? (
-          <label class="chat-card-status is-editing">
-            <span aria-hidden="true">{statusValue || TEXT_FIELD_COPY.status.placeholder}</span>
-            <textarea
-              rows={1}
-              cols={1}
-              value={statusValue}
-              maxLength={CHAT_PROFILE_LIMITS.status}
-              placeholder={TEXT_FIELD_COPY.status.placeholder}
-              aria-label={TEXT_FIELD_COPY.status.label}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                if (!editing) event.currentTarget.blur();
-              }}
-              onInput={(event) => {
-                const next = event.currentTarget.value.replace(/\s*\n\s*/g, " ");
-                if (editing) editDraft({ status: next });
-                else setLiveStatus(next);
-              }}
-              onBlur={() => {
-                if (!editing) void commitStatus();
-              }}
-            />
-          </label>
-        ) : (
-          online && look.status && (
-            <p class="chat-card-status" title={look.status}>
-              <span>{look.status}</span>
-            </p>
-          )
-        )}
-        {self && !editing && (
-          <button type="button" class="chat-card-edit" onClick={() => setDraft({ ...draftOf(shown), status: statusValue })}>
-            <IconPencil size={14} />
-            edit profile
+        </div>
+        <div class="chat-card-head">
+          <button
+            type="button"
+            class="chat-card-avatar"
+            disabled={!editing || busy}
+            aria-label={editing ? "change avatar" : undefined}
+            onClick={() => choose("avatar")}
+          >
+            <ChatAvatar member={look} size={84} src={avatarSrc} decoration={look.decoration} animate />
+            {editing && (
+              <span class="chat-card-avatar-edit">
+                <IconPencil size={22} />
+              </span>
+            )}
+            {online && <span class="chat-member-dot chat-card-dot" />}
           </button>
+          {self ? (
+            <label class="chat-card-status is-editing">
+              <span aria-hidden="true">{statusValue || TEXT_FIELD_COPY.status.placeholder}</span>
+              <textarea
+                rows={1}
+                cols={1}
+                value={statusValue}
+                maxLength={CHAT_PROFILE_LIMITS.status}
+                placeholder={TEXT_FIELD_COPY.status.placeholder}
+                aria-label={TEXT_FIELD_COPY.status.label}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  if (!editing) event.currentTarget.blur();
+                }}
+                onInput={(event) => {
+                  const next = event.currentTarget.value.replace(/\s*\n\s*/g, " ");
+                  if (editing) editDraft({ status: next });
+                  else setLiveStatus(next);
+                }}
+                onBlur={() => {
+                  if (!editing) void commitStatus();
+                }}
+              />
+            </label>
+          ) : (
+            online && look.status && (
+              <p class="chat-card-status" title={look.status}>
+                <span>{look.status}</span>
+              </p>
+            )
+          )}
+          {self && !editing && (
+            <button type="button" class="chat-card-edit" onClick={() => setDraft({ ...draftOf(shown), status: statusValue })}>
+              <IconPencil size={14} />
+              edit profile
+            </button>
+          )}
+        </div>
+        <h2>
+          {displayName(look)}
+          <RoleBadge role={shown.role} />
+        </h2>
+        <p class="chat-card-handle">
+          <span>@{shown.name}</span>
+          {(editing || look.pronouns) && <span aria-hidden="true">·</span>}
+          {editing ? (
+            <label class="chat-card-pronouns">
+              <span aria-hidden="true">{draft.pronouns || TEXT_FIELD_COPY.pronouns.placeholder}</span>
+              <input
+                type="text"
+                size={1}
+                value={draft.pronouns}
+                maxLength={CHAT_PROFILE_LIMITS.pronouns}
+                placeholder={TEXT_FIELD_COPY.pronouns.placeholder}
+                aria-label={TEXT_FIELD_COPY.pronouns.label}
+                autocomplete="off"
+                onInput={(event) => editDraft({ pronouns: event.currentTarget.value })}
+              />
+            </label>
+          ) : (
+            look.pronouns && <span>{look.pronouns}</span>
+          )}
+        </p>
+        {editing && (
+          <SeasonTabs
+            options={EDIT_TABS.map((option) => ({
+              key: option.key,
+              label: option.label,
+              active: tab === option.key,
+              onSelect: () => setTab(option.key),
+            }))}
+          />
         )}
-      </div>
-      <h2>
-        {displayName(look)}
-        <RoleBadge role={shown.role} />
-      </h2>
-      <p class="chat-card-handle">
-        <span>@{shown.name}</span>
-        {(editing || look.pronouns) && <span aria-hidden="true">·</span>}
-        {editing ? (
-          <label class="chat-card-pronouns">
-            <span aria-hidden="true">{draft.pronouns || TEXT_FIELD_COPY.pronouns.placeholder}</span>
-            <input
-              type="text"
-              size={1}
-              value={draft.pronouns}
-              maxLength={CHAT_PROFILE_LIMITS.pronouns}
-              placeholder={TEXT_FIELD_COPY.pronouns.placeholder}
-              aria-label={TEXT_FIELD_COPY.pronouns.label}
-              autocomplete="off"
-              onInput={(event) => editDraft({ pronouns: event.currentTarget.value })}
-            />
-          </label>
-        ) : (
-          look.pronouns && <span>{look.pronouns}</span>
-        )}
-      </p>
-      <div class="input-container">
-        {editing ? (
-          <>
-            {text("display")}
-            {text("bio")}
-            {image("avatar", "avatar")}
-            {image("banner", "banner")}
-            <div class="chat-profile-actions">
-              <button type="button" disabled={busy} onClick={() => void save()}>
-                {busy ? "saving..." : "save"}
-              </button>
-              <button type="button" class="chat-secondary-btn" disabled={busy} onClick={stopEditing}>
-                cancel
-              </button>
-            </div>
-            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => void pickImage(event)} />
-          </>
-        ) : (
-          <div class="chat-card-panel">
-            {look.bio && (
+        <div class="input-container">
+          {editing ? (
+            <>
+              {tab === "profile" ? (
+                <>
+                  {text("display")}
+                  {text("bio")}
+                  <div class="chat-profile-images">
+                    {image("avatar", "avatar")}
+                    {image("banner", "banner")}
+                  </div>
+                </>
+              ) : (
+                cosmeticField(tab)
+              )}
+              <div class="chat-profile-savebar">
+                {notice && (
+                  <p class="chat-profile-notice" data-tone={notice.tone} aria-live="polite">
+                    {notice.text}
+                  </p>
+                )}
+                <div class="chat-profile-actions">
+                  <button type="button" disabled={busy} onClick={() => void save()}>
+                    {busy ? "saving..." : "save"}
+                  </button>
+                  <button type="button" class="chat-secondary-btn" disabled={busy} onClick={stopEditing}>
+                    cancel
+                  </button>
+                </div>
+              </div>
+              <input ref={fileRef} type="file" accept="image/*" hidden onChange={(event) => void pickImage(event)} />
+            </>
+          ) : (
+            <div class="chat-card-panel">
+              {look.bio && (
+                <div class="chat-profile-field">
+                  <label>bio</label>
+                  <p class="chat-card-bio">{look.bio}</p>
+                </div>
+              )}
               <div class="chat-profile-field">
-                <label>bio</label>
-                <p class="chat-card-bio">{look.bio}</p>
+                <p class="chat-profile-meta">{meta.join(" · ") || "loading..."}</p>
+                {shown.banReason && <p class="chat-profile-meta">ban reason: {shown.banReason}</p>}
               </div>
-            )}
-            <div class="chat-profile-field">
-              <p class="chat-profile-meta">{meta.join(" · ") || "loading..."}</p>
-              {shown.banReason && <p class="chat-profile-meta">ban reason: {shown.banReason}</p>}
             </div>
-          </div>
-        )}
+          )}
 
-        {!self && (
-          <div class="chat-profile-actions">
-            <button
-              type="button"
-              onClick={() => {
-                onMention(shown.name);
-                requestClose();
-              }}
-            >
-              mention
-            </button>
-            <button type="button" class="chat-secondary-btn" disabled={busy} onClick={() => void message()}>
-              message
-            </button>
-            <button type="button" class="chat-secondary-btn" onClick={() => onToggleBlock(shown)}>
-              {blocked ? "unblock" : "block"}
-            </button>
-          </div>
-        )}
-
-        {roles.length > 0 && (
-          <div class="chat-profile-field">
-            <label>role</label>
-            <p class="chat-profile-hint">mods can time out, ban, and reset profiles. admins can also set roles.</p>
-            <div class="chat-profile-row">
-              {roles.map((role) => (
-                <button
-                  type="button"
-                  key={role}
-                  class={role === shown.role ? "" : "chat-secondary-btn"}
-                  disabled={busy || role === shown.role}
-                  onClick={() => void run("role", { role }, `${shown.name} is now ${CHAT_ROLE_LABELS[role]}`)}
-                >
-                  {CHAT_ROLE_LABELS[role]}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {timeoutAllowed && (
-          <div class="chat-profile-field">
-            <label>timeout</label>
-            <p class="chat-profile-hint">they can still read chat but cannot send messages.</p>
-            <div class="chat-profile-row">
-              {CHAT_TIMEOUTS.map((option) => (
-                <button
-                  type="button"
-                  key={option.minutes}
-                  class="chat-secondary-btn"
-                  disabled={busy}
-                  onClick={() => void run("timeout", { minutes: option.minutes }, `${shown.name} is timed out for ${option.label}`)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            {shown.mutedUntil && (
-              <div class="chat-profile-row">
-                <button type="button" disabled={busy} onClick={() => void run("untimeout", {}, "timeout ended")}>
-                  end timeout
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {timeoutAllowed && (
-          <div class="chat-profile-field">
-            <label>reset profile</label>
-            <p class="chat-profile-hint">clears everything they set, including images.</p>
-            <div class="chat-profile-row">
+          {!self && (
+            <div class="chat-profile-actions">
               <button
                 type="button"
-                class="chat-secondary-btn"
-                disabled={busy}
-                onClick={() => void run("clearprofile", {}, `${shown.name}'s profile is reset`)}
+                onClick={() => {
+                  onMention(shown.name);
+                  requestClose();
+                }}
               >
-                reset profile
+                mention
+              </button>
+              <button type="button" class="chat-secondary-btn" disabled={busy} onClick={() => void message()}>
+                message
+              </button>
+              <button type="button" class="chat-secondary-btn" onClick={() => onToggleBlock(shown)}>
+                {blocked ? "unblock" : "block"}
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {banAllowed && (
-          <div class="chat-profile-field">
-            <label for="chat-ban-reason">ban</label>
-            {shown.bannedUntil ? (
-              <>
-                <p class="chat-profile-hint">they cannot use chat until they are unbanned.</p>
-                <div class="chat-profile-row">
-                  <button type="button" disabled={busy} onClick={() => void run("unban", {}, `${shown.name} is unbanned`)}>
-                    unban
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p class="chat-profile-hint">removes them from chat. they will see the reason if you give one.</p>
-                <input
-                  id="chat-ban-reason"
-                  type="text"
-                  value={reason}
-                  maxLength={200}
-                  placeholder="reason (optional)"
-                  autocomplete="off"
-                  onInput={(event) => setReason(event.currentTarget.value)}
-                />
-                <div class="chat-profile-row">
+          {roles.length > 0 && (
+            <div class="chat-profile-field">
+              <label>role</label>
+              <p class="chat-profile-hint">mods can time out, ban, and reset profiles. admins can also set roles.</p>
+              <div class="chat-profile-row">
+                {roles.map((role) => (
                   <button
                     type="button"
-                    class="chat-danger-btn"
-                    disabled={busy}
-                    onClick={() => void run("ban", { reason }, `${shown.name} is banned`)}
+                    key={role}
+                    class={role === shown.role ? "" : "chat-secondary-btn"}
+                    disabled={busy || role === shown.role}
+                    onClick={() => void run("role", { role }, `${shown.name} is now ${CHAT_ROLE_LABELS[role]}`)}
                   >
-                    ban
+                    {CHAT_ROLE_LABELS[role]}
                   </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {timeoutAllowed && (
+            <div class="chat-profile-field">
+              <label>timeout</label>
+              <p class="chat-profile-hint">they can still read chat but cannot send messages.</p>
+              <div class="chat-profile-row">
+                {CHAT_TIMEOUTS.map((option) => (
                   <button
                     type="button"
-                    class="chat-danger-btn"
+                    key={option.minutes}
+                    class="chat-secondary-btn"
                     disabled={busy}
-                    onClick={() => void run("ban", { reason, purge: true }, `${shown.name} is banned and their last 24h of messages are deleted`)}
+                    onClick={() => void run("timeout", { minutes: option.minutes }, `${shown.name} is timed out for ${option.label}`)}
                   >
-                    ban + delete last 24h
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              {shown.mutedUntil && (
+                <div class="chat-profile-row">
+                  <button type="button" disabled={busy} onClick={() => void run("untimeout", {}, "timeout ended")}>
+                    end timeout
                   </button>
                 </div>
-              </>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
 
-        {notice && (
-          <p class="chat-profile-notice" data-tone={notice.tone} aria-live="polite">
-            {notice.text}
-          </p>
-        )}
+          {timeoutAllowed && (
+            <div class="chat-profile-field">
+              <label>reset profile</label>
+              <p class="chat-profile-hint">clears everything they set, including images.</p>
+              <div class="chat-profile-row">
+                <button
+                  type="button"
+                  class="chat-secondary-btn"
+                  disabled={busy}
+                  onClick={() => void run("clearprofile", {}, `${shown.name}'s profile is reset`)}
+                >
+                  reset profile
+                </button>
+              </div>
+            </div>
+          )}
+
+          {banAllowed && (
+            <div class="chat-profile-field">
+              <label for="chat-ban-reason">ban</label>
+              {shown.bannedUntil ? (
+                <>
+                  <p class="chat-profile-hint">they cannot use chat until they are unbanned.</p>
+                  <div class="chat-profile-row">
+                    <button type="button" disabled={busy} onClick={() => void run("unban", {}, `${shown.name} is unbanned`)}>
+                      unban
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p class="chat-profile-hint">removes them from chat. they will see the reason if you give one.</p>
+                  <input
+                    id="chat-ban-reason"
+                    type="text"
+                    value={reason}
+                    maxLength={200}
+                    placeholder="reason (optional)"
+                    autocomplete="off"
+                    onInput={(event) => setReason(event.currentTarget.value)}
+                  />
+                  <div class="chat-profile-row">
+                    <button
+                      type="button"
+                      class="chat-danger-btn"
+                      disabled={busy}
+                      onClick={() => void run("ban", { reason }, `${shown.name} is banned`)}
+                    >
+                      ban
+                    </button>
+                    <button
+                      type="button"
+                      class="chat-danger-btn"
+                      disabled={busy}
+                      onClick={() => void run("ban", { reason, purge: true }, `${shown.name} is banned and their last 24h of messages are deleted`)}
+                    >
+                      ban + delete last 24h
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {notice && !editing && (
+            <p class="chat-profile-notice" data-tone={notice.tone} aria-live="polite">
+              {notice.text}
+            </p>
+          )}
+        </div>
       </div>
+      <ProfileEffect key={look.effect} id={look.effect} />
+      <ProfileFrame id={look.frame} front />
       <button type="button" class="modal-close-btn" aria-label="close" onClick={requestClose}>
         <IconCrossMedium />
       </button>

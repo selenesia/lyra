@@ -183,6 +183,12 @@ export async function doNetworkFetch(
 	newheaders: FolioHeaders,
 	serverRewrite = true
 ): Promise<BareResponse> {
+	const transport = handler.client.transport;
+	if (
+		serverRewrite && !transport.ready && "folioRewriter" in transport &&
+		request.method === "GET" &&
+		["script", "worker", "sharedworker"].includes(parsed.destination)
+	) await transport.init();
 	const intent = serverRewrite
 		? serverRewriteIntent(handler, parsed, request.method)
 		: null;

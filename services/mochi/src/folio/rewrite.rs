@@ -28,6 +28,7 @@ const MAX_URL_MODEL: u32 = 8192;
 const BLOCKING_DIGEST_BYTES: usize = 1024 * 1024;
 const FAILED_SCRIPT_TTL: Duration = Duration::from_secs(5 * 60);
 const BLOCKING_INFLATE_BYTES: usize = 64 * 1024;
+const MAX_OUTPUT_GROWTH: u64 = 8;
 
 const JAVASCRIPT_ESSENCES: &[&str] = &[
     "application/ecmascript",
@@ -382,6 +383,12 @@ impl FolioRewriter {
         ran.store(true, Ordering::Relaxed);
         let started = Instant::now();
         match self.backend.run(&job, &body).await {
+            PoolOutcome::Done {
+                reply: WorkerReply::Rewritten { length, .. },
+                ..
+            } if length > (self.max_bytes as u64).saturating_mul(MAX_OUTPUT_GROWTH) => {
+                Ok(RewriteEntry::Declined("too-large"))
+            }
             PoolOutcome::Done {
                 reply: WorkerReply::Rewritten { patched, length },
                 payload,

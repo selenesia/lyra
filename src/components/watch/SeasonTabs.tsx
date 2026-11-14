@@ -1,4 +1,5 @@
 import { useSlidingPill } from "../../hooks/useSlidingPill.ts";
+import "../../assets/styles/watch/season-tabs.css";
 
 export interface SeasonTabOption {
   key: string | number;

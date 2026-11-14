@@ -1,4 +1,5 @@
 import {
+	flagEnabled,
 	rewriteUrl,
 	FolioContext,
 	FolioHeaders,
@@ -86,7 +87,9 @@ export async function rewriteResponseHeaders(
 
 	headers.delete("set-cookie");
 
-	if (headers.get(SERVER_REWRITTEN_HEADER) === "2") {
+	const served = headers.get(SERVER_REWRITTEN_HEADER);
+	if (served === "2" || (served && (parsed.destination !== "script" ||
+		flagEnabled("debugSourceURL", handler.context, parsed.meta.origin)))) {
 		headers.delete("content-length");
 	}
 	headers.delete(SERVER_REWRITTEN_HEADER);

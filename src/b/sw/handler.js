@@ -1,4 +1,8 @@
 self.addEventListener("install", (event) => {
+  if (isFolio && !self.__LYRA_APP_BASE__) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
   event.waitUntil(
     caches
       .open(SHELL_CACHE)

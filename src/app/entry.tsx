@@ -17,7 +17,7 @@ import {
   readMotionPreference,
 } from "../core/config/advancedSettings.ts";
 import { loadCloudSync } from "./loaders.ts";
-import { warmProxyRuntime } from "../core/proxy/proxyRuntime.ts";
+import { warmExtensionRuntime } from "../core/proxy/proxyRuntime.ts";
 import { fetchServiceMetadata } from "../core/runtime/serviceMetadata.ts";
 import { isStatic } from "../core/runtime/hosting.ts";
 import "../assets/styles/base/themes.css";
@@ -127,7 +127,7 @@ function initializeLyraApp() {
   }, 1500);
 
   scheduleIdleTask(() => {
-    if (readAdvancedToggle("preloadProxy")) warmProxyRuntime();
+    if (readAdvancedToggle("preloadProxy")) warmExtensionRuntime();
   }, 750);
 
   const onSwMessage = (e: MessageEvent) => handleServiceWorkerMessage(e);

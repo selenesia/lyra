@@ -1,5 +1,4 @@
 import "./global";
-import { base64ToBytes } from "@/shared/util";
 import { setWasm } from "@rewriters/wasm";
 import { FolioVersionInfo, FolioConfig } from "./types";
 
@@ -63,7 +62,7 @@ export const defaultConfigDev: FolioConfig = {
 
 declare const REWRITERWASM: string | undefined;
 if (REWRITERWASM) {
-	setWasm(base64ToBytes(REWRITERWASM));
+	setWasm(REWRITERWASM);
 }
 
 export * from "./symbols";

@@ -205,27 +205,29 @@ fn with_sourcemap(job: &WorkerJob, js: &[u8], map: &[u8], tag: &str) -> Vec<u8> 
         return js.to_vec();
     }
     let js = js.strip_prefix(b"\xef\xbb\xbf").unwrap_or(js);
-    let call = format!(
-        "{}(\"{}\", \"{}\");",
-        job.config.pushsourcemapfn,
-        base64::engine::general_purpose::STANDARD.encode(map),
-        tag
+    let encoded_len = map.len().div_ceil(3) * 4;
+    let mut output = Vec::with_capacity(
+        js.len() + job.config.pushsourcemapfn.len() + encoded_len + tag.len() + 10,
     );
-    let directive = strict_directive_end(js);
-    let mut output = Vec::with_capacity(js.len() + call.len() + 1);
-    match directive {
-        Some(end) => {
-            output.extend_from_slice(&js[..end]);
-            output.push(b'\n');
-            output.extend_from_slice(call.as_bytes());
-            output.extend_from_slice(&js[end..]);
-        }
-        None => {
-            output.extend_from_slice(call.as_bytes());
-            output.push(b'\n');
-            output.extend_from_slice(js);
-        }
+    let end = strict_directive_end(js).unwrap_or(0);
+    if end != 0 {
+        output.extend_from_slice(&js[..end]);
+        output.push(b'\n');
     }
+    output.extend_from_slice(job.config.pushsourcemapfn.as_bytes());
+    output.extend_from_slice(b"(\"");
+    let start = output.len();
+    output.resize(start + encoded_len, 0);
+    base64::engine::general_purpose::STANDARD
+        .encode_slice(map, &mut output[start..])
+        .expect("source map buffer is too small... /ᐠ - ˕ -マ");
+    output.extend_from_slice(b"\", \"");
+    output.extend_from_slice(tag.as_bytes());
+    output.extend_from_slice(b"\");");
+    if end == 0 {
+        output.push(b'\n');
+    }
+    output.extend_from_slice(&js[end..]);
     output
 }
 
@@ -258,7 +260,6 @@ fn compress(bytes: &[u8]) -> io::Result<Vec<u8>> {
         BROTLI_WINDOW,
     );
     encoder.write_all(bytes)?;
-    encoder.flush()?;
     Ok(encoder.into_inner())
 }
 

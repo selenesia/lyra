@@ -3,6 +3,7 @@ import {
 	Rewriter as WasmRewriter,
 } from "../../../rewriter/wasm/out/wasm.js";
 import { flagEnabled, FolioContext } from "@/shared";
+import { base64ToBytes } from "@/shared/util";
 
 export type JsRewriterOutput = {
 	js: Uint8Array;
@@ -37,16 +38,20 @@ export interface Rewriter {
 import { URLMeta } from "@rewriters/url";
 import { Error } from "@/shared/snapshot";
 
-let wasm_u8: Uint8Array;
+let wasmSource: Uint8Array | string | undefined;
 let initialized = false;
-export function setWasm(u8: Uint8Array | ArrayBuffer) {
-	wasm_u8 = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
+export function setWasm(source: Uint8Array | ArrayBuffer | string) {
+	if (!initialized) {
+		wasmSource = typeof source === "string" || source instanceof Uint8Array
+			? source : new Uint8Array(source);
+	}
 }
 
 const MAGIC = "\0asm".split("").map((x) => x.charCodeAt(0));
 
 function initWasm() {
 	if (initialized) return;
+	const wasm_u8 = typeof wasmSource === "string" ? base64ToBytes(wasmSource) : wasmSource;
 	if (!(wasm_u8 instanceof Uint8Array))
 		throw new Error("rewriter wasm is unavailable /ᐠ - ˕ -マ");
 
@@ -57,6 +62,7 @@ function initWasm() {
 		module: wasm_u8,
 	});
 	initialized = true;
+	wasmSource = undefined;
 }
 
 type RewriterBox = { rewriter: Rewriter; inUse: boolean };

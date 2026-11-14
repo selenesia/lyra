@@ -22,6 +22,7 @@ export const CHAT_VIDEO = { bytes: 25 * 1024 * 1024, seconds: 60, side: 4096 } a
 export const CHAT_AUDIO = { bytes: 20 * 1024 * 1024, seconds: 15 * 60 } as const;
 export const CHAT_UPLOAD_BYTES = Math.max(CHAT_ATTACHMENT.gif.bytes, CHAT_VIDEO.bytes, CHAT_AUDIO.bytes);
 export const CHAT_PROFILE_TEXT = ["display", "pronouns", "status", "bio"] as const;
+export const CHAT_COSMETIC_SLOTS = ["decoration", "effect", "nameplate", "frame"] as const;
 export const CHAT_CONVERSATION_LIMITS = { name: 32, groupMembers: 10, groups: 30, userSearch: 8 } as const;
 export const CHAT_PARTY_LIMITS = { watchers: 50, hosted: 3, query: 2048, messages: 100, idleMs: 10 * 60_000, maxMs: 12 * 60 * 60_000 } as const;
 export const CHAT_PARTY_PATHS = { watch: "/stream/watch", anime: "/stream/anime" } as const;
@@ -39,6 +40,7 @@ export type ChatPartyControl = "host" | "everyone";
 export type ChatMediaKind = keyof typeof CHAT_MEDIA;
 export type ChatAttachmentKind = "image" | "video" | "audio";
 export type ChatProfileText = (typeof CHAT_PROFILE_TEXT)[number];
+export type ChatCosmeticSlot = (typeof CHAT_COSMETIC_SLOTS)[number];
 
 interface ChatReply {
   id: string;
@@ -121,6 +123,7 @@ export interface ChatMessage {
   attachment?: { type: string; width: number; height: number };
   display?: string;
   avatar?: string;
+  decoration?: string;
   nonce?: string;
   editedAt?: number;
   reply?: ChatReply;
@@ -137,6 +140,8 @@ export interface ChatMember {
   display?: string;
   avatar?: string;
   status?: string;
+  decoration?: string;
+  nameplate?: string;
 }
 
 export interface ChatPresence {
@@ -158,6 +163,8 @@ export interface ChatProfile extends ChatMember {
   pronouns?: string;
   bio?: string;
   banner?: string;
+  effect?: string;
+  frame?: string;
   mutedUntil?: number;
   bannedUntil?: number;
   banReason?: string;
@@ -298,6 +305,10 @@ export function isChatMediaKind(value: unknown): value is ChatMediaKind {
 
 export function attachmentKind(type: string): ChatAttachmentKind {
   return type.startsWith("video/") ? "video" : type.startsWith("audio/") ? "audio" : "image";
+}
+
+export function isCosmeticId(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9]\d{5,24}$/.test(value);
 }
 
 export function isChatAccent(value: unknown): value is string {

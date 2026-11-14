@@ -47,6 +47,11 @@ function largestScript(directory) {
 
 const fixtures = [
   {
+    name: "large script",
+    url: "https://game.example/js/bundle.js",
+    source: "void window.location.href;\n".repeat(80_000),
+  },
+  {
     name: "inline classic script",
     url: "https://game.example/js/classic.js",
     source: "var { href } = location;\ntop.postMessage(eval('location.href'), '*');\nfunction origin() { return parent.location.origin; }\n",

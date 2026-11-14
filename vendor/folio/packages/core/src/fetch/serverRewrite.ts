@@ -75,12 +75,6 @@ function serverRewriteApplies(
 	if (base.protocol !== "http:" && base.protocol !== "https:") return false;
 	if (base.href.length > MAX_BASE_LENGTH) return false;
 	if (flagEnabled("rewriterLogs", context, base)) return false;
-	if (
-		!isWorker(parsed) &&
-		flagEnabled("debugSourceURL", context, parsed.meta.origin)
-	) {
-		return false;
-	}
 	return !(
 		flagEnabled("sourcemaps", context, base) &&
 		globalThis[context.config.globals.pushsourcemapfn]

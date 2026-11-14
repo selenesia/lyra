@@ -66,9 +66,13 @@
   white-space: nowrap;
 }
 
+.chat-role-owner,
+.chat-member-owner .chat-member-name {
+  color: #ff69b4;
+}
+
 .chat-role-owner {
-  background-color: color-mix(in srgb, var(--status-error-text) 18%, transparent);
-  color: var(--status-error-text);
+  background-color: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .chat-role-admin {
@@ -85,10 +89,6 @@
   font-size: 12px;
   line-height: 20px;
   margin-left: 10px;
-}
-
-.chat-member-owner .chat-member-name {
-  color: var(--status-error-text);
 }
 
 .chat-member-admin .chat-member-name {

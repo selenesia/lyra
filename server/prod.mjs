@@ -65,6 +65,7 @@ const MOCHI_PROXY_PATHS = [
   "/!!/",
   "/!!raw/",
   "/!!folio/",
+  "/!!cosmetics/",
   "/!cover!/",
   "/stream/",
 ];
@@ -472,7 +473,9 @@ async function proxyToMochi(req) {
   }
   headers.set("x-forwarded-host", req.headers.get("host") || "");
 
-  headers.set("accept-encoding", "identity");
+  const folioRewrite = req.method === "GET" && upstreamUrl.pathname.startsWith("/!!folio/request/") &&
+    headers.has("x-mochi-folio-rewrite");
+  headers.set("accept-encoding", folioRewrite ? req.headers.get("accept-encoding") || "identity" : "identity");
 
   const controller = new AbortController();
   let responseReader;
@@ -492,6 +495,7 @@ async function proxyToMochi(req) {
 
   try {
     const response = await fetch(upstreamUrl, {
+      decompress: !folioRewrite,
       method: req.method,
       headers,
       body:

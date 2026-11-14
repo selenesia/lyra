@@ -7,9 +7,9 @@ function storageKey(guide: TutorialGuide): string {
 }
 
 export function tutorialSeen(guide: TutorialGuide = "home"): boolean {
-  try { return localStorage.getItem(storageKey(guide)) === "1"; } catch { return false; }
+  try { return localStorage.getItem(storageKey(guide)) === (guide === "chat" ? "2" : "1"); } catch { return false; }
 }
 
 export function markTutorialSeen(guide: TutorialGuide = "home"): void {
-  try { localStorage.setItem(storageKey(guide), "1"); } catch { }
+  try { localStorage.setItem(storageKey(guide), guide === "chat" ? "2" : "1"); } catch { }
 }

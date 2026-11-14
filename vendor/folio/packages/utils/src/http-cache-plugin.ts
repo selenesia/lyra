@@ -10,6 +10,9 @@ const SERVER_REWRITE_INTENT_HEADER = "x-mochi-folio-rewrite";
 const CACHEABLE_STATUSES = new Set([200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501]);
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 let cacheGeneration = 0;
+const latestRequests = new Map<string, symbol>();
+const pendingUpdates = new Map<string, Promise<void>>();
+const MAX_TRACKED_REQUESTS = 1024;
 
 function directives(value: string | null): Map<string, string> {
 	const result = new Map<string, string>();
@@ -72,6 +75,8 @@ function bareResponse(body: BodyInit | null, status: number, statusText: string,
 
 interface CacheRequest {
 	key: Request;
+	updateKey: string;
+	token: symbol;
 	url: string;
 	startedAt: number;
 	generation: number;
@@ -104,14 +109,27 @@ export class HttpCachePlugin extends ManagedPlugin {
 		});
 	}
 
-	private async store(entry: CacheRequest, response: Response): Promise<void> {
-		try {
+	private isCurrent(entry: CacheRequest): boolean {
+		return entry.generation === cacheGeneration && latestRequests.get(entry.updateKey) === entry.token;
+	}
+
+	private updateCache(entry: CacheRequest, update: (cache: Cache) => Promise<unknown>): Promise<void> {
+		const previous = pendingUpdates.get(entry.updateKey) ?? Promise.resolve();
+		const pending = previous.then(async () => {
 			const cache = await this.openCache();
-			if (entry.generation !== cacheGeneration) return;
+			if (this.isCurrent(entry)) await update(cache);
+		}).catch(() => {}).finally(() => {
+			if (pendingUpdates.get(entry.updateKey) === pending) pendingUpdates.delete(entry.updateKey);
+		});
+		pendingUpdates.set(entry.updateKey, pending);
+		return pending;
+	}
+
+	private store(entry: CacheRequest, response: Response): Promise<void> {
+		return this.updateCache(entry, async cache => {
 			await cache.put(entry.key, response);
-			if (entry.generation !== cacheGeneration) await cache.delete(entry.key, { ignoreVary: true });
-		} catch {
-		}
+			if (!this.isCurrent(entry)) await cache.delete(entry.key, { ignoreVary: true });
+		});
 	}
 
 	install(frame: Frame): void {
@@ -142,8 +160,12 @@ export class HttpCachePlugin extends ManagedPlugin {
 			}
 			const entry: CacheRequest = {
 				key: cacheKey(props.url.href, headers), url: props.url.href,
+				updateKey: JSON.stringify([this.cacheName, props.url.href]), token: Symbol(),
 				startedAt: Date.now(), generation: cacheGeneration,
 			};
+			latestRequests.delete(entry.updateKey);
+			latestRequests.set(entry.updateKey, entry.token);
+			if (latestRequests.size > MAX_TRACKED_REQUESTS) latestRequests.delete(latestRequests.keys().next().value!);
 			this.requests.set(req, entry);
 			try {
 				const cache = await this.openCache();
@@ -209,10 +231,10 @@ export class HttpCachePlugin extends ManagedPlugin {
 				}
 				return;
 			}
-			if (!entry) return;
+			if (!entry || !this.isCurrent(entry)) return;
 			if (req.method === "HEAD") {
 				if (props.response.status >= 200 && props.response.status < 400) {
-					try { await (await this.openCache()).delete(entry.key, { ignoreVary: true }); } catch {}
+					await this.updateCache(entry, cache => cache.delete(entry.key, { ignoreVary: true }));
 				}
 				return;
 			}
@@ -232,7 +254,7 @@ export class HttpCachePlugin extends ManagedPlugin {
 				response = bareResponse(entry.stored.body, entry.stored.status, entry.stored.statusText, merged, entry.url);
 				props.response = response;
 			}
-			try { await (await this.openCache()).delete(entry.key, { ignoreVary: true }); } catch {}
+			await this.updateCache(entry, cache => cache.delete(entry.key, { ignoreVary: true }));
 			const headers = rawHeaders(response.rawHeaders);
 			if (
 				headers.has(SERVER_REWRITTEN_HEADER) &&

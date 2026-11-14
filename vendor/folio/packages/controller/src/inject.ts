@@ -215,14 +215,8 @@ export function load(init: Init) {
 	if (typeof wasmSource !== "string") {
 		throw new Error("wasm was not found in the global scope /ᐠ - ˕ -マ");
 	}
-	const fromBase64 = (
-		Uint8Array as unknown as { fromBase64?: (base64: string) => Uint8Array }
-	).fromBase64;
-	const wasm = fromBase64
-		? fromBase64.call(Uint8Array, wasmSource)
-		: Uint8Array.from(atob(wasmSource), (c) => c.charCodeAt(0));
 	delete (self as any).WASM;
-	setWasm(wasm);
+	setWasm(wasmSource);
 
 	new ExecutionContextWrapper(globalThis, init);
 }

@@ -45,10 +45,10 @@ body.chat-view .watch-page {
   display: none;
   flex-shrink: 0;
   gap: 24px;
-  grid-template-columns: 164px minmax(0, 1fr) 190px;
+  grid-template-columns: 164px minmax(0, 1fr) 220px;
   height: 100%;
   margin: 0 auto;
-  max-width: 1200px;
+  max-width: 1260px;
   min-height: 480px;
   padding: 100px clamp(16px, 3vw, 32px) 12px;
   text-transform: none;
@@ -178,9 +178,24 @@ body.chat-view .chat-page.is-visible {
   top: 0;
 }
 
-.chat-conversation-faces .chat-avatar + .chat-avatar {
+.chat-conversation-faces .chat-avatar:nth-child(2),
+.chat-conversation-faces .chat-avatar:nth-child(4) {
   bottom: 0;
   right: 0;
+}
+
+.chat-conversation-faces .chat-avatar:nth-child(3) {
+  bottom: 0;
+  left: 0;
+}
+
+.chat-conversation-faces[data-count="3"] .chat-avatar:first-child {
+  left: 4.5px;
+}
+
+.chat-conversation-faces[data-count="4"] .chat-avatar:nth-child(2) {
+  bottom: auto;
+  top: 0;
 }
 
 .chat-category-empty {
@@ -306,7 +321,6 @@ body.chat-view .chat-page.is-visible {
   width: 8px;
 }
 
-.chat-member-tag,
 .chat-member-lurkers,
 .chat-category-empty {
   color: var(--color-sublabel);
@@ -316,3 +330,65 @@ body.chat-view .chat-page.is-visible {
 .chat-member-lurkers {
   margin: 8px 0 0 10px;
 }
+
+.chat-self-bar {
+  background: var(--bg-body);
+  bottom: 0;
+  margin-top: auto;
+  padding: 8px 0 4px;
+  position: sticky;
+  z-index: 1;
+}
+
+.chat-self-card {
+  align-items: center;
+  background-color: var(--bg-surface-3);
+  border: none;
+  border-radius: var(--radius-control);
+  color: var(--color-result);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  gap: 10px;
+  padding: 6px 10px 6px 6px;
+  text-align: left;
+  transition: background-color var(--motion-control) var(--motion-ease);
+  width: 100%;
+}
+
+.chat-self-card:hover,
+.chat-self-card:focus-visible {
+  background-color: var(--hover-bg);
+}
+
+.chat-self-card .chat-member-dot {
+  border-color: var(--bg-surface-3);
+}
+
+.chat-self-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.chat-self-display,
+.chat-self-handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-self-display {
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.chat-self-handle {
+  color: var(--color-sublabel);
+  font-size: 11px;
+  line-height: 1.25;
+}
+

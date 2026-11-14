@@ -2,6 +2,14 @@ import type { RefObject } from "preact";
 import { createPortal } from "preact/compat";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 
+function visibleBottom(target: HTMLElement): number {
+  for (let element = target.parentElement; element; element = element.parentElement) {
+    const overflow = getComputedStyle(element).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return Math.min(element.getBoundingClientRect().bottom, window.innerHeight);
+  }
+  return window.innerHeight;
+}
+
 export default function ChatTooltip({ containerRef }: { containerRef: RefObject<HTMLElement> }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [label, setLabel] = useState("");
@@ -59,7 +67,7 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
     if (!target || !tooltip) return;
     const rect = target.getBoundingClientRect();
     const left = Math.max(8, Math.min(rect.left + rect.width / 2 - tooltip.offsetWidth / 2, window.innerWidth - tooltip.offsetWidth - 8));
-    const below = rect.top < tooltip.offsetHeight + 16;
+    const below = rect.bottom + tooltip.offsetHeight + 16 <= visibleBottom(target) || rect.top < tooltip.offsetHeight + 16;
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${below ? rect.bottom + 9 : rect.top - tooltip.offsetHeight - 9}px`;
     tooltip.style.setProperty("--chat-tooltip-arrow", `${rect.left + rect.width / 2 - left}px`);

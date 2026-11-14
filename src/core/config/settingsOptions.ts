@@ -1,7 +1,7 @@
 export const DEFAULT_SETTINGS = {
   transport: "epoxy",
   searchEngine: "duckduckgo",
-  gameSource: "gn-math",
+  gameSource: "truffled",
   theme: "default",
   siteCloaking: "coursera",
   linkCloaking: "none",

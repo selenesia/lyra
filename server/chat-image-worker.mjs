@@ -6,7 +6,7 @@ import { IMAGE_CLASSIFIERS, IMAGE_EMBEDDER, IMAGE_MODEL_ID } from "./chat-image-
 import { IMAGE_COVERAGE, scoreImage } from "./chat-image-policy.mjs";
 import { NEGATIVE, negativeMessage } from "../src/core/runtime/messages.ts";
 
-const THREADS = Math.max(1, Math.min(4, Math.floor(os.availableParallelism() / 2)));
+const THREADS = Math.max(1, Math.min(8, Math.floor(os.availableParallelism() / 2)));
 const SESSION_OPTIONS = { intraOpNumThreads: THREADS, interOpNumThreads: 1, executionMode: "sequential", enableCpuMemArena: false };
 const SCREEN = IMAGE_CLASSIFIERS[IMAGE_COVERAGE.screen];
 const CROP_SIZE = 3 * CROP_SIDE * CROP_SIDE;
@@ -103,7 +103,7 @@ async function screenFrames(loaded, plan) {
 async function readCrops(loaded, { count, pixels }) {
   const crops = [];
   for (let crop = 0; crop < count; crop += 1) {
-    const values = Float32Array.from(pixels.subarray(crop * CROP_SIZE, (crop + 1) * CROP_SIZE), (value) => value / 255);
+    const values = toRange(pixels.subarray(crop * CROP_SIZE, (crop + 1) * CROP_SIZE), [0, 1], 255);
     const reading = { clip: matchLabels(await run(loaded.vision, IMAGE_EMBEDDER.input, IMAGE_EMBEDDER.output, CROP_SIDE, values)) };
     for (const [key, spec] of Object.entries(IMAGE_CLASSIFIERS)) {
       if (key === IMAGE_COVERAGE.screen) continue;

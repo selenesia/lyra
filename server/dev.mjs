@@ -162,6 +162,7 @@ function proxyTarget(url, referer) {
     url.startsWith("/!!raw/") ||
     url.startsWith("/!!/") ||
     url.startsWith("/!!folio/") ||
+    url.startsWith("/!!cosmetics/") ||
     url.startsWith("/!cover!/") ||
     (url.startsWith("/stream/") && !url.startsWith("/stream/anime") && !/^\/stream\/watch(?:\?|$)/.test(url))
   ) {
@@ -488,6 +489,11 @@ const ALL_DEV_SERVICES = [
     dir: "services/mochi",
     port: DEV_MOCHI_PORT,
     requiresEphemeralSecrets: true,
+    env: {
+      MOCHI_COSMETICS_DIR: process.env.MOCHI_COSMETICS_DIR || path.join(ROOT, "cache", "cosmetics"),
+      MOCHI_COSMETICS_SOURCE: process.env.MOCHI_COSMETICS_SOURCE || path.join(ROOT, "services", "mochi", "cosmetics", "shop_skus.json"),
+      MOCHI_COSMETICS_REFRESH_HOURS: process.env.MOCHI_COSMETICS_REFRESH_HOURS || "6",
+    },
   },
   {
     name: "cloudsync",
@@ -683,7 +689,7 @@ async function spawnServices() {
           : ["cargo", "run", "--quiet", ...(svc.args || [])]);
       child = Bun.spawn(command, {
         cwd: svc.dir ? path.join(ROOT, svc.dir) : ROOT,
-        env: DEV_SERVICE_ENV,
+        env: svc.env ? { ...DEV_SERVICE_ENV, ...svc.env } : DEV_SERVICE_ENV,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {

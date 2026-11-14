@@ -38,6 +38,7 @@ import {
   type ChatConversation,
   type ChatConversationKey,
   type ChatMember,
+  type ChatViewer,
   type ChatParty,
   type ChatTarget,
 } from "../../features/chat/chatProtocol.ts";
@@ -62,6 +63,7 @@ import IconBase from "../icons/IconBase.tsx";
 import { ICON_PATHS, type CanonicalIconName } from "../icons/paths.ts";
 import EditableField from "../EditableField.tsx";
 import ChatMessage, { type ChatMessageActions } from "./ChatMessage.tsx";
+import type { TutorialProfileStage } from "../layout/Tutorial.tsx";
 import ChatProfile, { ChatMemberRow, RoleBadge } from "./ChatProfile.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
 import ChatTooltip from "./ChatTooltip.tsx";
@@ -120,7 +122,7 @@ function typingLabel(names: string[]): string {
 
 function placeCaretAtEnd(field: HTMLElement | null): void {
   if (!field || !field.isContentEditable) return;
-  field.focus();
+  field.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(field);
   range.collapse(false);
@@ -140,11 +142,12 @@ function ConversationIcon({ conversation, viewerAuthor }: { conversation: ChatCo
     const other = others[0] ?? conversation.members[0];
     return other ? <ChatAvatar member={other} size={20} /> : <IconPeople size={16} class="chat-channel-icon chat-conversation-icon" />;
   }
-  if (others.length < 2) return <IconPeople size={16} class="chat-channel-icon chat-conversation-icon" />;
+  if (!others.length) return <IconPeople size={16} class="chat-channel-icon chat-conversation-icon" />;
+  const faces = others.slice(0, 4);
+  const size = faces.length === 1 ? 20 : faces.length === 2 ? 14 : faces.length === 3 ? 11 : 10;
   return (
-    <span class="chat-conversation-faces">
-      <ChatAvatar member={others[0]!} size={14} />
-      <ChatAvatar member={others[1]!} size={14} />
+    <span class="chat-conversation-faces" data-count={faces.length}>
+      {faces.map((member) => <ChatAvatar key={member.author} member={member} size={size} />)}
     </span>
   );
 }
@@ -242,6 +245,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [hoveredGif, setHoveredGif] = useState<string | null>(null);
+  const [selfHovered, setSelfHovered] = useState(false);
   const [profile, setProfile] = useState<ChatMember | null>(null);
   const [dialog, setDialog] = useState<ChatConversationDialog | null>(null);
   const [startingParty, setStartingParty] = useState(false);
@@ -255,6 +259,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const pickingGifRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const scrollingToBottomRef = useRef(false);
+  const viewingReplyRef = useRef(false);
   const scrollTargetRef = useRef<ChatTarget | null>(null);
   const anchorRef = useRef<{ height: number; top: number } | null>(null);
   const typingSentRef = useRef(0);
@@ -267,6 +272,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     caretToEndRef.current = true;
   }, []);
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    viewingReplyRef.current = false;
     stickToBottomRef.current = true;
     anchorRef.current = null;
     const list = listRef.current;
@@ -276,7 +282,8 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     }
   }, []);
   const interruptScroll = useCallback(() => {
-    if (!scrollingToBottomRef.current) return;
+    if (!scrollingToBottomRef.current && !viewingReplyRef.current) return;
+    viewingReplyRef.current = false;
     scrollingToBottomRef.current = false;
     stickToBottomRef.current = false;
     const list = listRef.current;
@@ -284,6 +291,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   }, []);
 
   const cancelMode = useCallback(() => {
+    if (pageRef.current?.querySelector("dialog.tutorial[open]")) return true;
     if (sendingRef.current) return false;
     if (pickingGifRef.current) {
       setDraft((current) => gifQuery(current) ?? current);
@@ -614,12 +622,24 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       react: (entry, emoji) => void room.react(entry.id, emoji).then(showFailure),
       block: (member) => room.toggleBlocked(member),
       jumpTo: (id) => {
-        const target = listRef.current?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
-        if (!target) {
+        const list = listRef.current;
+        const target = list?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+        if (!list || !target) {
           setHint(negativeMessage("that message is no longer loaded"));
           return;
         }
-        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        scrollingToBottomRef.current = false;
+        stickToBottomRef.current = false;
+        anchorRef.current = null;
+        const top = Math.max(0, Math.min(
+          list.scrollHeight - list.clientHeight,
+          list.scrollTop + target.getBoundingClientRect().top - list.getBoundingClientRect().top - (list.clientHeight - target.offsetHeight) / 2,
+        ));
+        viewingReplyRef.current = true;
+        list.scrollTo({
+          top,
+          behavior: prefersReducedMotion() ? "instant" : "smooth",
+        });
         target.classList.remove("flash");
         void target.offsetWidth;
         target.classList.add("flash");
@@ -645,6 +665,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const onScroll = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
+    if (viewingReplyRef.current) return;
     if (scrollingToBottomRef.current) {
       if (list.scrollHeight - list.scrollTop - list.clientHeight <= 1) scrollingToBottomRef.current = false;
       return;
@@ -652,7 +673,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < NEAR_BOTTOM_PX;
     if (stickToBottomRef.current || list.scrollTop > Math.max(NEAR_TOP_PX, list.clientHeight * 2) || exhausted[target] || !entries.length) return;
     void room.loadOlder(target, () => {
-      if (scrollTargetRef.current === target && listRef.current === list && !stickToBottomRef.current) {
+      if (scrollTargetRef.current === target && listRef.current === list && !stickToBottomRef.current && !viewingReplyRef.current) {
         anchorRef.current = { height: list.scrollHeight, top: list.scrollTop };
       }
     });
@@ -894,6 +915,13 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     [members],
   );
 
+  const conversationMemberGroups = conversation?.kind === "group"
+    ? [
+        { heading: "group owner", list: conversation.members.filter((member) => member.author === conversation.owner) },
+        { heading: "members", list: conversation.members.filter((member) => member.author !== conversation.owner) },
+      ].filter((group) => group.list.length > 0)
+    : [{ heading: "direct message", list: conversation?.members ?? [] }];
+
   const destination = partner ? `@${partner.name}` : title;
   const startText = partner ? `your messages with ${displayName(partner)}` : title;
   const placeholder = muted
@@ -920,14 +948,14 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     ? gifResults.gifs.length
       ? null
       : gifResults.loading
-        ? { text: "looking for gifs", error: false }
+        ? { text: "looking for gifs...", error: false }
         : gifResults.error
           ? { text: gifResults.error, error: true }
           : { text: negativeMessage(gifText ? "no gifs match that search" : "no gifs are trending right now"), error: true }
     : !picking
     ? null
     : partyTitles.loading
-      ? { text: "looking for titles", error: false }
+      ? { text: "looking for titles...", error: false }
       : partyTitles.titles.length
         ? null
         : partyText
@@ -1022,12 +1050,32 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     return rows;
   }, [actions, blockedAuthors, channel, editingId, entries, historyExhausted, locked, mentionMembers, parties, readableChannels, room.toggleBlocked, selectedId, startText, viewer]);
 
+  const renderProfile = (profile: ChatMember, viewer: ChatViewer, tutorialStage?: TutorialProfileStage) => (
+    <ChatProfile
+      key={profile.author}
+      tutorialStage={tutorialStage}
+      author={profile.author}
+      fallback={profile}
+      viewer={viewer}
+      blocked={blockedAuthors.has(profile.author)}
+      online={onlineAuthors.has(profile.author) || profile.author === viewer.author}
+      loadProfile={room.loadProfile}
+      moderate={moderateInChannel}
+      saveProfile={room.saveProfile}
+      uploadMedia={room.uploadMedia}
+      onMention={insertMention}
+      onMessage={messageMember}
+      onToggleBlock={room.toggleBlocked}
+      onClose={() => setProfile(null)}
+    />
+  );
+
   return (
     <section id="chat-page" ref={pageRef} class={`chat-page${visible ? " is-visible" : ""}${ready ? "" : " is-gated"}`} aria-hidden={!visible}>
       {visible && ready && <ChatTooltip containerRef={pageRef} />}
       {visible && ready && (
         <Suspense fallback={null}>
-          <Tutorial guide="chat" />
+          <Tutorial guide="chat" renderProfile={(stage) => renderProfile(viewer, viewer, stage)} />
         </Suspense>
       )}
       {!ready ? (
@@ -1123,6 +1171,28 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                 </div>
               );
             })}
+            <div class="chat-self-bar">
+              <button
+                type="button"
+                class="chat-self-card"
+                aria-label="open your profile"
+                data-tooltip="open your profile"
+                onClick={() => setProfile(viewer)}
+                onMouseEnter={() => setSelfHovered(true)}
+                onMouseLeave={() => setSelfHovered(false)}
+                onFocus={() => setSelfHovered(true)}
+                onBlur={() => setSelfHovered(false)}
+              >
+                <span class="chat-member-face">
+                  <ChatAvatar member={viewer} size={32} decoration={viewer.decoration} animate={selfHovered} />
+                  <span class="chat-member-dot" />
+                </span>
+                <span class="chat-self-text">
+                  <span class="chat-self-display">{displayName(viewer)}</span>
+                  <span class="chat-self-handle">@{viewer.name}</span>
+                </span>
+              </button>
+            </div>
           </nav>
 
           <div class="chat-main">
@@ -1219,7 +1289,8 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
               )}
               {mode && !locked && (
                 <div class="chat-context">
-                  <span>
+                  {mode.kind === "reply" && <ChatAvatar member={mode.entry} size={20} />}
+                  <span class="chat-context-text">
                     {mode.kind === "reply" ? (
                       <>
                         replying to <strong>{displayName(mode.entry)}</strong>
@@ -1316,22 +1387,23 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
           {conversation ? (
             <aside class="chat-members" aria-label="conversation members">
-              <div class="chat-member-group">
-                <p class="chat-panel-title">
-                  {conversation.kind === "dm" ? "direct message" : "members"} · {conversation.members.length}
-                </p>
-                {conversation.members.map((member) => (
-                  <ChatMemberRow
-                    key={member.author}
-                    member={member}
-                    online={onlineAuthors.has(member.author) || member.author === viewer.author}
-                    self={member.author === viewer.author}
-                    blocked={blockedAuthors.has(member.author)}
-                    tag={member.author === viewer.author ? "you" : conversation.owner === member.author && conversation.kind === "group" ? "owner" : undefined}
-                    onOpen={setProfile}
-                  />
-                ))}
-              </div>
+              {conversationMemberGroups.map((group) => (
+                <div class="chat-member-group" key={group.heading}>
+                  <p class="chat-panel-title">
+                    {group.heading} · {group.list.length}
+                  </p>
+                  {group.list.map((member) => (
+                    <ChatMemberRow
+                      key={member.author}
+                      member={member}
+                      online={onlineAuthors.has(member.author) || member.author === viewer.author}
+                      self={member.author === viewer.author}
+                      blocked={blockedAuthors.has(member.author)}
+                      onOpen={setProfile}
+                    />
+                  ))}
+                </div>
+              ))}
               <div class="chat-member-group">
                 <p class="chat-panel-title">{conversation.kind === "dm" ? "conversation" : "group"}</p>
                 {conversation.kind === "group" && (
@@ -1384,7 +1456,6 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                       online
                       self={member.author === viewer.author}
                       blocked={blockedAuthors.has(member.author)}
-                      tag={member.author === viewer.author ? "you" : undefined}
                       onOpen={setProfile}
                     />
                   ))}
@@ -1408,24 +1479,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           onClose={() => setDialog(null)}
         />
       )}
-      {profile && viewer && (
-        <ChatProfile
-          key={profile.author}
-          author={profile.author}
-          fallback={profile}
-          viewer={viewer}
-          blocked={blockedAuthors.has(profile.author)}
-          online={onlineAuthors.has(profile.author) || profile.author === viewer.author}
-          loadProfile={room.loadProfile}
-          moderate={moderateInChannel}
-          saveProfile={room.saveProfile}
-          uploadMedia={room.uploadMedia}
-          onMention={insertMention}
-          onMessage={messageMember}
-          onToggleBlock={room.toggleBlocked}
-          onClose={() => setProfile(null)}
-        />
-      )}
+      {profile && viewer && renderProfile(profile, viewer)}
     </section>
   );
 }
