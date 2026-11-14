@@ -6,6 +6,7 @@ members = [
   "services/mochi",
   "services/nuru",
 ]
+exclude = ["vendor"]
 
 [profile.release]
 lto = "fat"

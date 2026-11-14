@@ -11,6 +11,8 @@ const SESSION_STORAGE_KEY = "__lyra_folio_session";
 const CIRCUIT_FAILURES = 3;
 const CIRCUIT_COOLDOWN_MS = 30_000;
 const MAX_HEADER_ENVELOPE_CHARS = 128 * 1024;
+const REWRITE_INTENT_HEADER = "x-mochi-folio-rewrite";
+const REWRITTEN_HEADER = "x-mochi-folio-rewritten";
 
 type MochiMeta = {
   status: number;
@@ -19,6 +21,7 @@ type MochiMeta = {
   url?: string;
   raw_headers?: RawHeaders;
   rawHeaders?: RawHeaders;
+  rewritten?: number;
 };
 
 type MochiGlobals = typeof globalThis & {
@@ -94,6 +97,18 @@ function isRawHeaders(value: unknown): value is RawHeaders {
   );
 }
 
+function withoutHeader(headers: RawHeaders, name: string): RawHeaders {
+  return headers.filter(([key]) => key.toLowerCase() !== name);
+}
+
+function lastHeader(headers: RawHeaders, name: string): string | null {
+  let value: string | null = null;
+  for (const [key, entry] of headers) {
+    if (key.toLowerCase() === name) value = entry;
+  }
+  return value;
+}
+
 function toTransferrableResponse(response: Response): TransferrableResponse {
   return {
     body: response.body ?? new ArrayBuffer(0),
@@ -118,7 +133,7 @@ function unavailableResponse(): TransferrableResponse {
 }
 
 async function requestWithFallback(
-  fallback: ProxyTransport,
+  fallback: () => Promise<ProxyTransport>,
   remote: URL,
   method: string,
   body: BodyInit | null,
@@ -126,7 +141,18 @@ async function requestWithFallback(
   signal: AbortSignal | undefined,
 ): Promise<TransferrableResponse> {
   try {
-    return await fallback.request(remote, method, body, headers, signal);
+    const transport = await fallback();
+    const response = await transport.request(
+      remote,
+      method,
+      body,
+      headers,
+      signal,
+    );
+    return {
+      ...response,
+      headers: withoutHeader(response.headers, REWRITTEN_HEADER),
+    };
   } catch (error) {
     if (signal?.aborted) throw error;
     return unavailableResponse();
@@ -135,6 +161,7 @@ async function requestWithFallback(
 
 export class MochiTransport implements ProxyTransport {
   ready = false;
+  folioRewriter: string | null = null;
 
   private initPromise: Promise<void> | null = null;
   private serverAvailable = false;
@@ -142,50 +169,69 @@ export class MochiTransport implements ProxyTransport {
   private circuitOpenUntil = 0;
   private uploadsStreamable = false;
   private readonly sessionId = createSessionId();
+  private loadedFallback: ProxyTransport | null = null;
+  private fallbackLoad: Promise<ProxyTransport> | null = null;
 
   constructor(
-    private readonly fallback: ProxyTransport,
+    private readonly loadFallback: () => Promise<ProxyTransport>,
     private readonly base = resolveMochiOrigin(),
   ) {}
+
+  private fallback(): Promise<ProxyTransport> {
+    if (this.fallbackLoad) return this.fallbackLoad;
+    const load = (async () => {
+      const transport = await this.loadFallback();
+      if (!transport.ready) {
+        try {
+          await transport.init();
+        } catch {}
+      }
+      this.loadedFallback = transport;
+      return transport;
+    })();
+    this.fallbackLoad = load;
+    load.catch(() => {
+      if (this.fallbackLoad === load) this.fallbackLoad = null;
+    });
+    return load;
+  }
 
   async init(): Promise<void> {
     if (this.ready) return;
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = (async () => {
-      const fallbackInit = (async () => {
-        if (!this.fallback.ready) {
-          try {
-            await this.fallback.init();
-          } catch {}
-        }
-      })();
       const globals = globalThis as MochiGlobals;
       if (globals.__FOLIO_MOCHI_TRANSPORT__ === false) {
         this.serverAvailable = false;
-        await fallbackInit;
-        this.ready = true;
-        return;
+      } else {
+        const abort = new AbortController();
+        const timeout = setTimeout(() => abort.abort(), 3_000);
+        const stopWatchingProtocol = this.watchUploadProtocol();
+        try {
+          const response = await fetch(endpoint(this.base, "capabilities"), {
+            cache: "no-store",
+            credentials: "omit",
+            signal: abort.signal,
+          });
+          const health = response.ok ? await response.json() : null;
+          this.serverAvailable = health?.ok === true && health?.protocol === 1;
+          this.folioRewriter =
+            this.serverAvailable && typeof health.rewriter === "string"
+              ? health.rewriter
+              : null;
+        } catch {
+          this.serverAvailable = false;
+        } finally {
+          clearTimeout(timeout);
+          if (!this.serverAvailable) stopWatchingProtocol();
+        }
       }
-
-      const abort = new AbortController();
-      const timeout = setTimeout(() => abort.abort(), 3_000);
-      const stopWatchingProtocol = this.watchUploadProtocol();
-      try {
-        const response = await fetch(endpoint(this.base, "capabilities"), {
-          cache: "no-store",
-          credentials: "omit",
-          signal: abort.signal,
-        });
-        const health = response.ok ? await response.json() : null;
-        this.serverAvailable = health?.ok === true && health?.protocol === 1;
-      } catch {
-        this.serverAvailable = false;
-      } finally {
-        clearTimeout(timeout);
-        if (!this.serverAvailable) stopWatchingProtocol();
+      if (!this.serverAvailable) {
+        try {
+          await this.fallback();
+        } catch {}
       }
-      await fallbackInit;
       this.ready = true;
     })().finally(() => {
       this.initPromise = null;
@@ -205,15 +251,58 @@ export class MochiTransport implements ProxyTransport {
     (message: WebSocketDataType) => void,
     (code: number, reason: string) => void,
   ] {
-    return this.fallback.connect(
-      url,
-      protocols,
-      requestHeaders,
-      onopen,
-      onmessage,
-      onclose,
-      onerror,
+    if (this.loadedFallback) {
+      return this.loadedFallback.connect(
+        url,
+        protocols,
+        requestHeaders,
+        onopen,
+        onmessage,
+        onclose,
+        onerror,
+      );
+    }
+
+    let socket: ReturnType<ProxyTransport["connect"]> | null = null;
+    let failed = false;
+    const queued: WebSocketDataType[] = [];
+    const fail = (message: string) => {
+      if (failed) return;
+      failed = true;
+      queued.length = 0;
+      onerror(negativeMessage(message));
+    };
+    this.fallback().then(
+      (transport) => {
+        if (failed) return;
+        try {
+          socket = transport.connect(
+            url,
+            protocols,
+            requestHeaders,
+            onopen,
+            onmessage,
+            onclose,
+            onerror,
+          );
+        } catch {
+          fail("websocket transport is unavailable");
+          return;
+        }
+        for (const message of queued.splice(0)) socket[0](message);
+      },
+      () => fail("websocket transport is unavailable"),
     );
+    return [
+      (message) => {
+        if (socket) socket[0](message);
+        else if (!failed) queued.push(message);
+      },
+      (code, reason) => {
+        if (socket) socket[1](code, reason);
+        else fail("websocket closed before connecting");
+      },
+    ];
   }
 
   private watchUploadProtocol(): () => void {
@@ -258,6 +347,8 @@ export class MochiTransport implements ProxyTransport {
     if (!this.ready) await this.init();
     method = method.toUpperCase();
 
+    const intent = lastHeader(headers, REWRITE_INTENT_HEADER);
+    if (intent !== null) headers = withoutHeader(headers, REWRITE_INTENT_HEADER);
     const envelope = base64UrlEncode(headers);
     if (
       !this.serverAvailable ||
@@ -265,7 +356,7 @@ export class MochiTransport implements ProxyTransport {
       envelope.length > MAX_HEADER_ENVELOPE_CHARS
     ) {
       return requestWithFallback(
-        this.fallback,
+        () => this.fallback(),
         remote,
         method,
         body,
@@ -290,6 +381,7 @@ export class MochiTransport implements ProxyTransport {
       "x-mochi-folio-headers": envelope,
       "x-mochi-folio-session": this.sessionId,
     });
+    if (intent !== null) requestHeaders.set(REWRITE_INTENT_HEADER, intent);
     const init: RequestInit & { duplex?: "half" } = {
       method,
       headers: requestHeaders,
@@ -328,9 +420,13 @@ export class MochiTransport implements ProxyTransport {
       }
       this.failures = 0;
       this.circuitOpenUntil = 0;
+      const upstreamHeaders = withoutHeader(rawHeaders, REWRITTEN_HEADER);
+      if (intent !== null && (meta.rewritten === 1 || meta.rewritten === 2)) {
+        upstreamHeaders.push([REWRITTEN_HEADER, String(meta.rewritten)]);
+      }
       return {
         body: response.body ?? new ArrayBuffer(0),
-        headers: rawHeaders,
+        headers: upstreamHeaders,
         status: meta.status!,
         statusText: meta.status_text ?? meta.statusText ?? "",
       };
@@ -342,7 +438,7 @@ export class MochiTransport implements ProxyTransport {
       }
       if (isIdempotent(method)) {
         return requestWithFallback(
-          this.fallback,
+          () => this.fallback(),
           remote,
           method,
           body,

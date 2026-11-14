@@ -10,10 +10,18 @@ import {
 	type RspackOptions,
 	type WebpackCompiler,
 } from "@rspack/core";
+import { folioRewriterHash } from "./rewriter-hash.mjs";
 
 const routeKey = JSON.stringify([...randomBytes(32)]);
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
+
+const sharedDefines = {
+	FOLIO_ROUTE_KEY: routeKey,
+	FOLIO_REWRITER_HASH: JSON.stringify(
+		folioRewriterHash(join(__dirname, "packages/core/rewriter"))
+	),
+};
 
 function extractRuntimeExportNames(source: string): string[] {
 	const names = new Set<string>();
@@ -154,7 +162,7 @@ const createGenericConfig = (options: Partial<RspackOptions>) => {
 	const production = process.env.NODE_ENV === "production";
 	const def = {
 		devtool: production ? false : "source-map",
-		plugins: [new rspack.DefinePlugin({ FOLIO_ROUTE_KEY: routeKey })],
+		plugins: [new rspack.DefinePlugin(sharedDefines)],
 		mode: (production ? "production" : "development") as Mode,
 		resolve: {
 			extensions: [".ts", ".js"],
@@ -179,7 +187,7 @@ const createGenericConfig = (options: Partial<RspackOptions>) => {
 		},
 	};
 	const merged = deepmerge<RspackOptions>(def as RspackOptions, options);
-	merged.plugins = [...(options.plugins ?? []), new rspack.DefinePlugin({ FOLIO_ROUTE_KEY: routeKey })];
+	merged.plugins = [...(options.plugins ?? []), new rspack.DefinePlugin(sharedDefines)];
 	return defineConfig(merged);
 };
 

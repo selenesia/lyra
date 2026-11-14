@@ -25,6 +25,15 @@ pub struct MochiTuning {
     pub disk_cleanup_interval_secs: u64,
     pub channel_buffer: usize,
     pub stream_prefetch_segments: usize,
+    pub folio_rewrite_workers: usize,
+    pub folio_rewrite_cache_bytes: u64,
+    pub folio_rewrite_max_bytes: usize,
+    pub folio_rewrite_timeout_ms: u64,
+    pub folio_rewrite_worker_heap_bytes: usize,
+}
+
+fn env_number<T: std::str::FromStr>(name: &str) -> Option<T> {
+    std::env::var(name).ok()?.parse().ok()
 }
 
 pub fn detect() -> MochiTuning {
@@ -92,10 +101,30 @@ pub fn detect() -> MochiTuning {
     {
         tuning.stream_prefetch_segments = segments.min(8);
     }
+    if let Some(workers) = env_number::<usize>("MOCHI_FOLIO_REWRITE_WORKERS") {
+        tuning.folio_rewrite_workers = workers.min(8);
+    }
+    if let Some(megabytes) = env_number::<u64>("MOCHI_FOLIO_REWRITE_CACHE_MB") {
+        tuning.folio_rewrite_cache_bytes = megabytes.clamp(8, 4096) * 1024 * 1024;
+    }
+    if let Some(megabytes) = env_number::<usize>("MOCHI_FOLIO_REWRITE_MAX_MB") {
+        tuning.folio_rewrite_max_bytes = megabytes.clamp(1, 64) * 1024 * 1024;
+        tuning.folio_rewrite_worker_heap_bytes = worker_heap_bytes(tuning.folio_rewrite_max_bytes);
+    }
+    if let Some(milliseconds) = env_number::<u64>("MOCHI_FOLIO_REWRITE_TIMEOUT_MS") {
+        tuning.folio_rewrite_timeout_ms = milliseconds.clamp(100, 60_000);
+    }
     tuning
 }
 
+fn worker_heap_bytes(max_script_bytes: usize) -> usize {
+    max_script_bytes * 24 + 64 * 1024 * 1024
+}
+
 fn compute(ram_mb: u64, cores: usize, disk_mb: u64) -> MochiTuning {
+    let folio_rewrite_workers = (cores / 2).clamp(1, 2);
+    let folio_rewrite_max_bytes =
+        (ram_mb / (320 * folio_rewrite_workers as u64)).clamp(1, 16) as usize * 1024 * 1024;
     let worker_threads = cores
         .saturating_sub(1)
         .max(1)
@@ -182,5 +211,10 @@ fn compute(ram_mb: u64, cores: usize, disk_mb: u64) -> MochiTuning {
         disk_cleanup_interval_secs,
         channel_buffer,
         stream_prefetch_segments: 2,
+        folio_rewrite_workers,
+        folio_rewrite_cache_bytes: (ram_mb / 16).clamp(32, 256) * 1024 * 1024,
+        folio_rewrite_max_bytes,
+        folio_rewrite_timeout_ms: 10_000,
+        folio_rewrite_worker_heap_bytes: worker_heap_bytes(folio_rewrite_max_bytes),
     }
 }

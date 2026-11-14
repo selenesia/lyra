@@ -16,6 +16,12 @@ import {
 	rewriteWorkers,
 } from "@/shared";
 import { sniffEncoding } from "@/shared/sniffEncoding";
+import {
+	applyImportUrls,
+	ServerRewriteError,
+	ServerRewriteMode,
+	serverRewriteMode,
+} from "./serverRewrite";
 import { _TextDecoder } from "@/shared/snapshot";
 
 declare const VERSION: string;
@@ -23,6 +29,7 @@ declare const VERSION: string;
 const REWRITE_CACHE_MAX_ENTRY_BYTES = 4 * 1024 * 1024;
 const REWRITE_CACHE_MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const HTML_STREAM_SNIFF_BYTES = 1024;
+const STREAMED_SCRIPT_BYTES = 2 * 1024 * 1024;
 type RewriteCacheBody = string | Uint8Array<ArrayBuffer>;
 type RewriteCacheEntry = {
 	body: RewriteCacheBody;
@@ -262,11 +269,33 @@ async function rewriteHtmlStream(
 	}, { highWaterMark: 0 });
 }
 
+async function serverRewrittenBytes(
+	handler: FolioFetchHandler,
+	parsed: FolioFetchParsed,
+	response: BareResponse,
+	mode: ServerRewriteMode,
+	refetch?: () => Promise<BareResponse>
+): Promise<Uint8Array<ArrayBuffer> | BareResponse> {
+	const bytes = new Uint8Array(await response.arrayBuffer());
+	if (mode === "final") return bytes;
+	try {
+		return applyImportUrls(
+			bytes,
+			handler.context,
+			parsed.meta
+		) as Uint8Array<ArrayBuffer>;
+	} catch (error) {
+		if (!(error instanceof ServerRewriteError) || !refetch) throw error;
+		return refetch();
+	}
+}
+
 export async function rewriteBody(
 	handler: FolioFetchHandler,
 	request: FolioFetchRequest,
 	parsed: FolioFetchParsed,
-	response: BareResponse
+	response: BareResponse,
+	refetch?: () => Promise<BareResponse>
 ): Promise<BodyType> {
 	switch (parsed.destination) {
 		case "iframe":
@@ -277,6 +306,34 @@ export async function rewriteBody(
 				return response.body;
 			}
 		case "script": {
+			const served = serverRewriteMode(
+				handler,
+				parsed,
+				request.method,
+				response
+			);
+			if (served === "final") {
+				const length = Number(response.headers.get("content-length"));
+				return length >= STREAMED_SCRIPT_BYTES
+					? response.body
+					: response.arrayBuffer();
+			}
+			if (served) {
+				const patched = await serverRewrittenBytes(
+					handler,
+					parsed,
+					response,
+					served,
+					refetch
+				);
+				if (patched instanceof Uint8Array) {
+					return patched.buffer.slice(
+						patched.byteOffset,
+						patched.byteOffset + patched.byteLength
+					);
+				}
+				response = patched;
+			}
 			if (response.ok) {
 				const ct = response.headers.get("content-type");
 				if (parsed.isModule && ct && !isJavascriptMimeType(ct)) {
@@ -319,6 +376,32 @@ export async function rewriteBody(
 		case "sharedworker":
 		case "worker":
 			{
+				const served = serverRewriteMode(
+					handler,
+					parsed,
+					request.method,
+					response
+				);
+				if (served) {
+					const rewritten = await serverRewrittenBytes(
+						handler,
+						parsed,
+						response,
+						served,
+						refetch
+					);
+					if (rewritten instanceof Uint8Array) {
+						return rewriteWorkers(
+							rewritten,
+							response.url,
+							handler.context,
+							parsed.meta,
+							parsed.isModule,
+							true
+						);
+					}
+					response = rewritten;
+				}
 				const cacheKey = rewriteCacheKey(handler, parsed, response, "worker");
 				const rewritten = await cachedOrPendingRewrite(cacheKey, async () =>
 					ownRewriteBody(rewriteWorkers(

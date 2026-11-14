@@ -9,7 +9,8 @@ export function rewriteWorkers(
 	url: string,
 	context: FolioContext,
 	meta: URLMeta,
-	isModule: boolean
+	isModule: boolean,
+	prerewritten = false
 ) {
 	const script = (script: string) => {
 		if (isModule) {
@@ -21,7 +22,9 @@ export function rewriteWorkers(
 		`data:text/javascript;charset=utf-8;base64,${base64Encode(script)}`;
 	let str = context.interface.getWorkerInjectScripts(meta, isModule, script);
 
-	let rewritten = rewriteJs(js, url, context, meta, isModule);
+	let rewritten = prerewritten
+		? js
+		: rewriteJs(js, url, context, meta, isModule);
 	if (typeof rewritten !== "string") {
 		rewritten = TextDecoder_decode(rewritten);
 	}

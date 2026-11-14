@@ -12,6 +12,8 @@ import { blockedNotice } from "../../features/chat/moderationNotice.ts";
 import { mentionsName } from "../../features/chat/chatText.ts";
 import { encodeChatImage, readMediaSeconds, uploadKind } from "../../features/chat/chatMedia.ts";
 import { partyMediaOf, partyQuery, usePartyTitles, type ChatPartyTitle } from "../../features/chat/chatParty.ts";
+import { chatGifUrl, fetchChatGif, gifQuery, useChatGifs, type ChatGif } from "../../features/chat/chatGifs.ts";
+import { prefersReducedMotion } from "../../core/config/advancedSettings.ts";
 import { canDeleteAny, CHAT_ROLES, isChatRole, outranks, type ChatRole } from "../../features/chat/chatRoles.ts";
 import {
   CHAT_AUDIO,
@@ -19,6 +21,7 @@ import {
   CHAT_CHANNELS,
   CHAT_LIMITS,
   CHAT_ATTACHMENT,
+  CHAT_GIF_COMMAND,
   CHAT_PARTY_COMMAND,
   CHAT_VIDEO,
   canPostIn,
@@ -89,6 +92,8 @@ const ROLE_ARGUMENTS = /^\/role\s+@?(\w+)\s+(\w+)$/i;
 const Tutorial = lazy(loadTutorial);
 
 const PARTY_USAGE = "use /party or /watch followed by a title, then pick one from the list";
+const GIF_USAGE = "use /gif followed by a search, then pick one from the list";
+const GIF_MORE_PX = 200;
 const CONFIRM_MS = 3_000;
 const NO_ENTRIES: ChatEntry[] = [];
 const dayFormat = new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" });
@@ -163,6 +168,18 @@ function PartyPoster({ src }: { src: string | undefined }) {
   );
 }
 
+function GifThumb({ gif, animate }: { gif: ChatGif; animate: boolean }) {
+  const hide = (event: Event) => {
+    (event.currentTarget as HTMLImageElement).hidden = true;
+  };
+  return (
+    <span class="chat-gif-frame">
+      <img src={chatGifUrl(gif.id, "preview")} alt="" loading="lazy" decoding="async" draggable={false} onError={hide} />
+      {animate && <img class="chat-gif-motion" src={chatGifUrl(gif.id, "full")} alt="" decoding="async" draggable={false} onError={hide} />}
+    </span>
+  );
+}
+
 function openLogin(): void {
   void loadCloudSync().then(() => {
     if (!isManagedModalOpen(document.getElementById("cloudsync-modal"))) {
@@ -224,6 +241,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [mode, setMode] = useState<ComposerMode>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  const [hoveredGif, setHoveredGif] = useState<string | null>(null);
   const [profile, setProfile] = useState<ChatMember | null>(null);
   const [dialog, setDialog] = useState<ChatConversationDialog | null>(null);
   const [startingParty, setStartingParty] = useState(false);
@@ -233,6 +251,8 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const pageRef = useRef<HTMLElement>(null);
   const channelsRef = useRef<HTMLElement>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
+  const gifGridRef = useRef<HTMLDivElement>(null);
+  const pickingGifRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const scrollingToBottomRef = useRef(false);
   const scrollTargetRef = useRef<ChatTarget | null>(null);
@@ -265,6 +285,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
   const cancelMode = useCallback(() => {
     if (sendingRef.current) return false;
+    if (pickingGifRef.current) {
+      setDraft((current) => gifQuery(current) ?? current);
+      setSuggestionIndex(-1);
+      return true;
+    }
     if (!modeRef.current) return false;
     if (modeRef.current.kind === "edit") setDraft("");
     setMode(null);
@@ -636,7 +661,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const partyText = ready && !locked && !muted && mode?.kind !== "edit" ? partyQuery(draft) : undefined;
   const picking = partyText !== undefined;
   const partyTitles = usePartyTitles(partyText);
-  const mentionQuery = ready && !locked && !picking ? MENTION_QUERY.exec(draft)?.[1] : undefined;
+  const gifText = ready && !locked && !muted && mode?.kind !== "edit" ? gifQuery(draft) : undefined;
+  const pickingGif = gifText !== undefined;
+  pickingGifRef.current = pickingGif;
+  const gifResults = useChatGifs(gifText);
+  const mentionQuery = ready && !locked && !picking && !pickingGif ? MENTION_QUERY.exec(draft)?.[1] : undefined;
   const suggestions = useMemo(() => {
     if (mentionQuery === undefined) return [];
     const query = mentionQuery.toLowerCase();
@@ -649,7 +678,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       )
       .slice(0, 5);
   }, [conversation, mentionMembers, blockedAuthors, mentionQuery, viewer?.author]);
-  const channelQuery = ready && !locked && !picking && mentionQuery === undefined ? CHANNEL_QUERY.exec(draft)?.[1]?.toLowerCase() : undefined;
+  const channelQuery = ready && !locked && !picking && !pickingGif && mentionQuery === undefined ? CHANNEL_QUERY.exec(draft)?.[1]?.toLowerCase() : undefined;
   const channelSuggestions = useMemo(
     () =>
       channelQuery === undefined
@@ -661,8 +690,47 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           ).slice(0, 5),
     [channelQuery, readableChannels],
   );
-  const pickerSize = picking ? partyTitles.titles.length : suggestions.length || channelSuggestions.length;
-  const pickerIndex = Math.min(picking ? suggestionIndex : Math.max(0, suggestionIndex), pickerSize - 1);
+  const pickerSize = picking ? partyTitles.titles.length : pickingGif ? gifResults.gifs.length : suggestions.length || channelSuggestions.length;
+  const pickerIndex = Math.min(picking || pickingGif ? suggestionIndex : Math.max(0, suggestionIndex), pickerSize - 1);
+
+  useEffect(() => {
+    if (pickingGif && pickerIndex >= 0) gifGridRef.current?.children[pickerIndex]?.scrollIntoView({ block: "nearest" });
+  }, [pickingGif, pickerIndex]);
+
+  const pickGif = useCallback(
+    async (gif: ChatGif) => {
+      if (locked || muted || sendingRef.current || preparingImage || modeRef.current?.kind === "edit") return;
+      setHint(null);
+      setPreparingImage(true);
+      const result = await fetchChatGif(gif.id);
+      setPreparingImage(false);
+      if ("error" in result) {
+        setHint(result.error);
+        return;
+      }
+      setAttachment({ blob: result.blob, kind: "image" });
+      setDraft((current) => (gifQuery(current) === undefined ? current : ""));
+      setSuggestionIndex(-1);
+      setHoveredGif(null);
+      focusFieldAfterRender();
+    },
+    [focusFieldAfterRender, locked, muted, preparingImage],
+  );
+
+  const toggleGifs = useCallback(() => {
+    setDraft((current) => {
+      const query = gifQuery(current);
+      return query === undefined ? `/gif ${current.trim()}` : query;
+    });
+    setSuggestionIndex(-1);
+    setHint(null);
+    focusFieldAfterRender();
+  }, [focusFieldAfterRender]);
+
+  const onGifScroll = useCallback(() => {
+    const grid = gifGridRef.current;
+    if (grid && grid.scrollHeight - grid.scrollTop - grid.clientHeight < GIF_MORE_PX) gifResults.loadMore();
+  }, [gifResults.loadMore]);
 
   const runRoleCommand = useCallback(
     async (text: string) => {
@@ -727,6 +795,10 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       if (!partyTitles.loading) setHint(negativeMessage(PARTY_USAGE));
       return;
     }
+    if (mode?.kind !== "edit" && CHAT_GIF_COMMAND.test(text)) {
+      if (!gifResults.loading) setHint(negativeMessage(GIF_USAGE));
+      return;
+    }
     if (!text && (draft.trim() || (!attachment && !(mode?.kind === "edit" && mode.entry.attachment)))) {
       setHint(negativeMessage(`messages need 1 to ${CHAT_LIMITS.text} characters`));
       return;
@@ -752,16 +824,29 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       setAttachment(null);
     }
     focusFieldAfterRender();
-  }, [attachment, draft, focusFieldAfterRender, locked, mode, muted, partyTitles.loading, preparingImage, ready, room.edit, room.send, runRoleCommand, scrollToBottom, showFailure, target]);
+  }, [attachment, draft, focusFieldAfterRender, gifResults.loading, locked, mode, muted, partyTitles.loading, preparingImage, ready, room.edit, room.send, runRoleCommand, scrollToBottom, showFailure, target]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
+      if (pickingGif && pickerSize && (["ArrowUp", "ArrowDown"].includes(event.key) || (pickerIndex >= 0 && ["ArrowLeft", "ArrowRight"].includes(event.key)))) {
+        event.preventDefault();
+        const grid = gifGridRef.current;
+        const columns = grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length || 1 : 1;
+        const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" ? -columns : columns;
+        const next = pickerIndex < 0 ? 0 : Math.min(pickerSize - 1, Math.max(0, pickerIndex + step));
+        setSuggestionIndex(next);
+        if (next + columns >= pickerSize) gifResults.loadMore();
+        return;
+      }
       if (pickerSize && ["Tab", "Enter", "ArrowUp", "ArrowDown"].includes(event.key) && (event.key !== "Tab" || pickerIndex >= 0)) {
         event.preventDefault();
         if (event.key === "ArrowUp") setSuggestionIndex(pickerIndex < 0 ? pickerSize - 1 : (pickerIndex - 1 + pickerSize) % pickerSize);
         else if (event.key === "ArrowDown") setSuggestionIndex((pickerIndex + 1) % pickerSize);
         else if (picking) {
           if (pickerIndex >= 0) void startParty(partyTitles.titles[pickerIndex]!);
+        }
+        else if (pickingGif) {
+          if (pickerIndex >= 0) void pickGif(gifResults.gifs[pickerIndex]!);
         }
         else if (suggestions.length) insertMention(suggestions[pickerIndex]!.name);
         else insertChannel(channelSuggestions[pickerIndex]!.name);
@@ -777,7 +862,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       }
       if (event.key === "Enter") void submitMessage();
     },
-    [actions, channelSuggestions, draft, entries, insertChannel, insertMention, mode, partyTitles.titles, picking, pickerIndex, pickerSize, startParty, submitMessage, suggestions, viewer],
+    [actions, channelSuggestions, draft, entries, gifResults, insertChannel, insertMention, mode, partyTitles.titles, pickGif, picking, pickingGif, pickerIndex, pickerSize, startParty, submitMessage, suggestions, viewer],
   );
 
   const onDraftChange = useCallback(
@@ -831,7 +916,15 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           : partner
             ? `this is the start of ${startText}`
             : `this is the start of ${startText}, say hi!`;
-  const partyStatus = !picking
+  const partyStatus = pickingGif
+    ? gifResults.gifs.length
+      ? null
+      : gifResults.loading
+        ? { text: "looking for gifs", error: false }
+        : gifResults.error
+          ? { text: gifResults.error, error: true }
+          : { text: negativeMessage(gifText ? "no gifs match that search" : "no gifs are trending right now"), error: true }
+    : !picking
     ? null
     : partyTitles.loading
       ? { text: "looking for titles", error: false }
@@ -1042,6 +1135,29 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
               {typingLabel(typingNames)}
             </p>
             <div class="chat-dock">
+              {pickingGif && gifResults.gifs.length > 0 && (
+                <div class="chat-suggestions chat-gif-suggestions">
+                  <div class="chat-gif-grid" ref={gifGridRef} role="listbox" aria-label={gifText ? `gifs for ${gifText}` : "trending gifs"} onScroll={onGifScroll}>
+                    {gifResults.gifs.map((gif, index) => (
+                      <button
+                        type="button"
+                        key={gif.id}
+                        role="option"
+                        aria-selected={index === pickerIndex}
+                        aria-label={gif.title || "gif"}
+                        class={`chat-suggestion chat-gif${index === pickerIndex ? " active" : ""}`}
+                        disabled={sending || preparingImage}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onPointerEnter={() => setHoveredGif(gif.id)}
+                        onPointerLeave={() => setHoveredGif((current) => (current === gif.id ? null : current))}
+                        onClick={() => void pickGif(gif)}
+                      >
+                        <GifThumb gif={gif} animate={(index === pickerIndex || hoveredGif === gif.id) && !prefersReducedMotion()} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {picking && partyTitles.titles.length > 0 && (
                 <div class="chat-suggestions chat-party-suggestions" role="listbox" aria-label="titles to watch together">
                   {partyTitles.titles.map((option, index) => (
@@ -1159,6 +1275,18 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   onClick={() => fileRef.current?.click()}
                 >
                   <IconPlusMedium size={20} />
+                </button>
+                <button
+                  type="button"
+                  class="chat-tool chat-gif-button"
+                  aria-label={pickingGif ? "close gif search" : "search gifs"}
+                  aria-pressed={pickingGif}
+                  data-tooltip={pickingGif ? "close gif search" : "search gifs"}
+                  disabled={locked || muted || sending || preparingImage || mode?.kind === "edit"}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={toggleGifs}
+                >
+                  gif
                 </button>
                 <EditableField
                   id="chatInput"

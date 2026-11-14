@@ -26,6 +26,7 @@ pub struct FolioCachedResponse {
     pub body: Bytes,
     pub fresh_until_ms: u64,
     pub stored_at_ms: u64,
+    pub body_digest: std::sync::OnceLock<[u8; 32]>,
 }
 
 impl FolioCachedResponse {
@@ -87,6 +88,7 @@ pub struct AppState {
     pub effective_bases: Cache<String, url::Url>,
     pub folio_cache_generation: AtomicU64,
     pub folio_metrics: FolioMetrics,
+    pub folio_rewriter: Option<Arc<crate::folio::rewrite::FolioRewriter>>,
     pub blocklist_matcher: Arc<AhoCorasick>,
     pub caching_inflight: DashMap<String, ()>,
     pub coalesce: DashMap<String, broadcast::Sender<Arc<CachedResponse>>>,

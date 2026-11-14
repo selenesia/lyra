@@ -14,7 +14,7 @@ export default function PlayerPartyInvite({ open, target, invite, onDone }: {
 }) {
   const [channels, setChannels] = useState<ChatChannel[]>([]);
   const [selected, setSelected] = useState<ChatChannel[]>([]);
-  const [status, setStatus] = useState("loading channels");
+  const [status, setStatus] = useState("loading channels...");
   const [sending, setSending] = useState(false);
   const busy = useRef(false);
   const inviteWord = selected.length > 1 ? "invites" : "invite";
@@ -24,7 +24,7 @@ export default function PlayerPartyInvite({ open, target, invite, onDone }: {
     const abort = new AbortController();
     setSelected([]);
     setChannels([]);
-    setStatus("loading channels");
+    setStatus("loading channels...");
     void (async () => {
       try {
         const response = await fetch(appPath("/api/chat/me"), { cache: "no-store", signal: abort.signal });

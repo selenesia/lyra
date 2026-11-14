@@ -26,6 +26,8 @@ export const CHAT_CONVERSATION_LIMITS = { name: 32, groupMembers: 10, groups: 30
 export const CHAT_PARTY_LIMITS = { watchers: 50, hosted: 3, query: 2048, messages: 100, idleMs: 10 * 60_000, maxMs: 12 * 60 * 60_000 } as const;
 export const CHAT_PARTY_PATHS = { watch: "/stream/watch", anime: "/stream/anime" } as const;
 export const CHAT_PARTY_COMMAND = /^\/(?:party|watch)(?=\s|$)/i;
+export const CHAT_GIFS = { page: 24, pages: 20, query: 64, title: 100 } as const;
+export const CHAT_GIF_COMMAND = /^\/gif(?=\s|$)/i;
 
 export type ChatChannel = (typeof CHAT_CATEGORIES)[number]["channels"][number];
 export type ChatConversationKey = `conv:${number}`;
@@ -135,6 +137,20 @@ export interface ChatMember {
   display?: string;
   avatar?: string;
   status?: string;
+}
+
+export interface ChatPresence {
+  join: ChatMember[];
+  leave: string[];
+}
+
+export function sortMembers(list: ChatMember[]): ChatMember[] {
+  return list.sort((a, b) => roleRank(b.role) - roleRank(a.role) || a.name.localeCompare(b.name));
+}
+
+export function applyPresence(current: ChatMember[], presence: ChatPresence): ChatMember[] {
+  const changed = new Set([...presence.leave, ...presence.join.map((member) => member.author)]);
+  return sortMembers([...current.filter((member) => !changed.has(member.author)), ...presence.join]);
 }
 
 export interface ChatProfile extends ChatMember {

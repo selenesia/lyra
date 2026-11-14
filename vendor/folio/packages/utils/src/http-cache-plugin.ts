@@ -5,6 +5,8 @@ import type { Frame } from "@mercuryworkshop/folio-controller";
 export const CACHE_NAME = "folio-http-cache-v4";
 const DEFAULT_MAX_ENTRY_BYTES = 2 * 1024 * 1024;
 const STORED_AT_HEADER = "x-fl-cached-at";
+const SERVER_REWRITTEN_HEADER = "x-mochi-folio-rewritten";
+const SERVER_REWRITE_INTENT_HEADER = "x-mochi-folio-rewrite";
 const CACHEABLE_STATUSES = new Set([200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501]);
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 let cacheGeneration = 0;
@@ -232,6 +234,12 @@ export class HttpCachePlugin extends ManagedPlugin {
 			}
 			try { await (await this.openCache()).delete(entry.key, { ignoreVary: true }); } catch {}
 			const headers = rawHeaders(response.rawHeaders);
+			if (
+				headers.has(SERVER_REWRITTEN_HEADER) &&
+				!(headers.get("vary") ?? "").toLowerCase().includes(SERVER_REWRITE_INTENT_HEADER)
+			) {
+				headers.append("vary", SERVER_REWRITE_INTENT_HEADER);
+			}
 			if (!storable(response.status, headers, this.maxEntryBytes)) return;
 			const upstreamAge = headers.has("age") ? seconds(headers.get("age")) ?? Infinity : 0;
 			const correctedAge = Math.max(age(headers, receivedAt), upstreamAge + Math.max(0, receivedAt - entry.startedAt) / 1000);

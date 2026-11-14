@@ -68,4 +68,12 @@
   .chat-party-actions .settings-page-button {
     flex: 1;
   }
+
+  .chat-gif-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .chat-suggestion.chat-gif {
+    height: 84px;
+  }
 }

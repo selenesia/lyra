@@ -324,7 +324,7 @@ function writeCrop(frame, box, target, slot, side) {
 }
 
 function cropFrames(frames, boxes) {
-  const pixels = new Float32Array(frames.length * boxes.length * 3 * CROP_PIXELS);
+  const pixels = new Uint8ClampedArray(frames.length * boxes.length * 3 * CROP_PIXELS);
   let slot = 0;
   for (const frame of frames) for (const box of boxes) writeCrop(frame, box, pixels, slot++, CROP_SIDE);
   return { count: slot, pixels };
@@ -375,7 +375,7 @@ function planGif(bytes, screenSide, screenCrops) {
     screen: screen.subarray(0, playback.length * boxes.length * cropSize),
     render(wanted) {
       const order = new Map(wanted.map((unique, position) => [playback[unique], position]));
-      const pixels = new Float32Array(wanted.length * boxes.length * 3 * CROP_PIXELS);
+      const pixels = new Uint8ClampedArray(wanted.length * boxes.length * 3 * CROP_PIXELS);
       playGif(bytes, (frame, index) => {
         const position = order.get(index);
         if (position === undefined) return;

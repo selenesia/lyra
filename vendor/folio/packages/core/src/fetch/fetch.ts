@@ -24,6 +24,10 @@ import {
 	worstFetchSite,
 } from "./headers";
 import { _URL } from "@/shared/snapshot";
+import {
+	SERVER_REWRITE_INTENT_HEADER,
+	serverRewriteIntent,
+} from "./serverRewrite";
 
 export async function doHandleFetch(
 	handler: FolioFetchHandler,
@@ -147,7 +151,9 @@ export async function doHandleFetch(
 	}
 
 	if (response.body && !isRedirect(response)) {
-		responseBody = await rewriteBody(handler, request, parsed, response);
+		responseBody = await rewriteBody(handler, request, parsed, response, () =>
+			doNetworkFetch(handler, request, parsed, newheaders, false)
+		);
 
 		normalizeContentType(parsed, responseHeaders);
 	}
@@ -174,11 +180,17 @@ export async function doNetworkFetch(
 	handler: FolioFetchHandler,
 	request: FolioFetchRequest,
 	parsed: FolioFetchParsed,
-	newheaders: FolioHeaders
+	newheaders: FolioHeaders,
+	serverRewrite = true
 ): Promise<BareResponse> {
+	const intent = serverRewrite
+		? serverRewriteIntent(handler, parsed, request.method)
+		: null;
 	const init = {
 		body: request.body,
-		headers: newheaders.toRawHeaders(),
+		headers: intent
+			? [...newheaders.toRawHeaders(), [SERVER_REWRITE_INTENT_HEADER, intent]]
+			: newheaders.toRawHeaders(),
 		method: request.method,
 		redirect: "manual",
 	} as BareRequestInit;

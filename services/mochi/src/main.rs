@@ -58,11 +58,16 @@ const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: folio::rewrite::worker::CappedAllocator<MiMalloc> =
+    folio::rewrite::worker::CappedAllocator(MiMalloc);
 
 type AppResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 fn main() -> AppResult<()> {
+    if let Some(code) = folio::rewrite::worker::run_if_requested() {
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "mochi=info".into()))
@@ -92,6 +97,13 @@ fn main() -> AppResult<()> {
         tuning.stream_prefetch_segments,
     );
 
+    tracing::info!(
+        "folio rewrite: {} workers, {}mb cache, {}mb max script",
+        tuning.folio_rewrite_workers,
+        tuning.folio_rewrite_cache_bytes / (1024 * 1024),
+        tuning.folio_rewrite_max_bytes / (1024 * 1024),
+    );
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(tuning.worker_threads)
         .enable_all()
@@ -113,6 +125,46 @@ fn upstream_client(pool_idle_timeout_secs: u64) -> reqwest::ClientBuilder {
         .http2_adaptive_window(true)
         .http2_keep_alive_interval(Duration::from_secs(15))
         .http2_keep_alive_timeout(Duration::from_secs(20))
+}
+
+fn folio_rewriter(tuning: &tuning::MochiTuning) -> Option<Arc<folio::rewrite::FolioRewriter>> {
+    use folio::rewrite::{pool, worker, FolioRewriter};
+    if tuning.folio_rewrite_workers == 0 {
+        return None;
+    }
+    let program = if cfg!(target_os = "linux") {
+        "/proc/self/exe".into()
+    } else {
+        match std::env::current_exe() {
+            Ok(program) => program,
+            Err(_) => {
+                tracing::warn!("folio rewrite workers are unavailable{}", NEGATIVE);
+                return None;
+            }
+        }
+    };
+    let rewrite_pool = pool::RewritePool::new(
+        pool::WorkerCommand {
+            program,
+            args: vec![
+                worker::WORKER_ARG.into(),
+                tuning.folio_rewrite_worker_heap_bytes.to_string(),
+            ],
+        },
+        pool::PoolLimits {
+            workers: tuning.folio_rewrite_workers,
+            job_timeout: Duration::from_millis(tuning.folio_rewrite_timeout_ms),
+            idle_timeout: Duration::from_secs(5 * 60),
+            queue_wait: Duration::from_secs(2),
+            max_payload_bytes: tuning.folio_rewrite_max_bytes * 4 + 1024 * 1024,
+        },
+    );
+    rewrite_pool.spawn_reaper();
+    Some(FolioRewriter::new(
+        rewrite_pool,
+        tuning.folio_rewrite_cache_bytes,
+        tuning.folio_rewrite_max_bytes,
+    ))
 }
 
 async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
@@ -250,6 +302,7 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
             .build(),
         folio_cache_generation: Default::default(),
         folio_metrics: FolioMetrics::default(),
+        folio_rewriter: folio_rewriter(&tuning),
         blocklist_matcher,
         caching_inflight: DashMap::new(),
         coalesce: DashMap::new(),

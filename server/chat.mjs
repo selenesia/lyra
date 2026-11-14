@@ -4,6 +4,7 @@ import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
 import { chatAudioVideoDemuxer } from "./chat-audio-video.mjs";
 import { chatImageType, readChatImage } from "./chat-media.mjs";
+import { createChatGifs } from "./chat-gifs.mjs";
 import { createPartyRegistry } from "./chat-party.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
 import { moderate, readModeration } from "../src/features/chat/moderation.ts";
@@ -35,6 +36,7 @@ import {
   isPartyId,
   readPartyMedia,
   replySnippet,
+  sortMembers,
 } from "../src/features/chat/chatProtocol.ts";
 import {
   assignableRoles,
@@ -43,7 +45,6 @@ import {
   canTimeout,
   isChatRole,
   outranks,
-  roleRank,
 } from "../src/features/chat/chatRoles.ts";
 
 const BODY_MAX_BYTES = 4096;
@@ -52,6 +53,7 @@ const MAX_TIMEOUT_MINUTES = 28 * 24 * 60;
 const NAME_CACHE_LIMIT = 2_000;
 const MEDIA_ROUTE = /^media\/(avatar|banner)(?:\/(\d{1,15}))?$/;
 const ATTACHMENT_ROUTE = /^media\/message\/(\d{1,15})$/;
+const GIF_ROUTE = /^gifs\/([A-Za-z0-9_-]{1,128})$/;
 const PROFILE_LABELS = { display: "display name", pronouns: "pronouns", status: "status", bio: "bio" };
 const MEMBER_CACHE_LIMIT = 10_000;
 const PARTY_POSITION_MAX = 86_400;
@@ -118,6 +120,7 @@ export function createChatRoom({
   prepareMedia = async () => ({ unavailable: true }),
   checkText = async () => null,
   warmText = () => {},
+  gifs = createChatGifs(),
   historySize = CHAT_LIMITS.page,
   maxStreamsPerUser = 8,
   pingMs = 20_000,
@@ -153,6 +156,7 @@ export function createChatRoom({
   const uploading = new Set();
   let heartbeat;
   let presenceTimer;
+  let announced = new Map();
 
   const frame = (event, value) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`);
   const member = (row) => ({
@@ -312,16 +316,19 @@ export function createChatRoom({
   function members() {
     const byUser = new Map();
     for (const stream of streams.values()) byUser.set(stream.user.id, stream.user);
-    return [...byUser.values()]
-      .sort((a, b) => roleRank(b.role) - roleRank(a.role) || a.username.localeCompare(b.username))
-      .map(member);
+    return sortMembers([...byUser.values()].map(member));
   }
 
   function announcePresence() {
     if (presenceTimer) return;
     presenceTimer = setTimeout(() => {
       presenceTimer = undefined;
-      broadcast(frame("members", members()));
+      const current = new Map(members().map((entry) => [entry.author, JSON.stringify(entry)]));
+      const join = [];
+      for (const [author, shown] of current) if (announced.get(author) !== shown) join.push(JSON.parse(shown));
+      const leave = [...announced.keys()].filter((author) => !current.has(author));
+      announced = current;
+      if (join.length || leave.length) broadcast(frame("presence", { join, leave }));
     }, presenceDelayMs);
     presenceTimer.unref?.();
   }
@@ -1433,6 +1440,7 @@ export function createChatRoom({
     const method = request.method;
     const mediaRoute = MEDIA_ROUTE.exec(route);
     const attachmentRoute = ATTACHMENT_ROUTE.exec(route);
+    const gifRoute = GIF_ROUTE.exec(route);
     if (attachmentRoute && (method === "GET" || method === "HEAD")) {
       const message = store.message(Number(attachmentRoute[1]));
       if (message && (isConversationKey(message.channel) || !canReadChannel("member", message.channel))) {
@@ -1446,15 +1454,21 @@ export function createChatRoom({
     const known =
       (["message", "profile"].includes(route) && method === "POST") ||
       (mediaRoute && !mediaRoute[2] && method === "POST") ||
-      (["stream", "me", "history", "profile", "users", "party"].includes(route) && method === "GET");
+      (gifRoute && method === "GET") ||
+      (["stream", "me", "history", "profile", "users", "party", "gifs"].includes(route) && method === "GET");
     if (!known) return reply(httpError(404, "CHAT_ROUTE_NOT_FOUND", "not found"));
     const { row, failure } = await session(request, ip, browser);
     if (failure) return reply(failure);
     if (route === "stream") return url.searchParams.has("party") ? watchParty(url, row, request.signal) : connect(row, request.signal);
     if (route === "me") return json(200, { viewer: viewer(row) });
+    if (gifRoute) {
+      const found = await gifs.media(gifRoute[1], url.searchParams.get("size"), row.id);
+      return found.response ?? reply(found.failure);
+    }
     let result;
     if (route === "history") result = history(url, row);
     else if (route === "users") result = users(url, row);
+    else if (route === "gifs") result = await gifs.search(url, row.id);
     else if (route === "party") result = partyInfo(url, row);
     else if (route === "profile") result = method === "POST" ? await editProfile(request, row) : profile(url, row);
     else if (mediaRoute) result = await upload(request, mediaRoute[1], row);

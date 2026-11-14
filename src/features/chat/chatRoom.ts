@@ -11,6 +11,7 @@ import {
   CHAT_LIMITS,
   CHAT_PARTY_LIMITS,
   CHAT_VIDEO,
+  applyPresence,
   type ChatAttachmentKind,
   type ChatChannel,
   type ChatConversation,
@@ -20,6 +21,7 @@ import {
   type ChatMessage,
   type ChatParty,
   type ChatPartyPath,
+  type ChatPresence,
   type ChatProfile,
   type ChatTarget,
   type ChatTyping,
@@ -508,6 +510,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         },
       ],
       ["members", (event) => setMembers(parse<ChatMember[]>(event))],
+      ["presence", (event) => setMembers((current) => applyPresence(current, parse<ChatPresence>(event)))],
       [
         "profile",
         (event) => {

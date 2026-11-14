@@ -9,6 +9,7 @@ const BUFFER_LIMIT = 4 * 1024 * 1024;
 const requestHeaders = new Set([
   "accept", "accept-language", "content-type", "range", "if-range", "if-none-match",
   "if-modified-since", "cache-control", "x-mochi-folio-headers", "x-mochi-folio-session",
+  "x-mochi-folio-rewrite",
 ]);
 const corsHeaders = new Set([...requestHeaders, "authorization", "dpop"]);
 const responseHeaders = new Set([

@@ -36,7 +36,16 @@ hex = "0.4"
 sysinfo = "0.38.3"
 wreq = { version = "=6.0.0-rc.31", features = ["stream", "gzip", "brotli", "deflate", "zstd"] }
 wreq-util = "=3.0.0-rc.14"
+js = { path = "../../vendor/folio/packages/core/rewriter/js", default-features = false }
+oxc_allocator = "=0.95.0"
+brotli = "8"
+memchr = "2"
+
+[build-dependencies]
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
+flate2 = "1"
 tokio = { version = "1.0", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

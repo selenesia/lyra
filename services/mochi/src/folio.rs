@@ -16,6 +16,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::wrappers::ReceiverStream;
 use url::Url;
 
+pub(crate) mod rewrite;
+
 pub const PREFIX: &str = "/!!folio/";
 pub const REQUEST_PREFIX: &str = "/!!folio/request/";
 const REQUEST_HEADERS: &str = "x-mochi-folio-headers";
@@ -32,6 +34,8 @@ struct UpstreamMeta {
     url: String,
     raw_headers: Vec<(String, String)>,
     cache: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rewritten: Option<u8>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +47,7 @@ pub struct MetricsSnapshot {
     cache_revalidations: u64,
     rejected_targets: u64,
     upstream_errors: u64,
+    rewrite: Option<serde_json::Value>,
 }
 
 struct ActiveRequestGuard(Arc<AppState>);
@@ -66,8 +71,12 @@ impl Drop for ActiveRequestGuard {
     }
 }
 
-pub async fn capabilities_handler() -> impl IntoResponse {
-    axum::Json(serde_json::json!({ "ok": true, "protocol": 1 }))
+pub async fn capabilities_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "protocol": 1,
+        "rewriter": state.folio_rewriter.as_ref().map(|_| rewrite::REWRITER_HASH),
+    }))
 }
 
 pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -80,6 +89,10 @@ pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
         cache_revalidations: metrics.cache_revalidations.load(Ordering::Relaxed),
         rejected_targets: metrics.rejected_targets.load(Ordering::Relaxed),
         upstream_errors: metrics.upstream_errors.load(Ordering::Relaxed),
+        rewrite: state
+            .folio_rewriter
+            .as_ref()
+            .map(|rewriter| rewriter.metrics()),
     })
 }
 
@@ -116,6 +129,14 @@ pub async fn request_handler(
         Ok(headers) => headers,
         Err(reason) => return gateway_error(StatusCode::BAD_REQUEST, reason),
     };
+    let intent = match state.folio_rewriter.as_ref() {
+        Some(rewriter) if method == Method::GET && !upstream_headers.contains_key("range") => {
+            rewrite::parse_intent(&headers)
+                .or_else(|reason| rewriter.decline(reason))
+                .unwrap_or(None)
+        }
+        _ => None,
+    };
     let session = headers
         .get(SESSION_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -149,6 +170,16 @@ pub async fn request_handler(
             .folio_metrics
             .cache_hits
             .fetch_add(1, Ordering::Relaxed);
+        if let Some(intent) = intent.as_ref() {
+            return rewrite::respond(
+                &state,
+                intent,
+                cached_meta(entry, "HIT"),
+                entry.body.clone(),
+                &entry.body_digest,
+            )
+            .await;
+        }
         return cached_response(entry, "HIT");
     }
     state
@@ -255,6 +286,16 @@ pub async fn request_handler(
                 .folio_metrics
                 .cache_revalidations
                 .fetch_add(1, Ordering::Relaxed);
+            if let Some(intent) = intent.as_ref() {
+                return rewrite::respond(
+                    &state,
+                    intent,
+                    cached_meta(&refreshed, "REVALIDATED"),
+                    refreshed.body.clone(),
+                    &refreshed.body_digest,
+                )
+                .await;
+            }
             return cached_response(&refreshed, "REVALIDATED");
         }
     }
@@ -289,6 +330,7 @@ pub async fn request_handler(
         url: upstream_url.clone(),
         raw_headers: raw_headers.clone(),
         cache: "MISS",
+        rewritten: None,
     };
 
     if method == Method::HEAD || response_has_no_body(status.as_u16()) {
@@ -302,6 +344,7 @@ pub async fn request_handler(
                 body: Bytes::new(),
                 fresh_until_ms,
                 stored_at_ms,
+                body_digest: Default::default(),
             });
             publish_cache(&state, cache_key, entry, generation).await;
         }
@@ -309,24 +352,103 @@ pub async fn request_handler(
     }
 
     let content_length = upstream.content_length();
-    let can_buffer = content_length
-        .map(|length| length as usize <= state.folio_cache_max_entry_size)
-        .unwrap_or(true);
-    let (sender, receiver) = tokio::sync::mpsc::channel(state.channel_buffer.max(1));
     let cache_limit = state.folio_cache_max_entry_size;
+    let mut stream = upstream.bytes_stream();
+    let mut prelude = Vec::new();
+    let rewritable =
+        intent
+            .as_ref()
+            .zip(state.folio_rewriter.as_ref())
+            .filter(|(intent, rewriter)| {
+                let length =
+                    content_length.map_or(1, |length| length.try_into().unwrap_or(usize::MAX));
+                rewrite::eligibility(
+                    intent,
+                    status.as_u16(),
+                    &raw_headers,
+                    length,
+                    rewriter.max_bytes(),
+                )
+                .or_else(|reason| rewriter.decline(reason))
+                .is_ok()
+            });
+    if let Some((intent, rewriter)) = rewritable {
+        let limit = rewriter.max_bytes();
+        let mut buffer = BytesMut::with_capacity(content_length.unwrap_or(0) as usize);
+        let mut digest = Sha256::new();
+        let mut overflow = None;
+        while let Some(next) = stream.next().await {
+            match next {
+                Ok(chunk) if buffer.len().saturating_add(chunk.len()) > limit => {
+                    overflow = Some(chunk);
+                    break;
+                }
+                Ok(chunk) => {
+                    digest.update(&chunk);
+                    buffer.extend_from_slice(&chunk);
+                }
+                Err(_) => {
+                    state
+                        .folio_metrics
+                        .upstream_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                    return gateway_error(StatusCode::BAD_GATEWAY, "upstream request failed");
+                }
+            }
+        }
+        match overflow {
+            Some(chunk) => {
+                let _ = rewriter.decline::<()>("too-large");
+                prelude = vec![buffer.freeze(), chunk];
+            }
+            None => {
+                drop(stream);
+                drop(permit);
+                drop(active);
+                let body = finish_cached_body(buffer);
+                let body_digest = std::sync::OnceLock::from(<[u8; 32]>::from(digest.finalize()));
+                if let Some(cache_key) = cache_key.filter(|_| body.len() <= cache_limit) {
+                    let entry = Arc::new(FolioCachedResponse {
+                        status: status.as_u16(),
+                        status_text,
+                        url: upstream_url,
+                        request_url: target.to_string(),
+                        raw_headers,
+                        body: body.clone(),
+                        fresh_until_ms,
+                        stored_at_ms,
+                        body_digest: body_digest.clone(),
+                    });
+                    publish_cache(&state, cache_key, entry, generation).await;
+                }
+                return rewrite::respond(&state, intent, meta, body, &body_digest).await;
+            }
+        }
+    }
+
+    let buffered_length = prelude.iter().map(Bytes::len).sum::<usize>();
+    let can_buffer = content_length
+        .map(|length| length as usize <= cache_limit)
+        .unwrap_or(true)
+        && buffered_length <= cache_limit;
+    let (sender, receiver) = tokio::sync::mpsc::channel(state.channel_buffer.max(1));
     let state_for_stream = state.clone();
     tokio::spawn(async move {
         let _permit = permit;
         let _active = active;
-        let mut stream = upstream.bytes_stream();
-        let mut buffered = (can_buffer && cache_key.is_some())
-            .then(|| BytesMut::with_capacity(content_length.unwrap_or(0) as usize));
+        let mut prelude = prelude.into_iter();
+        let mut buffered = (can_buffer && cache_key.is_some()).then(|| {
+            BytesMut::with_capacity((content_length.unwrap_or(0) as usize).max(buffered_length))
+        });
 
         loop {
-            let next = tokio::select! {
-                biased;
-                _ = sender.closed() => return,
-                next = stream.next() => next,
+            let next = match prelude.next() {
+                Some(chunk) => Some(Ok(chunk)),
+                None => tokio::select! {
+                    biased;
+                    _ = sender.closed() => return,
+                    next = stream.next() => next,
+                },
             };
             let Some(next) = next else { break };
             match next {
@@ -371,6 +493,7 @@ pub async fn request_handler(
                 body: finish_cached_body(buffer),
                 fresh_until_ms,
                 stored_at_ms,
+                body_digest: Default::default(),
             });
             publish_cache(&state_for_stream, cache_key, entry, generation).await;
         }
@@ -678,6 +801,7 @@ fn refresh_cached_response(
         body: cached.body.clone(),
         fresh_until_ms: now_ms().saturating_add(ttl.saturating_mul(1000)),
         stored_at_ms: now_ms(),
+        body_digest: cached.body_digest.clone(),
     }
 }
 
@@ -686,6 +810,10 @@ fn response_has_no_body(status: u16) -> bool {
 }
 
 fn cached_response(entry: &FolioCachedResponse, cache: &'static str) -> Response {
+    response_with_meta(Body::from(entry.body.clone()), &cached_meta(entry, cache))
+}
+
+fn cached_meta(entry: &FolioCachedResponse, cache: &'static str) -> UpstreamMeta {
     let mut raw_headers = entry.raw_headers.clone();
     let age = raw_header(&raw_headers, "age")
         .and_then(|value| value.parse::<u64>().ok())
@@ -693,14 +821,14 @@ fn cached_response(entry: &FolioCachedResponse, cache: &'static str) -> Response
         .saturating_add(now_ms().saturating_sub(entry.stored_at_ms).div_ceil(1000));
     raw_headers.retain(|(name, _)| !name.eq_ignore_ascii_case("age"));
     raw_headers.push(("age".into(), age.to_string()));
-    let meta = UpstreamMeta {
+    UpstreamMeta {
         status: entry.status,
         status_text: entry.status_text.clone(),
         url: entry.url.clone(),
         raw_headers,
         cache,
-    };
-    response_with_meta(Body::from(entry.body.clone()), &meta)
+        rewritten: None,
+    }
 }
 
 fn response_with_meta(body: Body, meta: &UpstreamMeta) -> Response {

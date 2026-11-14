@@ -1,24 +1,26 @@
 export const IMAGE_RULES = [
   { score: "explicit", category: "sexual", limit: 0.5 },
-  { score: "youthful", category: "sexual", limit: 0.5 },
-  { score: "graphic", category: "gore", limit: 0.4 },
-  { score: "sexual", category: "sexual", limit: 0.02 },
-  { score: "gore", category: "gore", limit: 0.01 },
-  { score: "hate", category: "hate", limit: 0.005 },
+  { score: "explicitAgreed", category: "sexual", limit: 0.2 },
+  { score: "youthful", category: "sexual", limit: 0.25 },
+  { score: "graphic", category: "gore", limit: 0.75 },
+  { score: "gore", category: "gore", limit: 0.45 },
+  { score: "hate", category: "hate", limit: 0.1 },
 ];
 
-export const IMAGE_COVERAGE = { screen: "safety", screenCrops: 96 };
+export const IMAGE_COVERAGE = { screen: "safety", screenCrops: 192 };
 export const VIDEO_COVERAGE = { everySeconds: 1, crops: 96, side: 640 };
 
+const CLEARLY_YOUNG = 0.8;
+
 function cropScores({ clip, nsfw, safety }) {
-  const explicit = nsfw.hentai + nsfw.porn;
+  const explicit = Math.min(nsfw.hentai + nsfw.porn, clip.sexual);
   return {
     explicit,
-    youthful: clip.minor > clip.adult ? explicit + nsfw.sexy : 0,
+    explicitAgreed: Math.min(explicit, safety.NSFW),
+    youthful: clip.minor >= CLEARLY_YOUNG ? explicit : 0,
     graphic: safety.NSFL,
-    sexual: clip.sexual - clip.safe,
-    gore: clip.gore - clip.safe,
-    hate: clip.hate - clip.safe,
+    gore: Math.min(safety.NSFL, clip.gore),
+    hate: clip.hate,
   };
 }
 

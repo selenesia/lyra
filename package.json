@@ -25,6 +25,7 @@
     "build:ublock-state": "bun scripts/build-ublock-state.mjs",
     "check:chat-image": "bun scripts/check-chat-image.mjs",
     "check:chat-text": "bun scripts/check-chat-text.mjs",
+    "check:folio-rewrite": "bun scripts/check-folio-rewrite.mjs",
     "setup:chat": "bun scripts/setup-chat.mjs",
     "test": "bun test --isolate scripts src",
     "test:sync-prod": "bun test --isolate scripts/sync-prod.test.mjs",

@@ -1,6 +1,10 @@
 import { createRivetFramePlugins, initializeRivet } from "./rivet";
 import type { ProxyTransport } from "@mercuryworkshop/proxy-transports";
 import { MochiTransport, resolveMochiOrigin } from "./mochiTransport";
+import {
+  connectEpoxyWebSocket,
+  type EpoxyStreamClient,
+} from "./epoxyWebSocket";
 import { folioPageStateDocuments } from "./folioPageState";
 import { negativeMessage, NEGATIVE } from "../runtime/messages.ts";
 import { runtimeAssetPath } from "../runtime/build.ts";
@@ -110,24 +114,24 @@ function getControllerConstructor(): FolioControllerConstructor {
   return globals.Controller;
 }
 
-async function createTransport(
-  name: string,
-  wispUrl: string,
-): Promise<ProxyTransport> {
-  let fallback: ProxyTransport;
-  if (name === "libcurl") {
-    const transportPath = runtimeAssetPath("libcurl", "index.mjs");
-    const mod = await import(/* @vite-ignore */ transportPath);
-    const Transport = mod.default;
-    fallback = new Transport({ wisp: wispUrl }) as ProxyTransport;
-  } else {
-    const transportPath = runtimeAssetPath("epoxy", "index.mjs");
-    const mod = await import(/* @vite-ignore */ transportPath);
-    const Transport = mod.default;
-    fallback = new Transport({ wisp: wispUrl }) as ProxyTransport;
-  }
+function createTransport(name: string, wispUrl: string): ProxyTransport {
+  const transportPath = runtimeAssetPath(
+    name === "libcurl" ? "libcurl" : "epoxy",
+    "index.mjs",
+  );
   generalMochiTransportEnabled = true;
-  return new MochiTransport(fallback);
+  return new MochiTransport(async () => {
+    const mod = await import(/* @vite-ignore */ transportPath);
+    const Transport = mod.default;
+    const transport = new Transport({ wisp: wispUrl }) as ProxyTransport & {
+      client: EpoxyStreamClient;
+    };
+    if (name !== "libcurl") {
+      transport.connect = (...args) =>
+        connectEpoxyWebSocket(transport.client, ...args);
+    }
+    return transport;
+  });
 }
 
 function folioRuntimeConfig() {
@@ -744,7 +748,7 @@ export async function initializeFolioController(options: {
 
   currentTransportKey = transportKey;
   const pending = (async () => {
-    const transport = await createTransport(
+    const transport = createTransport(
       options.transport,
       options.wispUrl,
     );

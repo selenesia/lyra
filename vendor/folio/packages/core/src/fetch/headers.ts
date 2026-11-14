@@ -14,6 +14,7 @@ import {
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { _URL, _Set } from "@/shared/snapshot";
 import { createReferrerString } from "./util";
+import { SERVER_REWRITTEN_HEADER } from "./serverRewrite";
 
 const SEC_HEADERS = new _Set([
 	"cross-origin-embedder-policy",
@@ -84,6 +85,11 @@ export async function rewriteResponseHeaders(
 	headers.delete("permissions-policy");
 
 	headers.delete("set-cookie");
+
+	if (headers.get(SERVER_REWRITTEN_HEADER) === "2") {
+		headers.delete("content-length");
+	}
+	headers.delete(SERVER_REWRITTEN_HEADER);
 
 	if (
 		handler.crossOriginIsolated &&

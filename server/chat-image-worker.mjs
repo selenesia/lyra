@@ -16,18 +16,48 @@ const label = labels.labels.map((entry, row) => ({
   category: entry.category,
   vector: Float32Array.from(quantized.subarray(row * labels.width, (row + 1) * labels.width), (value) => value * entry.scale),
 }));
-const categories = [...new Set(label.map((entry) => entry.category))];
+const CLIP_LOGIT_SCALE = 100;
 let models;
+
+function shares(similarity, categories) {
+  const chosen = label.flatMap(({ category }, index) => (categories.includes(category) ? [index] : []));
+  const top = Math.max(...chosen.map((index) => similarity[index]));
+  const mass = Object.fromEntries(categories.map((category) => [category, 0]));
+  let total = 0;
+  for (const index of chosen) {
+    const weight = Math.exp(CLIP_LOGIT_SCALE * (similarity[index] - top));
+    mass[label[index].category] += weight;
+    total += weight;
+  }
+  for (const category of categories) mass[category] /= total;
+  return mass;
+}
+
+function average(similarity, category) {
+  let sum = 0;
+  let count = 0;
+  label.forEach((entry, index) => {
+    if (entry.category !== category) return;
+    sum += similarity[index];
+    count += 1;
+  });
+  return sum / count;
+}
 
 export function matchLabels(embedding) {
   const length = Math.hypot(...embedding) || 1;
-  const best = Object.fromEntries(categories.map((category) => [category, -1]));
-  for (const { category, vector } of label) {
+  const similarity = label.map(({ vector }) => {
     let dot = 0;
     for (let index = 0; index < labels.width; index += 1) dot += vector[index] * embedding[index];
-    best[category] = Math.max(best[category], dot / length);
-  }
-  return best;
+    return dot / length;
+  });
+  const content = shares(similarity, ["safe", "sexual", "gore"]);
+  return {
+    sexual: content.sexual,
+    gore: content.gore,
+    minor: shares(similarity, ["minor", "adult"]).minor,
+    hate: average(similarity, "hate") - average(similarity, "safe"),
+  };
 }
 
 function softmax(row) {
@@ -73,7 +103,7 @@ async function screenFrames(loaded, plan) {
 async function readCrops(loaded, { count, pixels }) {
   const crops = [];
   for (let crop = 0; crop < count; crop += 1) {
-    const values = pixels.subarray(crop * CROP_SIZE, (crop + 1) * CROP_SIZE);
+    const values = Float32Array.from(pixels.subarray(crop * CROP_SIZE, (crop + 1) * CROP_SIZE), (value) => value / 255);
     const reading = { clip: matchLabels(await run(loaded.vision, IMAGE_EMBEDDER.input, IMAGE_EMBEDDER.output, CROP_SIDE, values)) };
     for (const [key, spec] of Object.entries(IMAGE_CLASSIFIERS)) {
       if (key === IMAGE_COVERAGE.screen) continue;

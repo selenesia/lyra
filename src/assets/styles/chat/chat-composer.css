@@ -148,6 +148,64 @@
   width: 100%;
 }
 
+.chat-party-suggestions,
+.chat-gif-suggestions {
+  bottom: calc(100% + 8px);
+  box-shadow: none;
+}
+
+.chat-gif-suggestions {
+  padding: 8px;
+}
+
+.chat-gif-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-height: min(296px, 40dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.chat-suggestion.chat-gif {
+  height: 96px;
+  padding: 0;
+}
+
+.chat-suggestion.chat-gif,
+.chat-suggestion.chat-gif:is(:hover, :focus-visible, .active) {
+  background: none;
+  outline: none;
+}
+
+.chat-gif-frame {
+  background-color: var(--game-card-bg);
+  border-radius: var(--radius-item);
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.chat-gif-frame img {
+  filter: brightness(var(--game-cover-brightness));
+  height: 100%;
+  inset: 0;
+  object-fit: cover;
+  position: absolute;
+  transition:
+    filter var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease);
+  width: 100%;
+}
+
+.chat-gif:not(:disabled):is(:hover, :focus-visible, .active) .chat-gif-frame img {
+  filter: brightness(1);
+  transform: scale(var(--motion-hover-scale, 1.05));
+}
+
 .chat-suggestion:disabled {
   cursor: default;
   opacity: 0.4;
@@ -220,11 +278,27 @@
   position: absolute;
 }
 
-.chat-dock .chat-attach-button:not(:disabled):is(:hover, :focus-visible) {
+.chat-dock .chat-gif-button {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  pointer-events: auto;
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+}
+
+.chat-dock .chat-gif-button[aria-pressed="true"] {
+  color: var(--text-white);
+}
+
+.chat-dock :is(.chat-attach-button, .chat-gif-button):not(:disabled):is(:hover, :focus-visible) {
   transform: translateY(-50%) scale(var(--motion-hover-scale, 1.1));
 }
 
-.chat-dock .chat-attach-button:not(:disabled):active {
+.chat-dock :is(.chat-attach-button, .chat-gif-button):not(:disabled):active {
   transform: translateY(-50%) scale(1);
 }
 
@@ -236,6 +310,7 @@
   overflow-wrap: anywhere;
   overflow-y: auto;
   padding-left: 50px;
+  padding-right: 50px;
   scrollbar-width: none;
   white-space: pre-wrap;
   width: 100%;
