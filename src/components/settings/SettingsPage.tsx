@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import {
   IconBook,
   IconBubbleText,
+  IconChat,
   IconChevronBottom,
   IconGhost,
   IconHammer2,
@@ -75,6 +76,8 @@ import {
   type CaptionStyleName,
 } from "../player/captionStyle.ts";
 import type { InstalledExtensionSummary } from "../../../packages/rivet/src/index";
+import { isStatic } from "../../core/runtime/hosting.ts";
+import { forgetTutorialSeen } from "../layout/tutorialSeen.ts";
 import "../../assets/styles/catalog/catalog.css";
 import "../../assets/styles/settings/settings-page.css";
 
@@ -242,7 +245,7 @@ const FIELDS: readonly SettingField[] = [
 ];
 
 const SUBTITLE_KEYWORDS =
-  "subtitle style subtitles captions size color background edge preview";
+  "subtitles style subtitles captions size color background edge preview";
 const EXTENSION_KEYWORDS = "extensions install chrome extension upload";
 const SUBTITLE_SAMPLE = "this is how your subtitles look";
 
@@ -729,6 +732,20 @@ export default function SettingsPage({
             <IconBook />
             tutorial
           </button>
+          {!isStatic && (
+            <button
+              type="button"
+              class="settings-page-tab"
+              onClick={() => {
+                hide();
+                forgetTutorialSeen("chat");
+                window.showChatPage?.();
+              }}
+            >
+              <IconChat />
+              chats tutorial
+            </button>
+          )}
           <div class="settings-page-about">
             <span>version</span>
             <strong>{versionInfo || "≽^•⩊•^≼"}</strong>
@@ -783,7 +800,7 @@ export default function SettingsPage({
                 {section.custom && section.id === "subtitles" && (
                   <SettingItem
                     wide
-                    label="subtitle style"
+                    label="subtitles style"
                     description="how subtitles look in the player."
                   >
                     <SubtitleStyleEditor key={String(visible)} />

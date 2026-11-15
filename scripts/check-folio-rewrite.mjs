@@ -76,6 +76,16 @@ const fixtures = [
     ].join("\n"),
   },
   {
+    name: "computed member keys",
+    url: "https://game.example/js/heap.js",
+    source: [
+      "function sum(heap, ptr, n) { var t = 0; for (var i = 0; i < n; i++) t += heap[(ptr + (i << 2)) >> 2] | 0; return t; }",
+      "function pick(o, k, i) { return [o[k], o[i + 1], o[i++], o[-i], o[`data-${k}`], o[k + \"Id\"], o[\"to\" + k], o[`${k}`], o[typeof k], o[k || 1], o[k && 2]]; }",
+      "function put(o, k, v) { o[k] = v; o[k >>> 0] = v; o[\"top\"] = v; o[`location`] = v; o[\"ev\" + \"al\"] = v; }",
+      "",
+    ].join("\n"),
+  },
+  {
     name: "inline module without imports",
     url: "https://game.example/js/leaf.js",
     module: true,

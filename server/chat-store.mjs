@@ -1,3 +1,4 @@
+import { CHAT_NAME_STYLE_FIELDS } from "../src/features/chat/chatNameStyle.ts";
 import fs from "fs";
 import path from "path";
 import { Database } from "bun:sqlite";
@@ -112,14 +113,14 @@ const SCHEMA = `
 const MESSAGE_COLUMNS = `
   m.id, m.channel, m.user_id, m.text, m.created_at, m.edited_at,
   m.reply_id, m.reply_user_id, m.reply_name, m.reply_text, m.notice, m.party, u.username, u.role, p.display, p.avatar_hash,
-  p.decoration, a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
+  p.decoration, p.nameFont, p.nameEffect, p.nameColor, a.type AS attachment_type, a.width AS attachment_width, a.height AS attachment_height
 `;
 const MESSAGE_SOURCE = "chat_messages m JOIN chat_users u ON u.id = m.user_id LEFT JOIN chat_profiles p ON p.user_id = m.user_id LEFT JOIN chat_attachments a ON a.message_id = m.id";
 const USER_COLUMNS =
-  "u.*, p.display, p.pronouns, p.status, p.bio, p.accent, p.avatar_hash, p.banner_hash, p.decoration, p.effect, p.nameplate, p.frame";
+  "u.*, p.display, p.pronouns, p.status, p.bio, p.accent, p.accentSecondary, p.avatar_hash, p.banner_hash, p.decoration, p.effect, p.nameplate, p.frame, p.nameFont, p.nameEffect, p.nameColor";
 const USER_SOURCE = "chat_users u LEFT JOIN chat_profiles p ON p.user_id = u.id";
 const COSMETIC_FIELDS = ["decoration", "effect", "nameplate", "frame"];
-const PROFILE_FIELDS = ["display", "pronouns", "status", "bio", "accent", ...COSMETIC_FIELDS];
+const PROFILE_FIELDS = ["display", "pronouns", "status", "bio", "accent", "accentSecondary", ...COSMETIC_FIELDS, ...CHAT_NAME_STYLE_FIELDS];
 
 export function createChatStore(file) {
   if (file !== ":memory:") {
@@ -137,7 +138,7 @@ export function createChatStore(file) {
   if (!db.query("SELECT 1 FROM pragma_table_info('chat_messages') WHERE name = 'party'").get()) {
     db.exec("ALTER TABLE chat_messages ADD COLUMN party TEXT");
   }
-  for (const field of COSMETIC_FIELDS) {
+  for (const field of ["accentSecondary", ...COSMETIC_FIELDS, ...CHAT_NAME_STYLE_FIELDS]) {
     if (!db.query("SELECT 1 FROM pragma_table_info('chat_profiles') WHERE name = $field").get({ field })) {
       db.exec(`ALTER TABLE chat_profiles ADD COLUMN ${field} TEXT`);
     }
@@ -151,8 +152,8 @@ export function createChatStore(file) {
     ),
     ensureProfile: db.query("INSERT OR IGNORE INTO chat_profiles (user_id, updated_at) VALUES ($id, $time)"),
     setProfile: db.query(
-      `UPDATE chat_profiles SET display = $display, pronouns = $pronouns, status = $status, bio = $bio, accent = $accent,
-        decoration = $decoration, effect = $effect, nameplate = $nameplate, frame = $frame, updated_at = $time WHERE user_id = $id`,
+      `UPDATE chat_profiles SET display = $display, pronouns = $pronouns, status = $status, bio = $bio, accent = $accent, accentSecondary = $accentSecondary,
+        decoration = $decoration, effect = $effect, nameplate = $nameplate, frame = $frame, nameFont = $nameFont, nameEffect = $nameEffect, nameColor = $nameColor, updated_at = $time WHERE user_id = $id`,
     ),
     setAvatarHash: db.query("UPDATE chat_profiles SET avatar_hash = $hash, updated_at = $time WHERE user_id = $id"),
     setBannerHash: db.query("UPDATE chat_profiles SET banner_hash = $hash, updated_at = $time WHERE user_id = $id"),
@@ -202,6 +203,8 @@ export function createChatStore(file) {
       "INSERT INTO chat_reactions (message_id, user_id, emoji, created_at) VALUES ($id, $userId, $emoji, $time)",
     ),
     removeReaction: db.query("DELETE FROM chat_reactions WHERE message_id = $id AND user_id = $userId AND emoji = $emoji"),
+    hasReactionEmoji: db.query("SELECT 1 FROM chat_reactions WHERE message_id = $id AND emoji = $emoji LIMIT 1"),
+    reactionKinds: db.query("SELECT COUNT(DISTINCT emoji) AS count FROM chat_reactions WHERE message_id = $id"),
     reactions: db.query(
       `SELECT r.message_id, r.user_id, r.emoji, u.username, p.display, p.avatar_hash FROM chat_reactions r
         LEFT JOIN chat_users u ON u.id = r.user_id LEFT JOIN chat_profiles p ON p.user_id = r.user_id
@@ -310,6 +313,9 @@ export function createChatStore(file) {
       ...(row.display && { display: row.display }),
       ...(row.avatar_hash && { avatar: row.avatar_hash }),
       ...(row.decoration && { decoration: row.decoration }),
+      ...(row.nameFont && { nameFont: row.nameFont }),
+      ...(row.nameEffect && { nameEffect: row.nameEffect }),
+      ...(row.nameColor && { nameColor: row.nameColor }),
       ...(row.edited_at && { editedAt: row.edited_at }),
       ...(row.reply_id && {
         reply: { id: String(row.reply_id), author: String(row.reply_user_id), name: row.reply_name, text: row.reply_text },
@@ -395,9 +401,14 @@ export function createChatStore(file) {
     return next > 0 && statements.markRead.run({ id, userId, messageId: next }).changes > 0 ? next : 0;
   });
 
-  const toggleReaction = db.transaction(({ id, userId, emoji, time }) => {
-    if (statements.hasReaction.get({ id, userId, emoji })) statements.removeReaction.run({ id, userId, emoji });
-    else statements.addReaction.run({ id, userId, emoji, time });
+  const toggleReaction = db.transaction(({ id, userId, emoji, time, limit }) => {
+    if (statements.hasReaction.get({ id, userId, emoji })) {
+      statements.removeReaction.run({ id, userId, emoji });
+      return true;
+    }
+    if (!statements.hasReactionEmoji.get({ id, emoji }) && statements.reactionKinds.get({ id }).count >= limit) return false;
+    statements.addReaction.run({ id, userId, emoji, time });
+    return true;
   });
 
   const purge = db.transaction(({ id, since }) => {
@@ -497,7 +508,7 @@ export function createChatStore(file) {
     editMessage: (id, text, time) => statements.editMessage.run({ id, text, time }),
     deleteMessage: (id) => statements.deleteMessage.run({ id }),
     purge: (id, since) => purge({ id, since }),
-    toggleReaction: (id, userId, emoji, time) => toggleReaction({ id, userId, emoji, time }),
+    toggleReaction: (id, userId, emoji, time, limit = Infinity) => toggleReaction({ id, userId, emoji, time, limit }),
     audit: (entry) =>
       statements.audit.run({
         time: entry.time,

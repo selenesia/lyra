@@ -1,6 +1,8 @@
 export const MESSAGE_TOKEN =
   /(`[^`]+`)|(\|\|.+?\|\|)|(\*\*.+?\*\*)|(~~.+?~~)|(\*[^*\s](?:[^*]*[^*\s])?\*)|(\b_[^_\s](?:[^_]*[^_\s])?_\b)|(https?:\/\/[^\s<>"]*[^\s<>".,:;!?)\]'])|(?<![\p{L}\p{N}_@./-])(@[A-Za-z0-9_]{3,20})(?![\p{L}\p{N}_@-])|(?<![\p{L}\p{N}_&#/.@-])(#[A-Za-z0-9][A-Za-z0-9-]{0,31})(?![\p{L}\p{N}_-])/gu;
 
+export const EMOJI_MESSAGE = /^\s*(?:(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?(?:\u200D\p{Extended_Pictographic}\uFE0F?\p{Emoji_Modifier}?)*(?:[\u{E0020}-\u{E007E}]+\u{E007F})?)\s*)+$/u;
+
 export function mentionsName(text: string, name: string, depth = 0): boolean {
   if (!name) return false;
   const wanted = name.toLowerCase();

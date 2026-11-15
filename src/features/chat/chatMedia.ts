@@ -102,13 +102,20 @@ async function sampleColor(src: string): Promise<string | null> {
   return `rgb(${Math.round(red / weight)} ${Math.round(green / weight)} ${Math.round(blue / weight)})`;
 }
 
+const sampledColors = new Map<string, string | null>();
+
 export function avatarColor(src: string): Promise<string | null> {
   let color = colorCache.get(src);
   if (!color) {
     color = sampleColor(src);
     colorCache.set(src, color);
+    void color.then((value) => sampledColors.set(src, value));
   }
   return color;
+}
+
+export function sampledAvatarColor(src: string): string | null | undefined {
+  return sampledColors.get(src);
 }
 
 export type ChatImageResult = { image: Blob } | { error: "too_large" | "unreadable" };

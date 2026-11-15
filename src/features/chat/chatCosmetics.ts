@@ -167,6 +167,53 @@ export function cosmeticUrl(name: string): string {
   return appPath(`/!!cosmetics/a/${name}`);
 }
 
+const BLOB_LIMIT = 6;
+interface CosmeticBlobEntry {
+  blob: Promise<Blob | null>;
+  controller: AbortController;
+  holders: number;
+  kept: boolean;
+  settled: boolean;
+}
+
+const blobs = new Map<string, CosmeticBlobEntry>();
+
+export function cosmeticBlob(name: string, signal?: AbortSignal): Promise<Blob | null> {
+  let entry = blobs.get(name);
+  if (entry) blobs.delete(name);
+  else {
+    const controller = new AbortController();
+    const created: CosmeticBlobEntry = {
+      controller,
+      holders: 0,
+      kept: false,
+      settled: false,
+      blob: fetch(cosmeticUrl(name), { signal: controller.signal })
+        .then((response) => (response.ok ? response.blob() : null))
+        .catch(() => null),
+    };
+    void created.blob.then((loaded) => {
+      created.settled = true;
+      if (!loaded && blobs.get(name) === created) blobs.delete(name);
+    });
+    entry = created;
+  }
+  blobs.set(name, entry);
+  if (blobs.size > BLOB_LIMIT) blobs.delete(blobs.keys().next().value!);
+  if (!signal) entry.kept = true;
+  else if (!signal.aborted && !entry.settled) {
+    const held = entry;
+    held.holders++;
+    signal.addEventListener("abort", () => {
+      held.holders--;
+      if (held.settled || held.kept || held.holders > 0) return;
+      held.controller.abort();
+      if (blobs.get(name) === held) blobs.delete(name);
+    }, { once: true });
+  }
+  return entry.blob;
+}
+
 export function cosmeticMatches(item: CosmeticBase, query: string, categories: ReadonlyMap<string, string>): boolean {
   if (!query) return true;
   const category = item.category ? (categories.get(item.category) ?? "") : "";

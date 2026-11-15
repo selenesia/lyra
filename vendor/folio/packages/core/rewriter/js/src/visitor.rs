@@ -4,11 +4,12 @@ use coverage_macro::coverage_checked;
 use oxc::{
 	allocator::{Allocator, StringBuilder},
 	ast::ast::{
-		AssignmentExpression, AssignmentTarget, AssignmentTargetMaybeDefault,
-		AssignmentTargetProperty, BindingPattern, BindingPatternKind, CallExpression,
+		AssignmentExpression, AssignmentOperator, AssignmentTarget, AssignmentTargetMaybeDefault,
+		AssignmentTargetProperty, BinaryOperator, BindingPattern, BindingPatternKind, CallExpression,
 		ComputedMemberExpression, DebuggerStatement, ExportAllDeclaration, ExportNamedDeclaration,
 		Expression, ForStatement, ForStatementInit, ForStatementLeft, FunctionBody,
-		IdentifierReference, ImportDeclaration, ImportExpression, MemberExpression, MetaProperty,
+		IdentifierReference, ImportDeclaration, ImportExpression, LogicalOperator, MemberExpression,
+		MetaProperty,
 		NewExpression, ObjectAssignmentTarget, ObjectExpression, ObjectPropertyKind, PropertyKey,
 		SimpleAssignmentTarget, Statement, StringLiteral, UnaryExpression, UnaryOperator,
 		UpdateExpression, VariableDeclaration, VariableDeclarationKind,
@@ -32,6 +33,131 @@ macro_rules! skip_field {
 }
 
 const UNSAFE_GLOBALS: &[&str] = &["parent", "top", "location", "eval"];
+
+fn never_string(expression: &Expression) -> bool {
+	match expression {
+		Expression::NumericLiteral(_)
+		| Expression::BigIntLiteral(_)
+		| Expression::BooleanLiteral(_)
+		| Expression::NullLiteral(_)
+		| Expression::UpdateExpression(_)
+		| Expression::PrivateInExpression(_) => true,
+		Expression::UnaryExpression(unary) => unary.operator != UnaryOperator::Typeof,
+		Expression::BinaryExpression(binary) => {
+			binary.operator != BinaryOperator::Addition
+				|| (never_string(&binary.left) && never_string(&binary.right))
+		}
+		Expression::AssignmentExpression(assignment) => match assignment.operator {
+			AssignmentOperator::Assign => never_string(&assignment.right),
+			AssignmentOperator::Addition
+			| AssignmentOperator::LogicalOr
+			| AssignmentOperator::LogicalAnd
+			| AssignmentOperator::LogicalNullish => false,
+			_ => true,
+		},
+		Expression::ParenthesizedExpression(inner) => never_string(&inner.expression),
+		Expression::SequenceExpression(sequence) => {
+			sequence.expressions.last().is_some_and(never_string)
+		}
+		Expression::ConditionalExpression(conditional) => {
+			never_string(&conditional.consequent) && never_string(&conditional.alternate)
+		}
+		Expression::LogicalExpression(logical) => {
+			never_string(&logical.left) && never_string(&logical.right)
+		}
+		_ => false,
+	}
+}
+
+fn unsafe_global_edge(text: &str, start: bool) -> bool {
+	UNSAFE_GLOBALS.iter().any(|name| {
+		if start {
+			name.starts_with(text)
+		} else {
+			name.ends_with(text)
+		}
+	})
+}
+
+fn string_edge_never_unsafe(expression: &Expression, start: bool) -> bool {
+	if never_string(expression) {
+		return true;
+	}
+	match expression {
+		Expression::StringLiteral(literal) => !unsafe_global_edge(&literal.value, start),
+		Expression::TemplateLiteral(template) => {
+			let quasi = if start {
+				template.quasis.first()
+			} else {
+				template.quasis.last()
+			};
+			quasi
+				.and_then(|quasi| quasi.value.cooked.as_ref())
+				.is_some_and(|text| !unsafe_global_edge(text, start))
+		}
+		Expression::RegExpLiteral(_) => start,
+		Expression::UnaryExpression(_) => true,
+		Expression::BinaryExpression(binary) => {
+			string_edge_never_unsafe(if start { &binary.left } else { &binary.right }, start)
+		}
+		Expression::AssignmentExpression(assignment) => {
+			assignment.operator == AssignmentOperator::Assign
+				&& string_edge_never_unsafe(&assignment.right, start)
+		}
+		Expression::ParenthesizedExpression(inner) => {
+			string_edge_never_unsafe(&inner.expression, start)
+		}
+		Expression::SequenceExpression(sequence) => sequence
+			.expressions
+			.last()
+			.is_some_and(|last| string_edge_never_unsafe(last, start)),
+		Expression::ConditionalExpression(conditional) => {
+			string_edge_never_unsafe(&conditional.consequent, start)
+				&& string_edge_never_unsafe(&conditional.alternate, start)
+		}
+		Expression::LogicalExpression(logical) => {
+			string_edge_never_unsafe(&logical.left, start)
+				&& string_edge_never_unsafe(&logical.right, start)
+		}
+		_ => false,
+	}
+}
+
+fn key_never_names_unsafe_global(expression: &Expression) -> bool {
+	match expression {
+		Expression::StringLiteral(literal) => !UNSAFE_GLOBALS.contains(&literal.value.as_str()),
+		Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+			.quasis
+			.first()
+			.and_then(|quasi| quasi.value.cooked.as_ref())
+			.is_some_and(|text| !UNSAFE_GLOBALS.contains(&text.as_str())),
+		Expression::RegExpLiteral(_) => true,
+		Expression::AssignmentExpression(assignment)
+			if assignment.operator == AssignmentOperator::Assign =>
+		{
+			key_never_names_unsafe_global(&assignment.right)
+		}
+		Expression::ParenthesizedExpression(inner) => {
+			key_never_names_unsafe_global(&inner.expression)
+		}
+		Expression::SequenceExpression(sequence) => sequence
+			.expressions
+			.last()
+			.is_some_and(key_never_names_unsafe_global),
+		Expression::ConditionalExpression(conditional) => {
+			key_never_names_unsafe_global(&conditional.consequent)
+				&& key_never_names_unsafe_global(&conditional.alternate)
+		}
+		Expression::LogicalExpression(logical) => {
+			key_never_names_unsafe_global(&logical.right)
+				&& (logical.operator == LogicalOperator::And
+					|| key_never_names_unsafe_global(&logical.left))
+		}
+		_ => {
+			string_edge_never_unsafe(expression, true) || string_edge_never_unsafe(expression, false)
+		}
+	}
+}
 
 pub struct Visitor<'alloc, 'data, E>
 where
@@ -67,26 +193,20 @@ where
 			.add(rewrite!(url.span.shrink(1), Replace { text }));
 	}
 
+	fn rewrite_module_specifier(&mut self, source: &StringLiteral<'data>) {
+		let specifier = source.value.as_str();
+		if specifier.contains(':') || specifier.starts_with('/') || specifier.starts_with('.') {
+			self.rewrite_url(source, true);
+		}
+	}
+
 	fn handle_computed_member_expression(&mut self, it: &ComputedMemberExpression<'data>) {
 		if self.flags.disable_computed_wrap {
 			return;
 		}
-		match &it.expression {
-			Expression::NullLiteral(_)
-			| Expression::BigIntLiteral(_)
-			| Expression::NumericLiteral(_)
-			| Expression::RegExpLiteral(_)
-			| Expression::BooleanLiteral(_) => {}
-			Expression::StringLiteral(lit) => {
-				if UNSAFE_GLOBALS.contains(&lit.value.as_str()) {
-					self.jschanges
-						.add(rewrite!(it.expression.span(), WrapProperty,));
-				}
-			}
-			_ => {
-				self.jschanges
-					.add(rewrite!(it.expression.span(), WrapProperty,));
-			}
+		if !key_never_names_unsafe_global(&it.expression) {
+			self.jschanges
+				.add(rewrite!(it.expression.span(), WrapProperty,));
 		}
 	}
 
@@ -539,14 +659,7 @@ where
 
 	#[coverage_checked(ImportDeclaration)]
 	fn visit_import_declaration(&mut self, it: &ImportDeclaration<'data>) {
-		let str = it.source.to_string();
-		if str.contains(":")
-			|| str.starts_with("/")
-			|| str.starts_with(".")
-			|| str.starts_with("..")
-		{
-			self.rewrite_url(&it.source, true);
-		}
+		self.rewrite_module_specifier(&it.source);
 		walk::walk_import_declaration(self, it);
 	}
 	#[coverage_checked(ImportExpression)]
@@ -560,17 +673,16 @@ where
 
 	#[coverage_checked(ExportAllDeclaration)]
 	fn visit_export_all_declaration(&mut self, it: &ExportAllDeclaration<'data>) {
-		self.rewrite_url(&it.source, true);
+		self.rewrite_module_specifier(&it.source);
 	}
 	#[coverage_checked(ExportNamedDeclaration)]
 	fn visit_export_named_declaration(&mut self, it: &ExportNamedDeclaration<'data>) {
 		if let Some(source) = &it.source {
-			self.rewrite_url(source, true);
+			self.rewrite_module_specifier(source);
 		}
-		audit_skip!(
-			it.declaration,
-			"export {x} is safe because you can only export locals, which the only unsafe `top/parent` obviously can't be"
-		);
+		if let Some(declaration) = &it.declaration {
+			self.visit_declaration(declaration);
+		}
 		audit_skip!(
 			it.specifiers,
 			"export {x as y} is safe because you can only export locals"

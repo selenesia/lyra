@@ -1,3 +1,4 @@
+import type { ChatNameStyleField } from "./chatNameStyle.ts";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { appPath } from "../../core/runtime/hosting.ts";
 import { negativeMessage } from "../../core/runtime/messages.ts";
@@ -25,14 +26,19 @@ import {
   type ChatPartyPath,
   type ChatPresence,
   type ChatProfile,
+  type ChatProfileColor,
   type ChatTarget,
   type ChatTyping,
   type ChatViewer,
+  type ChatVoiceChannel,
+  type ChatVoicePeer,
+  type ChatVoiceRoom,
   displayName,
   isChatMediaKind,
   isConversationKey,
   canReadChannel,
 } from "./chatProtocol.ts";
+import { forgetProfiles, loadProfile, patchProfile, rememberProfile } from "./chatProfiles.ts";
 
 export interface ChatEntry extends ChatMessage {
   pending?: boolean;
@@ -54,6 +60,7 @@ export type ChatAccess =
 export type ChatHistory = Record<ChatChannel, ChatEntry[]> & Partial<Record<ChatConversationKey, ChatEntry[]>>;
 export type ChatUnread = Partial<Record<ChatTarget, { count: number; mention: boolean }>>;
 export type ChatParties = Readonly<Record<string, ChatParty>>;
+export type ChatVoices = Readonly<Partial<Record<ChatVoiceChannel, ChatVoicePeer[]>>>;
 
 export interface ChatFailure {
   error: string;
@@ -70,7 +77,7 @@ export type ChatResult = {
   removed?: number;
 };
 export type ChatModeration = "role" | "timeout" | "untimeout" | "ban" | "unban" | "clearprofile";
-export type ChatProfileEdit = Partial<Record<"display" | "pronouns" | "status" | "bio" | ChatCosmeticSlot, string | null>> &
+export type ChatProfileEdit = Partial<Record<"display" | "pronouns" | "status" | "bio" | ChatProfileColor | ChatCosmeticSlot | ChatNameStyleField, string | null>> &
   Partial<Record<ChatMediaKind, null>>;
 
 const PROFILE_FIELD_LABELS: Record<string, string> = {
@@ -98,7 +105,7 @@ function readBlocked(): ChatMember[] {
   }
 }
 
-type CardKey = "display" | "avatar" | "status" | "decoration" | "nameplate";
+type CardKey = ChatNameStyleField | "display" | "avatar" | "status" | "decoration" | "nameplate";
 
 function withCard<T extends ChatMember | ChatMessage>(entry: T, card: ChatMember, keys: ReadonlyArray<CardKey>): T {
   const next: Partial<Record<CardKey, string>> = { ...entry };
@@ -215,6 +222,8 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
       return failure("you are timed out for a bit");
     case "CHAT_RATE_LIMITED":
       return failure("slow down a little");
+    case "CHAT_TEXT_CHECK_BUSY":
+      return failure("chat is busy, try again in a moment");
     case "CHAT_TEXT_INVALID":
       return failure(`messages need 1 to ${CHAT_LIMITS.text} characters`);
     case "CHAT_MESSAGE_NOT_FOUND":
@@ -286,6 +295,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   const [members, setMembers] = useState<ChatMember[]>([]);
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [parties, setParties] = useState<ChatParties>({});
+  const [voices, setVoices] = useState<ChatVoices>({});
   const [typing, setTyping] = useState<Array<ChatTyping & { until: number }>>([]);
   const [status, setStatus] = useState<ChatStatus>("connecting");
   const [unread, setUnread] = useState<ChatUnread>({});
@@ -304,6 +314,8 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   const readRef = useRef(new Map<ChatConversationKey, number>());
   const foreground = useForegroundTab();
   const updateViewer = useCallback((next: ChatViewer) => {
+    const previous = viewRef.current.viewer;
+    if (previous?.author !== next.author || previous.role !== next.role) forgetProfiles();
     viewRef.current.viewer = next;
     setViewer(next);
     setHistory((current) => {
@@ -320,6 +332,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
       const response = await fetch(appPath(path), init);
       const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (response.ok) {
+        if (body.profile !== undefined) rememberProfile(body.profile as ChatProfile);
         return {
           ...(body.message !== undefined && { message: body.message as ChatMessage }),
           ...(body.profile !== undefined && { profile: body.profile as ChatProfile }),
@@ -520,10 +533,11 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         "profile",
         (event) => {
           const card = parse<ChatMember>(event);
+          patchProfile(card);
           setMembers((current) => current.map((member) => (member.author === card.author ? card : member)));
           setViewer((current) =>
             current?.author === card.author
-              ? withCard(current, card, ["display", "avatar", "status", "decoration", "nameplate"])
+              ? withCard(current, card, ["display", "avatar", "status", "decoration", "nameplate", "nameFont", "nameEffect", "nameColor"])
               : current,
           );
           setHistory((current) => {
@@ -533,7 +547,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
               if (!entries.some((entry) => entry.author === card.author || entry.reactors?.[card.author])) continue;
               next ??= { ...current };
               next[key] = entries.map((entry) => {
-                const shown = entry.author === card.author ? withCard(entry, card, ["display", "avatar", "decoration"]) : entry;
+                const shown = entry.author === card.author ? withCard(entry, card, ["display", "avatar", "decoration", "nameFont", "nameEffect", "nameColor"]) : entry;
                 const reactor = shown.reactors?.[card.author];
                 if (!reactor) return shown;
                 const face = { name: reactor.name, ...(card.display && { display: card.display }), ...(card.avatar && { avatar: card.avatar }) };
@@ -645,6 +659,20 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
             if (!previous) return current;
             return remaining ? { ...current, [key]: { ...previous, count: remaining } } : withoutKey(current, key);
           });
+        },
+      ],
+      [
+        "voices",
+        (event) => {
+          const rooms = parse<ChatVoiceRoom[]>(event);
+          setVoices(Object.fromEntries(rooms.map((room) => [room.channel, room.members])));
+        },
+      ],
+      [
+        "voice",
+        (event) => {
+          const room = parse<ChatVoiceRoom>(event);
+          setVoices((current) => ({ ...current, [room.channel]: room.members }));
         },
       ],
       [
@@ -774,6 +802,9 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         ...(viewer.display && { display: viewer.display }),
         ...(viewer.avatar && { avatar: viewer.avatar }),
         ...(viewer.decoration && { decoration: viewer.decoration }),
+        ...(viewer.nameFont && { nameFont: viewer.nameFont }),
+        ...(viewer.nameEffect && { nameEffect: viewer.nameEffect }),
+        ...(viewer.nameColor && { nameColor: viewer.nameColor }),
         text,
         at: Date.now(),
         nonce,
@@ -893,16 +924,6 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
     [exhausted],
   );
 
-  const loadProfile = useCallback(async (id: string): Promise<ChatProfile | null> => {
-    try {
-      const response = await fetch(appPath(`/api/chat/profile?id=${encodeURIComponent(id)}`), { cache: "no-store" });
-      if (!response.ok) return null;
-      return ((await response.json()) as { profile: ChatProfile }).profile;
-    } catch {
-      return null;
-    }
-  }, []);
-
   const toggleBlocked = useCallback((member: ChatMember) => {
     setBlocked((current) => {
       const next = current.some((entry) => entry.author === member.author)
@@ -1010,6 +1031,7 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
     members,
     conversations,
     parties,
+    voices,
     typing,
     status,
     unread,

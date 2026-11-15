@@ -160,6 +160,8 @@ export function partyFailureText(code: unknown, status: number): string {
       return "that can't be played in this watch party";
     case "CHAT_RATE_LIMITED":
       return "slow down a little";
+    case "CHAT_TEXT_CHECK_BUSY":
+      return "chat is busy, try again in a moment";
     case "CHAT_FORBIDDEN":
       return "only the host can control playback";
     case "CHAT_MUTED":

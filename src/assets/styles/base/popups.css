@@ -89,7 +89,8 @@
 }
 
 .popup > h2,
-.popup > .chat-profile-card > h2 {
+.popup > .chat-profile-stage > .chat-profile-card > .chat-card-title > h2,
+.popup > .chat-profile-editor > h2 {
   color: var(--text-primary);
   font-size: 20px;
   font-weight: 400;

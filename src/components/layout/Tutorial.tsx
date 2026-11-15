@@ -36,28 +36,15 @@ interface TutorialStep {
   profileStage?: TutorialProfileStage;
 }
 
-const profileShortcutStep: TutorialStep = {
-  title: "edit your profile",
-  target: "#chat-page .chat-self-card",
-  text: "click your name to open your profile, then choose edit profile.",
-};
-
 const chatSteps: TutorialStep[] = [
-  { title: "your chats", target: "#chat-page .chat-channels", text: "switch between channels, dms, and groups. badges show unread messages." },
-  { title: "start a dm or group", target: "#chat-page .chat-category-add", text: "pick one person for a dm or several for a group." },
-  profileShortcutStep,
-  { title: "make it yours", target: "#chat-profile-modal .episode-season-tabs", profileStage: "edit", text: "try an avatar decoration, profile effect, nameplate, or frame. preview your picks, then hit save." },
-  { title: "attach a file", target: "#chat-page .chat-attach-button", text: "tap + to attach a photo, video, or audio file." },
+  { title: "your chats", target: "#chat-page .chat-channels", text: "switch between channels, dms, and groups. click + to start a dm or group." },
+  { title: "edit your profile", target: "#chat-page .chat-self-open", text: "click your avatar to open your profile, then click edit profile." },
+  { title: "make your profile yours", target: "#chat-profile-modal .episode-season-tabs", profileStage: "edit", text: "pick the theme for your profile, style your name with a color, effect, and font, or add a nameplate, avatar decoration, profile effect, or frame. click save when you're done." },
+  { title: "attach a file", target: "#chat-page .chat-attach-button", text: "click + to attach a photo, video, or audio file." },
   { title: "watch together", target: "#chatInput", text: "type /watch and a title, then pick a result to invite the chat." },
-  { title: "send a gif", target: "#chat-page .chat-gif-button", text: "tap gif or type /gif to search. pick a gif, then press enter to send." },
+  { title: "add an emoji", target: "#chat-page .chat-emoji-button", text: "click the smiley to add an emoji to your message." },
+  { title: "send a gif", target: "#chat-page .chat-gif-button", text: "click gif or type /gif to search. pick a gif, then press enter to send. choose chats tutorial in settings to replay this guide." },
 ];
-
-const narrowProfileStep: TutorialStep = {
-  title: "edit your profile",
-  target: "#chat-profile-modal .chat-card-edit",
-  profileStage: "view",
-  text: "tap your avatar on a message to open your profile, then choose edit profile.",
-};
 
 interface TutorialProps {
   replayOnMount?: boolean;
@@ -72,18 +59,7 @@ export default function Tutorial({ replayOnMount = false, guide = "home", render
   const spotlight = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(() => !tutorialSeen(guide));
   const [step, setStep] = useState(0);
-  const [narrowChat, setNarrowChat] = useState(false);
-  const stepDetails = steps[step]!;
-  const currentStep = narrowChat && stepDetails === profileShortcutStep ? narrowProfileStep : stepDetails;
-
-  useLayoutEffect(() => {
-    if (!open || guide !== "chat") return;
-    const query = window.matchMedia("(max-width: 900px)");
-    const update = () => setNarrowChat(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, [open, guide]);
+  const currentStep = steps[step]!;
 
   const dismiss = () => {
     markTutorialSeen(guide);

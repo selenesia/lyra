@@ -61,6 +61,8 @@ export function renderQualityMenu({
           );
         }}
         panelClassName="player-quality-options"
+        name="quality"
+        onBack={() => setOpenSelector("settings")}
         label={selectedQualityLabel}
       >
         <PlayerOption
@@ -105,47 +107,79 @@ interface SubtitleMenuContext {
   selectedSubtitle: number;
   chooseSubtitle: (index: number) => void;
   subtitleMenuLabels: string[];
-  captionStyle: CaptionStyle;
-  chooseCaptionStyle: (name: CaptionStyleName, value: string) => void;
-  resetCaptionStyle: () => void;
 }
 
 export function renderSubtitleMenu({
   openSelector, setOpenSelector, activeSubtitle, subtitleTracks,
-  selectedSubtitle, chooseSubtitle, subtitleMenuLabels, captionStyle,
-  chooseCaptionStyle, resetCaptionStyle,
+  selectedSubtitle, chooseSubtitle, subtitleMenuLabels,
 }: SubtitleMenuContext) {
-  const styling = openSelector === "captionStyle";
-  const open = styling || openSelector === "subtitles";
+  const open = openSelector === "subtitles";
   return (
     <PlayerMenu
       className="player-subtitle-control"
       open={open}
       onToggle={() =>
         setOpenSelector((current) =>
-          current === "subtitles" || current === "captionStyle"
-            ? null
-            : "subtitles",
+          current === "subtitles" ? null : "subtitles",
         )
       }
       triggerClassName={`player-btn player-btn-cc${activeSubtitle >= 0 ? " is-active" : " is-off"}`}
-      panelClassName={`player-subtitle-options${styling ? " player-caption-options" : ""}`}
-      panelRole={styling ? "group" : "listbox"}
+      panelClassName="player-subtitle-options"
       ariaLabel="subtitles"
       disabled={subtitleTracks.length === 0}
       label={<IconBubbleText size={24} />}
     >
-      {styling ? (
+      <PlayerOption
+        open={open}
+        selected={selectedSubtitle < 0}
+        solid
+        onSelect={() => chooseSubtitle(-1)}
+      >
+        off
+      </PlayerOption>
+      {subtitleTracks.map((track, index) => (
+        <PlayerOption
+          key={track.id}
+          open={open}
+          selected={selectedSubtitle === index}
+          solid
+          onSelect={() => chooseSubtitle(index)}
+        >
+          {subtitleMenuLabels[index]?.toLowerCase()}
+        </PlayerOption>
+      ))}
+    </PlayerMenu>
+  );
+}
+
+interface CaptionStyleMenuContext {
+  openSelector: PlayerMenuSelector | null;
+  setOpenSelector: Dispatch<StateUpdater<PlayerSelector | null>>;
+  captionStyle: CaptionStyle;
+  chooseCaptionStyle: (name: CaptionStyleName, value: string) => void;
+  resetCaptionStyle: () => void;
+}
+
+export function renderCaptionStyleMenu({
+  openSelector, setOpenSelector, captionStyle, chooseCaptionStyle,
+  resetCaptionStyle,
+}: CaptionStyleMenuContext) {
+  return (
+    <PlayerMenu
+      className="player-caption-style-control"
+      open={openSelector === "captionStyle"}
+      onToggle={() =>
+        setOpenSelector((current) =>
+          current === "captionStyle" ? null : "captionStyle",
+        )
+      }
+      panelClassName="player-subtitle-options player-caption-options"
+      panelRole="group"
+      name="subtitles style"
+      onBack={() => setOpenSelector("settings")}
+      label=""
+    >
         <div class="player-caption-style">
-          <button
-            type="button"
-            class="player-caption-back"
-            onClick={() => setOpenSelector("subtitles")}
-          >
-            <IconChevronBottom size={12} class="player-caption-back-icon" />
-            <span>subtitle style</span>
-          </button>
-          <div class="player-menu-divider" role="separator" />
           {CAPTION_STYLE_NAMES.map((name) => (
             <div key={name} class="player-caption-row">
               <span class="player-caption-label" id={`caption-style-${name}`}>
@@ -180,39 +214,6 @@ export function renderSubtitleMenu({
             reset to default
           </button>
         </div>
-      ) : (
-        <>
-          <PlayerOption
-            open={open}
-            selected={selectedSubtitle < 0}
-            solid
-            onSelect={() => chooseSubtitle(-1)}
-          >
-            off
-          </PlayerOption>
-          {subtitleTracks.map((track, index) => (
-            <PlayerOption
-              key={track.id}
-              open={open}
-              selected={selectedSubtitle === index}
-              solid
-              onSelect={() => chooseSubtitle(index)}
-            >
-              {subtitleMenuLabels[index]?.toLowerCase()}
-            </PlayerOption>
-          ))}
-          <div class="player-menu-divider" role="separator" />
-          <button
-            type="button"
-            class="player-caption-open"
-            tabIndex={open ? 0 : -1}
-            onClick={() => setOpenSelector("captionStyle")}
-          >
-            <span>subtitle style</span>
-            <IconChevronBottom size={12} class="player-caption-open-icon" />
-          </button>
-        </>
-      )}
     </PlayerMenu>
   );
 }
@@ -250,6 +251,8 @@ export function renderAudioMenu({
         label={activeAudioLabel.toLowerCase()}
         panelClassName="player-audio-options"
         ariaLabel="audio language"
+        name="audio"
+        onBack={() => setOpenSelector("settings")}
         disabled={
           !audioTracksReady ||
           loadingStreamInfo ||
@@ -306,6 +309,8 @@ export function renderLanguageMenu({
         }
         disabled={changingLanguage || loadingStreamInfo}
         panelClassName="player-audio-options"
+        name="language"
+        onBack={() => setOpenSelector("settings")}
         label={label}
       >
         {options.map((option) => (
@@ -356,6 +361,8 @@ export function renderProviderMenu({
         disabled={changingProvider}
         panelClassName="player-audio-options"
         ariaLabel="server"
+        name="server"
+        onBack={() => setOpenSelector("settings")}
         label={changingProvider ? "switching" : label}
       >
         <PlayerOption

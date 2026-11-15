@@ -1,3 +1,4 @@
+import ChatDisplayName from "./ChatDisplayName.tsx";
 import { lazy, Suspense } from "preact/compat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { negativeMessage, positiveMessage } from "../../core/runtime/messages.ts";
@@ -55,6 +56,7 @@ import {
   IconChat,
   IconChevronBottom,
   IconCrossMedium,
+  IconFaceSmile,
   IconPencil,
   IconPeople,
   IconPlusMedium,
@@ -63,11 +65,16 @@ import IconBase from "../icons/IconBase.tsx";
 import { ICON_PATHS, type CanonicalIconName } from "../icons/paths.ts";
 import EditableField from "../EditableField.tsx";
 import ChatMessage, { type ChatMessageActions } from "./ChatMessage.tsx";
+import ChatMediaViewer, { type ChatMediaView } from "./ChatMediaViewer.tsx";
+import ChatEmojiPicker from "./ChatEmojiPicker.tsx";
 import type { TutorialProfileStage } from "../layout/Tutorial.tsx";
 import ChatProfile, { ChatMemberRow, RoleBadge } from "./ChatProfile.tsx";
 import ChatAvatar from "./ChatAvatar.tsx";
 import ChatTooltip from "./ChatTooltip.tsx";
 import ChatConversationModal, { type ChatConversationDialog } from "./ChatConversationModal.tsx";
+import { ChatVoiceChannels, ChatVoiceControls, ChatVoicePanel } from "./ChatVoice.tsx";
+import { setVoiceBlocked, useVoice } from "../../features/chat/chatVoice.ts";
+import { profileIntent, readyProfile } from "../../features/chat/chatProfiles.ts";
 import "../../assets/styles/chat/chat.css";
 
 const SVG_CHAT = svgIcon("IconChat", { solid: true });
@@ -78,7 +85,7 @@ const CHANNEL_ICONS: Partial<Record<ChatChannel, CanonicalIconName>> = {
   updates: "IconMegaphone",
 };
 const GROUP_WINDOW_MS = 5 * 60_000;
-const NEAR_BOTTOM_PX = 80;
+const FEED_BOTTOM_TOLERANCE_PX = 2;
 const NEAR_TOP_PX = 600;
 const TYPING_SEND_MS = 2_500;
 const DRAFT_CHECK_MS = 300;
@@ -129,6 +136,37 @@ function placeCaretAtEnd(field: HTMLElement | null): void {
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
+}
+
+function caretOffset(field: HTMLElement): number | null {
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range || !field.contains(range.endContainer)) return null;
+  const before = document.createRange();
+  before.selectNodeContents(field);
+  before.setEnd(range.endContainer, range.endOffset);
+  return before.toString().length;
+}
+
+function placeCaretAt(field: HTMLElement | null, offset: number): void {
+  if (!field || !field.isContentEditable) return;
+  const walker = document.createTreeWalker(field, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const length = node.textContent?.length ?? 0;
+    if (remaining <= length) {
+      field.focus({ preventScroll: true });
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= length;
+  }
+  placeCaretAtEnd(field);
 }
 
 function ChannelIcon({ channel }: { channel: ChatChannel }) {
@@ -228,6 +266,44 @@ function AccessGate({ access, onRetry }: { access: ChatAccess; onRetry: () => vo
   );
 }
 
+function ChatSelfBar({ viewer, onOpenProfile }: { viewer: ChatViewer; onOpenProfile: (member: ChatMember) => void }) {
+  const voice = useVoice();
+  const [hovered, setHovered] = useState(false);
+  const intent = profileIntent(viewer.author);
+  return (
+    <div class={`chat-self-bar${voice.channel ? " in-voice" : ""}`}>
+      <ChatVoicePanel voice={voice} />
+      <div class="chat-self-card">
+        <button
+          type="button"
+          class="chat-self-open"
+          aria-label="open your profile"
+          data-tooltip="open your profile"
+          {...intent}
+          onClick={() => onOpenProfile(viewer)}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onFocus={() => {
+            intent.onFocus();
+            setHovered(true);
+          }}
+          onBlur={() => setHovered(false)}
+        >
+          <span class="chat-member-face">
+            <ChatAvatar member={viewer} size={32} decoration={viewer.decoration} animate={hovered} />
+            <span class="chat-member-dot" />
+          </span>
+          <span class="chat-self-text">
+            <span class="chat-self-display"><ChatDisplayName member={viewer} /></span>
+            <span class="chat-self-handle">@{viewer.name}</span>
+          </span>
+        </button>
+        <ChatVoiceControls voice={voice} />
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage({ openOnMount = false }: { openOnMount?: boolean }) {
   const [target, setTarget] = useState<ChatTarget>("general");
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -245,8 +321,17 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [hoveredGif, setHoveredGif] = useState<string | null>(null);
-  const [selfHovered, setSelfHovered] = useState(false);
   const [profile, setProfile] = useState<ChatMember | null>(null);
+  const [viewedMedia, setViewedMedia] = useState<ChatMediaView | null>(null);
+  const [emojiTarget, setEmojiTarget] = useState<ChatEntry | "composer" | null>(null);
+  const emojiOffsetRef = useRef<number | null>(null);
+  const profileOpenRef = useRef(0);
+  const openProfile = useCallback((member: ChatMember) => {
+    const attempt = ++profileOpenRef.current;
+    void readyProfile(member.author).then(() => {
+      if (profileOpenRef.current === attempt) setProfile(member);
+    });
+  }, []);
   const [dialog, setDialog] = useState<ChatConversationDialog | null>(null);
   const [startingParty, setStartingParty] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -272,13 +357,16 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     caretToEndRef.current = true;
   }, []);
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const wasViewingReply = viewingReplyRef.current;
     viewingReplyRef.current = false;
     stickToBottomRef.current = true;
     anchorRef.current = null;
     const list = listRef.current;
     if (list) {
-      scrollingToBottomRef.current = behavior !== "instant" && list.scrollHeight - list.clientHeight - list.scrollTop > 1;
-      list.scrollTo({ top: list.scrollHeight, behavior });
+      const bottom = list.scrollHeight - list.clientHeight;
+      const atBottom = bottom - list.scrollTop <= FEED_BOTTOM_TOLERANCE_PX;
+      scrollingToBottomRef.current = behavior !== "instant" && !atBottom;
+      if (!atBottom || wasViewingReply) list.scrollTo({ top: bottom, behavior });
     }
   }, []);
   const interruptScroll = useCallback(() => {
@@ -289,6 +377,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     const list = listRef.current;
     if (list) list.scrollTo({ top: list.scrollTop, behavior: "instant" });
   }, []);
+  const onFeedWheel = useCallback((event: WheelEvent) => {
+    if (event.ctrlKey || !event.deltaY) return;
+    interruptScroll();
+    if (event.deltaY < 0 && (listRef.current?.scrollTop ?? 0) > 0) stickToBottomRef.current = false;
+  }, [interruptScroll]);
 
   const cancelMode = useCallback(() => {
     if (pageRef.current?.querySelector("dialog.tutorial[open]")) return true;
@@ -323,8 +416,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   });
 
   const room = useChatRoom({ target, visible });
-  const { access, viewer, history, exhausted, members, conversations, parties, typing, status, unread, blocked } = room;
+  const { access, viewer, history, exhausted, members, conversations, parties, voices, typing, status, unread, blocked } = room;
   const blockedAuthors = useMemo(() => new Set(blocked.map((member) => member.author)), [blocked]);
+  useEffect(() => setVoiceBlocked(blockedAuthors), [blockedAuthors]);
   const onlineAuthors = useMemo(() => new Set(members.map((member) => member.author)), [members]);
   const channel: ChatChannel | null = isChatChannel(target) ? target : null;
   const conversation = useMemo(
@@ -333,6 +427,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   );
   const loaded = history[target];
   const entries = loaded ?? NO_ENTRIES;
+  const mentionMembersRef = useRef<ReadonlyMap<string, ChatMember>>(new Map());
   const mentionMembers = useMemo(() => {
     const known = new Map<string, ChatMember>();
     for (const messages of Object.values(history)) {
@@ -343,6 +438,13 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       for (const member of entry.members) known.set(member.name.toLowerCase(), member);
     }
     for (const member of members) known.set(member.name.toLowerCase(), member);
+    const previous = mentionMembersRef.current;
+    const fields = ["author", "name", "role", "display", "avatar", "status", "decoration", "nameplate", "nameFont", "nameEffect", "nameColor"] as const;
+    if (known.size === previous.size && [...known].every(([name, member]) => {
+      const saved = previous.get(name);
+      return saved && fields.every((field) => saved[field] === member[field]);
+    })) return previous;
+    mentionMembersRef.current = known;
     return known;
   }, [conversations, history, members, viewer]);
   const ready = access.state === "ready" && !!viewer;
@@ -470,7 +572,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
 
   useLayoutEffect(() => {
     if (!visible || !ready) return;
-    channelsRef.current?.querySelector<HTMLElement>(".chat-channel.active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    channelsRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [target, ready, visible]);
 
   useEffect(() => {
@@ -620,6 +722,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         void room.remove(entry.id).then(showFailure);
       },
       react: (entry, emoji) => void room.react(entry.id, emoji).then(showFailure),
+      pickReaction: setEmojiTarget,
       block: (member) => room.toggleBlocked(member),
       jumpTo: (id) => {
         const list = listRef.current;
@@ -644,12 +747,13 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         void target.offsetWidth;
         target.classList.add("flash");
       },
-      openProfile: setProfile,
+      openProfile,
       openLink: (url) => {
         hide();
         void app().handleSearch?.(url);
       },
       openChannel: switchTarget,
+      viewMedia: setViewedMedia,
       select: setSelectedId,
       joinParty: (invite) => {
         void room.loadParty(invite.id).then((result) => {
@@ -666,11 +770,12 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     const list = listRef.current;
     if (!list) return;
     if (viewingReplyRef.current) return;
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= FEED_BOTTOM_TOLERANCE_PX;
     if (scrollingToBottomRef.current) {
-      if (list.scrollHeight - list.scrollTop - list.clientHeight <= 1) scrollingToBottomRef.current = false;
+      if (atBottom) scrollingToBottomRef.current = false;
       return;
     }
-    stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < NEAR_BOTTOM_PX;
+    stickToBottomRef.current = atBottom;
     if (stickToBottomRef.current || list.scrollTop > Math.max(NEAR_TOP_PX, list.clientHeight * 2) || exhausted[target] || !entries.length) return;
     void room.loadOlder(target, () => {
       if (scrollTargetRef.current === target && listRef.current === list && !stickToBottomRef.current && !viewingReplyRef.current) {
@@ -747,6 +852,39 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     setHint(null);
     focusFieldAfterRender();
   }, [focusFieldAfterRender]);
+
+  const openComposerEmoji = useCallback(() => {
+    emojiOffsetRef.current = fieldRef.current && caretOffset(fieldRef.current);
+    setEmojiTarget("composer");
+  }, []);
+
+  const pickEmoji = useCallback(
+    (emoji: string) => {
+      if (emojiTarget !== "composer") {
+        if (emojiTarget) actions.react(emojiTarget, emoji);
+        return;
+      }
+      if (locked) return;
+      setDraft((current) => {
+        const at = Math.min(emojiOffsetRef.current ?? current.length, current.length);
+        emojiOffsetRef.current = at + emoji.length;
+        return `${current.slice(0, at)}${emoji}${current.slice(at)}`;
+      });
+      setHint(null);
+    },
+    [actions, emojiTarget, locked],
+  );
+
+  const closeEmoji = useCallback(() => {
+    const offset = emojiTarget === "composer" ? emojiOffsetRef.current : null;
+    setEmojiTarget(null);
+    emojiOffsetRef.current = null;
+    if (offset === null) {
+      if (emojiTarget === "composer") placeCaretAtEnd(fieldRef.current);
+      return;
+    }
+    placeCaretAt(fieldRef.current, offset);
+  }, [emojiTarget]);
 
   const onGifScroll = useCallback(() => {
     const grid = gifGridRef.current;
@@ -1082,121 +1220,111 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         <AccessGate access={access} onRetry={room.recheck} />
       ) : (
         <>
-          <nav class="chat-channels" aria-label="channels" ref={channelsRef}>
-            <div class={`chat-category${collapsed.has("messages") ? " collapsed" : ""}`}>
-              <div class="chat-category-head">
-                <button
-                  type="button"
-                  class="chat-category-title"
-                  aria-expanded={!collapsed.has("messages")}
-                  onClick={() => toggleCategory("messages")}
-                >
-                  <IconChevronBottom size={12} class="chat-category-chevron" />
-                  <span>messages</span>
-                </button>
-                <button
-                  type="button"
-                  class="chat-tool chat-category-add"
-                  aria-label="new chat"
-                  aria-haspopup="dialog"
-                  data-tooltip="start a dm or group chat"
-                  onClick={() => setDialog({ kind: "new" })}
-                >
-                  <IconPlusMedium size={18} />
-                </button>
-              </div>
-              {conversations.length === 0 && <p class="chat-category-empty">no conversations yet</p>}
-              {conversations.map((entry) => {
-                const waiting = unread[entry.key];
-                const active = entry.key === target;
-                const name = conversationTitle(entry, viewer.author);
-                return (
-                  <div
-                    key={entry.key}
-                    class={`chat-channel chat-conversation${active ? " active" : ""}${waiting ? " unread" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      class="chat-conversation-open"
-                      aria-current={active ? "page" : undefined}
-                      onClick={() => switchTarget(entry.key)}
-                    >
-                      <ConversationIcon conversation={entry} viewerAuthor={viewer.author} />
-                      <span class="chat-channel-name">{name}</span>
-                      {waiting && (
-                        <span class={`chat-badge${waiting.mention ? " mention" : ""}`}>
-                          {waiting.count > 99 ? "99+" : waiting.count}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            {CHAT_CATEGORIES.map((category) => {
-              const channels = category.channels.filter((option) => canReadChannel(viewer.role, option));
-              if (!channels.length) return null;
-              const folded = collapsed.has(category.name);
-              return (
-                <div class={`chat-category${folded ? " collapsed" : ""}`} key={category.name}>
+          <div class="chat-sidebar">
+            <nav class="chat-channels" aria-label="channels" ref={channelsRef}>
+              <div class={`chat-category${collapsed.has("messages") ? " collapsed" : ""}`}>
+                <div class="chat-category-head">
                   <button
                     type="button"
                     class="chat-category-title"
-                    aria-expanded={!folded}
-                    onClick={() => toggleCategory(category.name)}
+                    aria-expanded={!collapsed.has("messages")}
+                    onClick={() => toggleCategory("messages")}
                   >
                     <IconChevronBottom size={12} class="chat-category-chevron" />
-                    <span>{category.name}</span>
+                    <span>messages</span>
                   </button>
-                  {channels.map((option) => {
-                    const waiting = unread[option];
-                    return (
+                  <button
+                    type="button"
+                    class="chat-tool chat-category-add"
+                    aria-label="new chat"
+                    aria-haspopup="dialog"
+                    data-tooltip="start a dm or group chat"
+                    onClick={() => setDialog({ kind: "new" })}
+                  >
+                    <IconPlusMedium size={18} />
+                  </button>
+                </div>
+                {conversations.length === 0 && <p class="chat-category-empty">no conversations yet</p>}
+                {conversations.map((entry) => {
+                  const waiting = unread[entry.key];
+                  const active = entry.key === target;
+                  const name = conversationTitle(entry, viewer.author);
+                  return (
+                    <div
+                      key={entry.key}
+                      class={`chat-channel chat-conversation${active ? " active" : ""}${waiting ? " unread" : ""}`}
+                    >
                       <button
                         type="button"
-                        key={option}
-                        class={`chat-channel${option === channel ? " active" : ""}${waiting ? " unread" : ""}`}
-                        aria-current={option === channel ? "page" : undefined}
-                        onClick={() => switchTarget(option)}
+                        class="chat-conversation-open"
+                        aria-current={active ? "page" : undefined}
+                        onClick={() => switchTarget(entry.key)}
                       >
-                        <ChannelIcon channel={option} />
-                        <span class="chat-channel-name">{option}</span>
+                        <ConversationIcon conversation={entry} viewerAuthor={viewer.author} />
+                        <span class="chat-channel-name">{name}</span>
                         {waiting && (
                           <span class={`chat-badge${waiting.mention ? " mention" : ""}`}>
-                            {waiting.mention ? "@" : waiting.count > 99 ? "99+" : waiting.count}
+                            {waiting.count > 99 ? "99+" : waiting.count}
                           </span>
                         )}
                       </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
-            <div class="chat-self-bar">
-              <button
-                type="button"
-                class="chat-self-card"
-                aria-label="open your profile"
-                data-tooltip="open your profile"
-                onClick={() => setProfile(viewer)}
-                onMouseEnter={() => setSelfHovered(true)}
-                onMouseLeave={() => setSelfHovered(false)}
-                onFocus={() => setSelfHovered(true)}
-                onBlur={() => setSelfHovered(false)}
-              >
-                <span class="chat-member-face">
-                  <ChatAvatar member={viewer} size={32} decoration={viewer.decoration} animate={selfHovered} />
-                  <span class="chat-member-dot" />
-                </span>
-                <span class="chat-self-text">
-                  <span class="chat-self-display">{displayName(viewer)}</span>
-                  <span class="chat-self-handle">@{viewer.name}</span>
-                </span>
-              </button>
-            </div>
-          </nav>
+                    </div>
+                  );
+                })}
+              </div>
+              {CHAT_CATEGORIES.map((category) => {
+                const channels = category.channels.filter((option) => canReadChannel(viewer.role, option));
+                if (!channels.length) return null;
+                const folded = collapsed.has(category.name);
+                return (
+                  <div class={`chat-category${folded ? " collapsed" : ""}`} key={category.name}>
+                    <button
+                      type="button"
+                      class="chat-category-title"
+                      aria-expanded={!folded}
+                      onClick={() => toggleCategory(category.name)}
+                    >
+                      <IconChevronBottom size={12} class="chat-category-chevron" />
+                      <span>{category.name}</span>
+                    </button>
+                    {channels.map((option) => {
+                      const waiting = unread[option];
+                      return (
+                        <button
+                          type="button"
+                          key={option}
+                          class={`chat-channel${option === channel ? " active" : ""}${waiting ? " unread" : ""}`}
+                          aria-current={option === channel ? "page" : undefined}
+                          onClick={() => switchTarget(option)}
+                        >
+                          <ChannelIcon channel={option} />
+                          <span class="chat-channel-name">{option}</span>
+                          {waiting && (
+                            <span class={`chat-badge${waiting.mention ? " mention" : ""}`}>
+                              {waiting.mention ? "@" : waiting.count > 99 ? "99+" : waiting.count}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {category.name === "social" && (
+                      <ChatVoiceChannels
+                        voices={voices}
+                        viewerAuthor={viewer.author}
+                        blocked={blockedAuthors}
+                        visible={visible}
+                        onOpenProfile={openProfile}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
+            <ChatSelfBar viewer={viewer} onOpenProfile={openProfile} />
+          </div>
 
           <div class="chat-main">
-            <div class="chat-feed" ref={listRef} onScroll={onScroll} onWheel={interruptScroll} onTouchStart={interruptScroll} onPointerDown={interruptScroll} onKeyDown={interruptScroll} onLoadCapture={() => {
+            <div class="chat-feed" ref={listRef} onScroll={onScroll} onWheel={onFeedWheel} onTouchStart={interruptScroll} onPointerDown={interruptScroll} onKeyDown={interruptScroll} onLoadCapture={() => {
               if (stickToBottomRef.current) scrollToBottom("instant");
             }} role="log" aria-live="polite">
               {rows.length ? rows : <p class="chat-empty">{emptyText}</p>}
@@ -1293,7 +1421,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                   <span class="chat-context-text">
                     {mode.kind === "reply" ? (
                       <>
-                        replying to <strong>{displayName(mode.entry)}</strong>
+                        replying to <strong><ChatDisplayName member={mode.entry} /></strong>
                       </>
                     ) : (
                       "editing message · esc to cancel"
@@ -1359,6 +1487,18 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                 >
                   gif
                 </button>
+                <button
+                  type="button"
+                  class="chat-tool chat-emoji-button"
+                  aria-label="add an emoji"
+                  aria-haspopup="dialog"
+                  data-tooltip="add an emoji"
+                  disabled={locked || muted || sending}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={openComposerEmoji}
+                >
+                  <IconFaceSmile size={20} />
+                </button>
                 <EditableField
                   id="chatInput"
                   multiline
@@ -1399,7 +1539,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                       online={onlineAuthors.has(member.author) || member.author === viewer.author}
                       self={member.author === viewer.author}
                       blocked={blockedAuthors.has(member.author)}
-                      onOpen={setProfile}
+                      onOpen={openProfile}
                     />
                   ))}
                 </div>
@@ -1456,7 +1596,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                       online
                       self={member.author === viewer.author}
                       blocked={blockedAuthors.has(member.author)}
-                      onOpen={setProfile}
+                      onOpen={openProfile}
                     />
                   ))}
                 </div>
@@ -1475,11 +1615,15 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
           blocked={blockedAuthors}
           room={room}
           onOpen={switchTarget}
-          onOpenProfile={setProfile}
+          onOpenProfile={openProfile}
           onClose={() => setDialog(null)}
         />
       )}
       {profile && viewer && renderProfile(profile, viewer)}
+      {visible && emojiTarget && (
+        <ChatEmojiPicker title={emojiTarget === "composer" ? "add an emoji" : "add a reaction"} onPick={pickEmoji} onClose={closeEmoji} />
+      )}
+      {visible && viewedMedia && <ChatMediaViewer key={viewedMedia.src} media={viewedMedia} onClose={() => setViewedMedia(null)} />}
     </section>
   );
 }

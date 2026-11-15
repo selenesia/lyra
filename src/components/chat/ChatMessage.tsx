@@ -1,7 +1,7 @@
+import ChatDisplayName from "./ChatDisplayName.tsx";
 import { memo } from "preact/compat";
 import { useEffect, useState } from "preact/hooks";
 import {
-  CHAT_REACTIONS,
   CHAT_REACTION_FACES,
   attachmentKind,
   displayName,
@@ -18,10 +18,12 @@ import ChatAvatar from "./ChatAvatar.tsx";
 import { appPath } from "../../core/runtime/hosting.ts";
 import { RoleBadge } from "./ChatProfile.tsx";
 import ChatPartyCard from "./ChatPartyCard.tsx";
+import { profileIntent } from "../../features/chat/chatProfiles.ts";
+import type { ChatMediaView } from "./ChatMediaViewer.tsx";
+import { EMOJI_MESSAGE } from "../../features/chat/chatText.ts";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 const dateFormat = new Intl.DateTimeFormat("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
-const MEDIA_MAX_HEIGHT = 360;
 
 function messageTime(at: number): string {
   const time = timeFormat.format(at).toLowerCase();
@@ -37,19 +39,27 @@ function plainPreview(text: string): string {
   return text.replace(/\|\|.+?(?:\|\||$)/g, "[spoiler]").replace(/\*\*|~~|`/g, "");
 }
 
-function Attachment({ id, attachment }: { id: string; attachment: NonNullable<ChatMessageData["attachment"]> }) {
+function Attachment({ id, attachment, onView }: { id: string; attachment: NonNullable<ChatMessageData["attachment"]>; onView: (media: ChatMediaView) => void }) {
   const src = appPath(`/api/chat/media/message/${encodeURIComponent(id)}`);
   const kind = attachmentKind(attachment.type);
   if (kind === "audio") return <audio class="chat-attachment chat-attachment-audio" src={src} controls preload="metadata" />;
   const { width, height } = attachment;
-  const style = `width:${Math.round(Math.min(width, (MEDIA_MAX_HEIGHT * width) / height))}px`;
+  const maxHeight = kind === "video" ? 360 : 240;
+  const maxWidth = kind === "video" ? width : 320;
+  const style = `width:${Math.round(Math.min(width, maxWidth, (maxHeight * width) / height))}px`;
   if (kind === "video") {
     return <video class="chat-attachment chat-attachment-video" src={src} width={width} height={height} style={style} controls playsInline preload="metadata" />;
   }
   return (
-    <a class="chat-attachment" href={src} target="_blank" rel="noopener noreferrer">
+    <button
+      type="button"
+      class="chat-attachment chat-attachment-image"
+      aria-label="view image"
+      aria-haspopup="dialog"
+      onClick={() => onView({ id, src, type: attachment.type, width, height })}
+    >
       <img src={src} alt="chat attachment" width={width} height={height} style={style} loading="lazy" decoding="async" />
-    </a>
+    </button>
   );
 }
 
@@ -58,11 +68,13 @@ export interface ChatMessageActions {
   edit: (entry: ChatEntry) => void;
   remove: (entry: ChatEntry) => void;
   react: (entry: ChatEntry, emoji: string) => void;
+  pickReaction: (entry: ChatEntry) => void;
   block: (member: ChatMember) => void;
   jumpTo: (id: string) => void;
   openProfile: (member: ChatMember) => void;
   openLink: (url: string) => void;
   openChannel: (channel: ChatChannel) => void;
+  viewMedia: (media: ChatMediaView) => void;
   select: (id: string | null) => void;
   joinParty: (invite: ChatPartyInvite) => void;
   endParty: (id: string) => void;
@@ -86,15 +98,11 @@ interface ChatMessageProps {
 }
 
 function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfName, mentionMembers, channels, mentioned, selected, editing, party, actions }: ChatMessageProps) {
-  const [picking, setPicking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
-    if (!selected) {
-      setPicking(false);
-      setConfirmDelete(false);
-    }
+    if (!selected) setConfirmDelete(false);
   }, [selected]);
 
   useEffect(() => {
@@ -124,7 +132,12 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
       onMouseEnter={entry.decoration && showMeta ? () => setHovered(true) : undefined}
       onMouseLeave={() => {
         setHovered(false);
+        setConfirmDelete(false);
         if (selected) actions.select(null);
+      }}
+      onFocusOut={(event) => {
+        const next = event.relatedTarget;
+        if (!(next instanceof Node && event.currentTarget.contains(next))) setConfirmDelete(false);
       }}
     >
       {entry.reply && replyMember && (
@@ -134,7 +147,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           onClick={() => actions.jumpTo(entry.reply!.id)}
         >
           <ChatAvatar member={replyMember} size={16} />
-          <span class="chat-reply-name">{displayName(replyMember)}</span>
+          <span class="chat-reply-name"><ChatDisplayName member={replyMember} /></span>
           <span class="chat-reply-text">{plainPreview(entry.reply.text)}</span>
         </button>
       )}
@@ -145,6 +158,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
             class="chat-message-avatar"
             tabIndex={-1}
             aria-hidden="true"
+            {...profileIntent(entry.author)}
             onClick={() => actions.openProfile(entry)}
           >
             <ChatAvatar member={entry} size={40} decoration={entry.decoration} animate={hovered} />
@@ -152,16 +166,17 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           <button
             type="button"
             class={`chat-message-name${mine ? " mine" : ""}`}
+            {...profileIntent(entry.author)}
             onClick={() => actions.openProfile(entry)}
           >
-            {displayName(entry)}
+            <ChatDisplayName member={entry} />
           </button>
           <RoleBadge role={entry.role} />
           <span class="chat-message-time">{messageTime(entry.at)}</span>
         </div>
       )}
       {(entry.text || !entry.party) && (
-        <div class="chat-message-text">
+        <div class={`chat-message-text${EMOJI_MESSAGE.test(entry.text) ? " chat-message-emoji" : ""}`}>
           <MessageText
             text={entry.text}
             selfName={selfName}
@@ -184,7 +199,7 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
           onEnd={actions.endParty}
         />
       )}
-      {entry.attachment && <Attachment id={entry.id} attachment={entry.attachment} />}
+      {entry.attachment && <Attachment id={entry.id} attachment={entry.attachment} onView={actions.viewMedia} />}
       {reactions.length > 0 && (
         <div class="chat-reactions">
           {reactions.map(([emoji, authors]) => (
@@ -209,63 +224,43 @@ function ChatMessage({ entry, grouped, mine, canPost, canDelete, author, selfNam
       )}
       {!entry.pending && (
         <div class="chat-toolbar">
-          {picking ? (
-            CHAT_REACTIONS.map((emoji) => (
-              <button
-                type="button"
-                key={emoji}
-                class="chat-tool chat-tool-emoji"
-                data-tooltip={`react ${emoji}`}
-                aria-label={`react ${emoji}`}
-                onClick={() => {
-                  setPicking(false);
-                  actions.react(entry, emoji);
-                }}
-              >
-                {emoji}
-              </button>
-            ))
-          ) : (
-            <>
-              <button type="button" class="chat-tool" data-tooltip="react" aria-label="react" onClick={() => setPicking(true)}>
-                <IconFaceSmilePlus size={16} />
-              </button>
-              {canPost && (
-                <button type="button" class="chat-tool" data-tooltip="reply" aria-label="reply" onClick={() => actions.reply(entry)}>
-                  <IconArrowCornerUpLeft size={16} />
-                </button>
-              )}
-              {mine && canPost && !entry.party && (
-                <button type="button" class="chat-tool" data-tooltip="edit" aria-label="edit" onClick={() => actions.edit(entry)}>
-                  <IconPencil size={16} />
-                </button>
-              )}
-              {canDelete && (
-                <button
-                  type="button"
-                  class={`chat-tool${confirmDelete ? " danger" : ""}`}
-                  data-tooltip={confirmDelete ? "click again to delete" : "delete"}
-                  aria-label={confirmDelete ? "confirm delete" : "delete"}
-                  onClick={() => {
-                    if (confirmDelete) actions.remove(entry);
-                    else setConfirmDelete(true);
-                  }}
-                >
-                  <IconCrossMedium size={16} />
-                </button>
-              )}
-              {!mine && (
-                <button
-                  type="button"
-                  class="chat-tool"
-                  data-tooltip="block"
-                  aria-label="block"
-                  onClick={() => actions.block({ author: entry.author, name: entry.name, role: entry.role })}
-                >
-                  <IconGhost size={16} />
-                </button>
-              )}
-            </>
+          <button type="button" class="chat-tool" data-tooltip="react" aria-label="react" aria-haspopup="dialog" onClick={() => actions.pickReaction(entry)}>
+            <IconFaceSmilePlus size={16} />
+          </button>
+          {canPost && (
+            <button type="button" class="chat-tool" data-tooltip="reply" aria-label="reply" onClick={() => actions.reply(entry)}>
+              <IconArrowCornerUpLeft size={16} />
+            </button>
+          )}
+          {mine && canPost && !entry.party && (
+            <button type="button" class="chat-tool" data-tooltip="edit" aria-label="edit" onClick={() => actions.edit(entry)}>
+              <IconPencil size={16} />
+            </button>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              class={`chat-tool${confirmDelete ? " danger" : ""}`}
+              data-tooltip={confirmDelete ? "click again to delete" : "delete"}
+              aria-label={confirmDelete ? "confirm delete" : "delete"}
+              onClick={() => {
+                if (confirmDelete) actions.remove(entry);
+                else setConfirmDelete(true);
+              }}
+            >
+              <IconCrossMedium size={16} />
+            </button>
+          )}
+          {!mine && (
+            <button
+              type="button"
+              class="chat-tool"
+              data-tooltip="block"
+              aria-label="block"
+              onClick={() => actions.block({ author: entry.author, name: entry.name, role: entry.role })}
+            >
+              <IconGhost size={16} />
+            </button>
           )}
         </div>
       )}

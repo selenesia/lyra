@@ -12,6 +12,8 @@ interface PlayerMenuProps {
   triggerClassName?: string;
   panelClassName?: string;
   panelRole?: "listbox" | "group";
+  name?: string;
+  onBack?: () => void;
 }
 
 export function PlayerMenu({
@@ -25,6 +27,8 @@ export function PlayerMenu({
   triggerClassName,
   panelClassName = "",
   panelRole = "listbox",
+  name,
+  onBack,
 }: PlayerMenuProps) {
   return (
     <div class={`player-control-popover ${className}`}>
@@ -44,6 +48,7 @@ export function PlayerMenu({
           label
         ) : (
           <>
+            {name && <span class="player-menu-name">{name}</span>}
             <span>{label}</span>
             <IconChevronBottom size={12} class="selector-chevron" />
           </>
@@ -54,6 +59,23 @@ export function PlayerMenu({
         role={panelRole}
         aria-hidden={!open}
       >
+        {onBack && (
+          <>
+            <button
+              type="button"
+              class="player-caption-back"
+              tabIndex={open ? 0 : -1}
+              onClick={(event) => {
+                event.stopPropagation();
+                onBack();
+              }}
+            >
+              <IconChevronBottom size={12} class="player-caption-back-icon" />
+              <span>{name}</span>
+            </button>
+            <div class="player-menu-divider" role="separator" />
+          </>
+        )}
         {children}
       </div>
     </div>

@@ -5,5 +5,8 @@
 @import "./chat-avatar.css";
 @import "./chat-members.css";
 @import "./chat-profile.css";
+@import "./chat-emoji.css";
+@import "./chat-color.css";
 @import "./chat-cosmetics.css";
+@import "./chat-voice.css";
 @import "./chat-responsive.css";

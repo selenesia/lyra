@@ -47,6 +47,14 @@ impl Display for LastSpans {
 	}
 }
 
+fn push_varint(map: &mut Vec<'_, u8>, mut value: u32) {
+	while value >= 0x80 {
+		map.push((value as u8) | 0x80);
+		value >>= 7;
+	}
+	map.push(value as u8);
+}
+
 pub struct TransformResult<'alloc> {
 	pub source: Vec<'alloc, u8>,
 	pub map: Vec<'alloc, u8>,
@@ -114,6 +122,7 @@ impl<'alloc, 'data, T: Transform<'data>> Transformer<'alloc, 'data, T> {
 
 		let mut cursor = 0;
 		let mut offset = 0i32;
+		let mut mapped_end = 0u32;
 		let mut buffer = Vec::with_capacity_in(js.len() * 2, alloc);
 
 		#[cfg(feature = "debug")]
@@ -145,8 +154,8 @@ impl<'alloc, 'data, T: Transform<'data>> Transformer<'alloc, 'data, T> {
 		}
 
 		let mut map = if build_map {
-			let mut map = Vec::with_capacity_in((self.inner.len() * 16) + 4, alloc);
-			map.extend_from_slice(&(self.inner.len() as u32).to_le_bytes());
+			let mut map = Vec::with_capacity_in((self.inner.len() * 6) + 5, alloc);
+			push_varint(&mut map, self.inner.len() as u32);
 			map
 		} else {
 			Vec::new_in(alloc)
@@ -188,8 +197,11 @@ impl<'alloc, 'data, T: Transform<'data>> Transformer<'alloc, 'data, T> {
 
 			let len = transform.apply(&mut itoa, &mut buffer);
 			if build_map {
-				map.extend_from_slice(&start.wrapping_add_signed(offset).to_le_bytes());
-				map.extend_from_slice(&len.to_le_bytes());
+				let mapped = start.wrapping_add_signed(offset);
+				push_varint(&mut map, mapped.wrapping_sub(mapped_end));
+				let kind = u32::from(matches!(transform.ty, TransformType::Replace));
+				push_varint(&mut map, (len << 1) | kind);
+				mapped_end = mapped.wrapping_add(len);
 			}
 
 			match transform.ty {
@@ -198,16 +210,11 @@ impl<'alloc, 'data, T: Transform<'data>> Transformer<'alloc, 'data, T> {
 						tryget!("insert: start -> end", start..end, span).as_bytes(),
 					);
 
-					if build_map {
-						map.push(0);
-					}
-
 					offset = offset.wrapping_add_unsigned(len);
 				}
 				TransformType::Replace => {
 					if build_map {
-						map.push(1);
-						map.extend_from_slice(&(end - start).to_le_bytes());
+						push_varint(&mut map, end - start);
 						map.extend_from_slice(
 							tryget!("replace: start -> end", start..end, span).as_bytes(),
 						);

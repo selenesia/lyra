@@ -6,7 +6,6 @@ body.settings-view {
 
 body.settings-view .meow {
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
 }
 
 body.settings-view .main-container,

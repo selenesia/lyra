@@ -47,6 +47,7 @@ import {
   IconFullScreen,
   IconDownsize,
   IconChat,
+  IconSettingsGear4,
 } from "../icons";
 import { attachSeekBar } from "./seekBar.ts";
 import {
@@ -149,6 +150,7 @@ import { persistPlayerProgress } from "./playerProgress.ts";
 import {
   renderQualityMenu,
   renderSubtitleMenu,
+  renderCaptionStyleMenu,
   renderAudioMenu,
   renderLanguageMenu,
   renderProviderMenu,
@@ -1704,6 +1706,30 @@ export default function Player() {
     seekTo(activeSkipEnd);
   }, [activeSkipEnd, activeSkipKey, autoSkip, seekTo]);
 
+  const languageMenuControl = renderLanguageMenu({
+    ...languageMenu, openSelector, setOpenSelector, changingLanguage,
+    loadingStreamInfo, changeLanguage,
+  });
+  const audioMenuControl = renderAudioMenu({
+    streamProvider, audioTracksReady, audioTracks, openSelector,
+    setOpenSelector, activeAudioLabel, loadingStreamInfo,
+    selectedAudioTrack, chooseAudioTrack, audioMenuLabels,
+  });
+  const qualityMenuControl = renderQualityMenu({
+    qualityOptions, hasRemote4k, openSelector, refreshAutoQuality,
+    setOpenSelector, selectedQualityLabel, selectedQuality,
+    chooseQuality, autoQualityName, chooseRemote4k,
+  });
+  const providerMenuControl = renderProviderMenu({
+    providers: streamProviders, activeProvider: streamProvider,
+    providerChoice, openSelector, setOpenSelector, changingProvider,
+    changeProvider,
+  });
+  const settingsOpen =
+    openSelector === "settings" || openSelector === "language" ||
+    openSelector === "audio" || openSelector === "quality" ||
+    openSelector === "provider" || openSelector === "captionStyle";
+
   return (
     <div class="player-page is-visible">
       <div
@@ -1784,6 +1810,7 @@ export default function Player() {
           </div>
 
           <div class="controls-row">
+            <div class="controls-transport">
             <button
               class="player-btn player-btn-play"
               aria-label={playControlActive ? "pause" : "play"}
@@ -1816,7 +1843,8 @@ export default function Player() {
             <div ref={timeDisplayRef} class="time-display">
               --:-- / {durationLabel}
             </div>
-            <div class="spacer" />
+            </div>
+            <div class="controls-options">
             {renderEpisodeMenu({
               format, episodeSelectorOpen, setOpenSelector,
               confirmedEpisodeNumber, setEpisodeSelectorMounted, title,
@@ -1826,29 +1854,38 @@ export default function Player() {
                 ? { id: titlePlayback.id, season: titlePlayback.season ?? 1 }
                 : null,
             })}
-            {renderLanguageMenu({
-              ...languageMenu, openSelector, setOpenSelector, changingLanguage,
-              loadingStreamInfo, changeLanguage,
-            })}
-            {renderAudioMenu({
-              streamProvider, audioTracksReady, audioTracks, openSelector,
-              setOpenSelector, activeAudioLabel, loadingStreamInfo,
-              selectedAudioTrack, chooseAudioTrack, audioMenuLabels,
-            })}
+            <div class="player-control-popover player-settings-control">
+              <button
+                type="button"
+                class={`player-btn player-btn-settings${settingsOpen ? " is-open" : ""}`}
+                aria-label="playback settings"
+                aria-haspopup="true"
+                aria-expanded={settingsOpen}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpenSelector(settingsOpen ? null : "settings");
+                }}
+              >
+                <IconSettingsGear4 size={24} />
+              </button>
+              <div
+                class={`player-settings-panel${settingsOpen ? " is-open" : ""}${openSelector !== "settings" && settingsOpen ? " has-submenu" : ""}`}
+                role="group"
+                aria-label="playback settings"
+              >
+                {languageMenuControl}
+                {audioMenuControl}
+                {qualityMenuControl}
+                {providerMenuControl}
+                {renderCaptionStyleMenu({
+                  openSelector, setOpenSelector, captionStyle,
+                  chooseCaptionStyle, resetCaptionStyle,
+                })}
+              </div>
+            </div>
             {renderSubtitleMenu({
               openSelector, setOpenSelector, activeSubtitle, subtitleTracks,
               selectedSubtitle, chooseSubtitle, subtitleMenuLabels,
-              captionStyle, chooseCaptionStyle, resetCaptionStyle,
-            })}
-            {renderQualityMenu({
-              qualityOptions, hasRemote4k, openSelector, refreshAutoQuality,
-              setOpenSelector, selectedQualityLabel, selectedQuality,
-              chooseQuality, autoQualityName, chooseRemote4k,
-            })}
-            {renderProviderMenu({
-              providers: streamProviders, activeProvider: streamProvider,
-              providerChoice, openSelector, setOpenSelector, changingProvider,
-              changeProvider,
             })}
             {watchParty.party && (
               <div class="player-control-popover player-party-chat-control">
@@ -1881,8 +1918,9 @@ export default function Player() {
               end: watchParty.end,
               invite: watchParty.invite,
             })}
+            </div>
             <button
-              class="player-btn"
+              class="player-btn player-btn-fullscreen"
               aria-label={isFullscreen ? "exit fullscreen" : "fullscreen"}
               onClick={toggleFullscreen}
             >

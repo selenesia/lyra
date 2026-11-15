@@ -1,4 +1,4 @@
-import { openRoute, sealRoute } from "../route";
+import { openRoute, sealRoute, sealRoutePrefix } from "../route";
 import { FolioContext } from "@/shared";
 import { rewriteJs } from "@rewriters/js";
 import { QP } from "@/fetch/parse";
@@ -206,6 +206,12 @@ function rewriteUrlInternal(
 export function rewriteUrl(url: string | URL, context: FolioContext, meta: URLMeta, options?: RewriteUrlOptions) {
 	const rewritten = rewriteUrlInternal(url, context, meta, options);
 	return /^https?:/.test(rewritten) ? sealRoute(rewritten) : rewritten;
+}
+
+export function rewriteUrlPrefix(url: string | URL, context: FolioContext, meta: URLMeta, options?: RewriteUrlOptions) {
+	if (/^(?:data|blob|javascript):/i.test(String(url))) return rewriteUrl(url, context, meta, options);
+	const rewritten = rewriteUrlInternal(url, context, meta, options);
+	return /^https?:/.test(rewritten) ? sealRoutePrefix(rewritten) : rewritten;
 }
 
 export function unrewriteUrl(url: string | URL, context: FolioContext) {

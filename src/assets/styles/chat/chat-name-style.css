@@ -1,0 +1,218 @@
+.chat-display-name {
+  --name-a: currentColor;
+  --name-b: color-mix(in srgb, var(--accent-color) 55%, #d3b4ff);
+  --name-stops: var(--name-a), var(--name-b), var(--name-a);
+  color: var(--name-a);
+  overflow-wrap: anywhere;
+}
+
+:is(.chat-message-name, .chat-member-name, .chat-voice-member-name, .player-party-name, .chat-self-display):has(> .chat-display-name) {
+  margin: -0.4em -0.5em;
+  padding: 0.4em 0.5em;
+}
+
+.chat-name-text {
+  font-size: calc(var(--name-scale, 1) * 1em);
+  font-synthesis: none;
+  line-height: 0;
+  text-shadow: var(--name-shadow, none);
+}
+
+.chat-display-name[data-effect="glow"] {
+  --name-shadow: 0 0 0.45em color-mix(in srgb, var(--name-a) 60%, transparent);
+  --name-drop: drop-shadow(0 0 0.3em color-mix(in srgb, var(--name-b) 60%, transparent));
+}
+
+.chat-display-name[data-effect="neon"] {
+  --name-shadow:
+    0 0 0.06em var(--name-a),
+    0 0 0.3em var(--name-a),
+    0 0 0.6em color-mix(in srgb, var(--name-b) 75%, transparent);
+  --name-drop: drop-shadow(0 0 0.12em var(--name-a)) drop-shadow(0 0 0.4em color-mix(in srgb, var(--name-b) 80%, transparent));
+}
+
+.chat-display-name[data-effect="neon"]:not([data-fill]) > .chat-name-text {
+  color: color-mix(in srgb, var(--name-a) 45%, #fff);
+}
+
+.chat-display-name[data-effect="shadow"] {
+  --name-shadow:
+    0.06em 0.06em 0 color-mix(in srgb, var(--name-b) 85%, transparent),
+    0.12em 0.12em 0 color-mix(in srgb, var(--name-b) 45%, transparent),
+    0.18em 0.18em 0 color-mix(in srgb, var(--name-b) 20%, transparent);
+  --name-drop: drop-shadow(0.07em 0.07em 0 color-mix(in srgb, var(--name-b) 55%, #000)) drop-shadow(0.07em 0.07em 0 color-mix(in srgb, var(--name-b) 25%, transparent));
+}
+
+.chat-display-name[data-effect="glitch"] {
+  --name-shadow: -0.06em 0 rgb(255 56 130 / 0.75), 0.06em 0 rgb(56 220 255 / 0.75);
+  --name-drop: drop-shadow(-0.06em 0 0 rgb(255 56 130 / 0.7)) drop-shadow(0.06em 0 0 rgb(56 220 255 / 0.7));
+}
+
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .chat-display-name[data-fill] > .chat-name-text {
+    -webkit-background-clip: text;
+    background-clip: text;
+    background-image: linear-gradient(100deg, var(--name-stops));
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    filter: var(--name-drop, none);
+    text-shadow: none;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .chat-display-name[data-effect="shimmer"] > .chat-name-text {
+    background-image:
+      linear-gradient(100deg, transparent 38%, rgb(255 255 255 / 0.9) 50%, transparent 62%),
+      linear-gradient(100deg, var(--name-stops));
+    background-position: 120% 0, 0 0;
+    background-repeat: no-repeat;
+    background-size: 250% 100%, 100% 100%;
+    animation: chat-name-shimmer 3.2s ease-in-out infinite paused;
+  }
+
+  .chat-display-name[data-effect="flow"] > .chat-name-text {
+    background-image: linear-gradient(100deg, var(--name-stops), var(--name-a));
+    background-size: 200% 100%;
+    animation: chat-name-flow 4s linear infinite paused;
+  }
+}
+
+.chat-display-name[data-effect="pulse"] > .chat-name-text {
+  animation: chat-name-pulse 2.6s ease-in-out infinite paused;
+}
+
+.chat-display-name[data-effect="pulse"][data-fill] > .chat-name-text {
+  animation-name: chat-name-pulse-drop;
+}
+
+.chat-display-name[data-effect="prism"] > .chat-name-text {
+  animation: chat-name-prism 6s linear infinite paused;
+}
+
+.chat-display-name[data-effect="glitch"] > .chat-name-text {
+  animation: chat-name-glitch 3.4s steps(1, end) infinite paused;
+}
+
+.chat-display-name[data-effect="glitch"][data-fill] > .chat-name-text {
+  animation-name: chat-name-glitch-drop;
+}
+
+.chat-display-name[data-effect="sparkle"] > .chat-name-text {
+  padding-inline-end: 0.5em;
+  position: relative;
+}
+
+.chat-display-name[data-effect="sparkle"] > .chat-name-text::before,
+.chat-display-name[data-effect="sparkle"] > .chat-name-text::after {
+  animation: chat-name-twinkle 2.4s ease-in-out infinite paused;
+  background: none;
+  color: var(--name-b);
+  content: "✦";
+  filter: none;
+  font-family: Lexend, sans-serif;
+  font-size: 0.6em;
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  text-shadow: 0 0 0.4em var(--name-b);
+  -webkit-text-fill-color: currentColor;
+}
+
+.chat-display-name[data-effect="sparkle"] > .chat-name-text::before {
+  animation-delay: -1.2s;
+  bottom: 0.1em;
+  font-size: 0.4em;
+  right: 0.15em;
+}
+
+.chat-display-name[data-effect="sparkle"] > .chat-name-text::after {
+  top: 0;
+}
+
+.chat-display-name[data-moving] > .chat-name-text,
+.chat-display-name[data-moving] > .chat-name-text::before,
+.chat-display-name[data-moving] > .chat-name-text::after {
+  animation-play-state: running;
+}
+
+@keyframes chat-name-shimmer {
+  60%,
+  100% {
+    background-position: -20% 0, 0 0;
+  }
+}
+
+@keyframes chat-name-flow {
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes chat-name-pulse {
+  50% {
+    text-shadow: 0 0 0.1em var(--name-a), 0 0 0.6em color-mix(in srgb, var(--name-b) 80%, transparent);
+  }
+}
+
+@keyframes chat-name-pulse-drop {
+  50% {
+    filter: drop-shadow(0 0 0.35em color-mix(in srgb, var(--name-b) 85%, transparent));
+  }
+}
+
+@keyframes chat-name-prism {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
+@keyframes chat-name-glitch {
+  86% {
+    text-shadow: -0.12em 0 rgb(255 56 130 / 0.85), 0.1em 0 rgb(56 220 255 / 0.85);
+  }
+  89% {
+    text-shadow: 0.1em 0.03em rgb(255 56 130 / 0.85), -0.12em -0.03em rgb(56 220 255 / 0.85);
+  }
+  92% {
+    text-shadow: -0.06em 0 rgb(255 56 130 / 0.75), 0.06em 0 rgb(56 220 255 / 0.75);
+  }
+}
+
+@keyframes chat-name-glitch-drop {
+  86% {
+    filter: drop-shadow(-0.12em 0 0 rgb(255 56 130 / 0.8)) drop-shadow(0.1em 0 0 rgb(56 220 255 / 0.8));
+  }
+  89% {
+    filter: drop-shadow(0.1em 0.03em 0 rgb(255 56 130 / 0.8)) drop-shadow(-0.12em -0.03em 0 rgb(56 220 255 / 0.8));
+  }
+  92% {
+    filter: var(--name-drop);
+  }
+}
+
+@keyframes chat-name-twinkle {
+  50% {
+    opacity: 0.25;
+    transform: scale(0.55) rotate(45deg);
+  }
+}
+
+@media (forced-colors: active) {
+  .chat-name-text {
+    animation: none !important;
+    background: none !important;
+    color: CanvasText;
+    filter: none !important;
+    text-shadow: none !important;
+    -webkit-text-fill-color: currentColor !important;
+  }
+
+  .chat-name-text::before,
+  .chat-name-text::after {
+    display: none;
+  }
+}

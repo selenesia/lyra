@@ -804,13 +804,9 @@
   margin: 3px 10px;
   background: var(--border-faint);
 }
-.player-caption-open-icon,
 .player-caption-back-icon {
   flex: 0 0 auto;
   color: var(--color-icon-muted);
-  transform: rotate(-90deg);
-}
-.player-caption-back-icon {
   transform: rotate(90deg);
 }
 .player-selector-options.player-subtitle-options button.player-caption-back {
@@ -853,8 +849,26 @@
   color: #fff;
 }
 
-.spacer {
-  flex: 1;
+.controls-transport,
+.controls-options {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  min-width: 0;
+}
+.controls-transport {
+  flex: 0 0 auto;
+}
+.controls-options {
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.player-selector-selected > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .volume-wrapper {
@@ -1008,6 +1022,90 @@
   transform: scale(1);
 }
 
+.player-btn-settings.is-open {
+  background-color: var(--hover-bg);
+  opacity: 1;
+}
+.player-settings-panel {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  z-index: 20;
+  width: min(290px, calc(100vw - 24px));
+  margin-bottom: 5px;
+  padding: 3px;
+  box-sizing: border-box;
+  border: 2px solid var(--border-transparent);
+  border-radius: var(--radius-panel);
+  background: var(--bg-surface-7);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(6px) scale(0.98);
+  transform-origin: bottom right;
+  transition:
+    opacity var(--motion-control) var(--motion-ease),
+    transform var(--motion-control) var(--motion-ease),
+    visibility 0s linear var(--motion-control);
+}
+.player-settings-panel.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition-delay: 0s;
+}
+.player-settings-panel .player-control-popover {
+  position: static;
+  display: block;
+}
+.player-settings-panel .player-selector-selected {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-item);
+  background: transparent;
+  color: var(--color-icon-muted);
+  justify-content: flex-start;
+}
+.player-settings-panel .player-selector-selected:hover,
+.player-settings-panel .player-selector-selected:focus-visible {
+  background: var(--bg-surface-active);
+}
+.player-menu-name {
+  flex-shrink: 0;
+  margin-right: auto;
+  color: var(--text-primary);
+}
+.player-settings-panel .selector-chevron,
+.player-settings-panel .player-selector-selected.is-open .selector-chevron {
+  transform: rotate(-90deg);
+}
+.player-settings-panel.has-submenu
+  > .player-control-popover
+  > .player-selector-selected {
+  visibility: hidden;
+}
+.player-settings-panel .player-selector-options {
+  right: -2px;
+  bottom: -2px;
+  left: -2px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  min-height: calc(100% + 4px);
+  margin-bottom: 0;
+  transform: none;
+  transition: none;
+}
+.player-settings-panel .player-selector-options button.player-caption-back {
+  justify-content: flex-start;
+  gap: 8px;
+  color: var(--text-primary);
+}
 @media (max-width: 700px) {
   .controls-row:has(.player-caption-options) {
     position: relative;
@@ -1024,8 +1122,12 @@
   .player-caption-style {
     width: auto;
   }
-  .controls-row:has(.player-party-control) {
+  .controls-row:has(.player-party-control),
+  .controls-row:has(.player-settings-control) {
     position: relative;
+  }
+  .player-settings-control {
+    position: static;
   }
   .player-party-control {
     position: static;
@@ -1138,17 +1240,32 @@
   }
 }
 @media (max-width: 480px) {
+  .controls-transport {
+    flex: 1 0 100%;
+  }
   .time-display {
     margin-left: auto;
-  }
-  .controls-row > .spacer {
-    flex-basis: 100%;
-    height: 0;
   }
   .player-episode-control {
     margin-right: auto;
   }
   .player-selector-selected {
     height: 40px;
+  }
+}
+@media (max-width: 480px) and (hover: none) {
+  .volume-slider-wrap,
+  .volume-wrapper:hover .volume-slider-wrap,
+  .volume-wrapper:has(:focus-visible, .volume-slider:active)
+    .volume-slider-wrap,
+  .volume-slider {
+    width: 52px;
+  }
+  .volume-slider-wrap.is-boostable,
+  .volume-wrapper:hover .volume-slider-wrap.is-boostable,
+  .volume-wrapper:has(:focus-visible, .volume-slider:active)
+    .volume-slider-wrap.is-boostable,
+  .volume-slider-wrap.is-boostable .volume-slider {
+    width: 68px;
   }
 }

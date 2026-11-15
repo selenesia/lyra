@@ -44,12 +44,13 @@ body {
 
 @media (min-width: 1600px) {
   body {
-    zoom: 1.1;
+    --page-zoom: 1.1;
+    zoom: var(--page-zoom);
   }
 }
 @media (min-width: 1920px) {
   body {
-    zoom: 1.15;
+    --page-zoom: 1.15;
   }
 }
 

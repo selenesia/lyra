@@ -45,10 +45,10 @@ body.chat-view .watch-page {
   display: none;
   flex-shrink: 0;
   gap: 24px;
-  grid-template-columns: 164px minmax(0, 1fr) 220px;
+  grid-template-columns: 200px minmax(0, 1fr) 200px;
   height: 100%;
   margin: 0 auto;
-  max-width: 1260px;
+  max-width: 1680px;
   min-height: 480px;
   padding: 100px clamp(16px, 3vw, 32px) 12px;
   text-transform: none;
@@ -79,6 +79,14 @@ body.chat-view .chat-page.is-visible {
 
 .chat-channels {
   padding-top: 12px;
+  scrollbar-width: auto;
+}
+
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
 }
 
 .chat-category {
@@ -332,32 +340,40 @@ body.chat-view .chat-page.is-visible {
 }
 
 .chat-self-bar {
-  background: var(--bg-body);
-  bottom: 0;
+  flex-shrink: 0;
   margin-top: auto;
   padding: 8px 0 4px;
-  position: sticky;
-  z-index: 1;
 }
 
 .chat-self-card {
   align-items: center;
   background-color: var(--bg-surface-3);
-  border: none;
   border-radius: var(--radius-control);
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 6px;
+}
+
+.chat-self-open {
+  align-items: center;
+  background: none;
+  border: none;
+  border-radius: inherit;
   color: var(--color-result);
   cursor: pointer;
   display: flex;
+  flex: 1;
   font-family: inherit;
   gap: 10px;
-  padding: 6px 10px 6px 6px;
+  min-width: 0;
+  padding: 6px;
   text-align: left;
   transition: background-color var(--motion-control) var(--motion-ease);
-  width: 100%;
 }
 
-.chat-self-card:hover,
-.chat-self-card:focus-visible {
+.chat-self-open:hover,
+.chat-self-open:focus-visible {
   background-color: var(--hover-bg);
 }
 

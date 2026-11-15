@@ -13,3 +13,7 @@ export function tutorialSeen(guide: TutorialGuide = "home"): boolean {
 export function markTutorialSeen(guide: TutorialGuide = "home"): void {
   try { localStorage.setItem(storageKey(guide), guide === "chat" ? "2" : "1"); } catch { }
 }
+
+export function forgetTutorialSeen(guide: TutorialGuide): void {
+  try { localStorage.removeItem(storageKey(guide)); } catch { }
+}

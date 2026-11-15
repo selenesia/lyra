@@ -6,7 +6,6 @@
   }
 
   .chat-members,
-  .chat-self-bar,
   .chat-category-title {
     display: none;
   }
@@ -30,6 +29,7 @@
     min-width: 0;
     overflow-x: auto;
     padding-top: 0;
+    scrollbar-width: none;
   }
 
   .chat-page.is-gated {

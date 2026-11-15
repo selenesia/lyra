@@ -51,39 +51,37 @@ function getRewrites(client: FolioClient, tag: string): Rewrite[] | undefined {
 }
 
 function parseRewrites(sourcemap: Uint8Array): Rewrite[] {
-	const view = new DataView(
-		sourcemap.buffer,
-		sourcemap.byteOffset,
-		sourcemap.byteLength
-	);
 	const decoder = new TextDecoder("utf-8");
-
 	const rewrites: Rewrite[] = [];
+	let cursor = 0;
+	const readVarint = () => {
+		let value = 0;
+		let shift = 0;
+		let byte: number;
+		do {
+			byte = sourcemap[cursor++];
+			value += (byte & 0x7f) * 2 ** shift;
+			shift += 7;
+		} while (byte & 0x80);
+		return value;
+	};
 
-	const rewritelen = view.getUint32(0, true);
-	let cursor = 4;
+	const rewritelen = readVarint();
+	let mappedEnd = 0;
 	for (let i = 0; i < rewritelen; i++) {
-		const start = view.getUint32(cursor, true);
-		cursor += 4;
-		const size = view.getUint32(cursor, true);
-		cursor += 4;
+		const start = mappedEnd + readVarint();
+		const packed = readVarint();
+		const size = packed >>> 1;
+		mappedEnd = start + size;
 
-		const type = view.getUint8(cursor) as RewriteType;
-		cursor += 1;
-
-		if (type == RewriteType.Insert) {
-			rewrites.push({ type, start, size });
-		} else if (type == RewriteType.Replace) {
-			const end = start + size;
-
-			const oldLen = view.getUint32(cursor, true);
-			cursor += 4;
-
+		if ((packed & 1) === RewriteType.Insert) {
+			rewrites.push({ type: RewriteType.Insert, start, size });
+		} else {
+			const oldLen = readVarint();
 			const oldStr = decoder.decode(
 				sourcemap.subarray(cursor, cursor + oldLen)
 			);
-
-			rewrites.push({ type, start, end, str: oldStr });
+			rewrites.push({ type: RewriteType.Replace, start, end: mappedEnd, str: oldStr });
 			cursor += oldLen;
 		}
 	}

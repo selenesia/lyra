@@ -232,7 +232,7 @@ export function attachCloudSyncModalListeners(this: CloudSync, modal: HTMLElemen
     const isLogin = loginForm.style.display !== "none";
     if (isLogin) {
       regUsername.value = loginUsername.value;
-      regPassword.value = "";
+      regPassword.value = loginPassword.value;
       regUsername.dispatchEvent(new Event("input"));
       regPassword.dispatchEvent(new Event("input"));
       loginForm.style.display = "none";
@@ -243,7 +243,7 @@ export function attachCloudSyncModalListeners(this: CloudSync, modal: HTMLElemen
       (regUsername.value ? regPassword : regUsername).focus();
     } else {
       loginUsername.value = regUsername.value;
-      loginPassword.value = "";
+      loginPassword.value = regPassword.value;
       loginForm.style.display = "block";
       regForm.style.display = "none";
       authTitle.textContent = "login";

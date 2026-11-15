@@ -1,3 +1,4 @@
+import ChatDisplayName from "../chat/ChatDisplayName.tsx";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import EditableField from "../EditableField.tsx";
 import ChatAvatar from "../chat/ChatAvatar.tsx";
@@ -5,7 +6,6 @@ import { negativeMessage } from "../../core/runtime/messages.ts";
 import {
   CHAT_LIMITS,
   cleanChatText,
-  displayName,
   type ChatPartyMessage,
 } from "../../features/chat/chatProtocol.ts";
 
@@ -97,7 +97,7 @@ export default function PlayerPartyChat({ open, messages, watching, say, onClose
             <div key={message.id} class={`player-party-chat-message${grouped ? " is-grouped" : ""}`}>
               {grouped ? <span class="player-party-chat-gap" /> : <ChatAvatar member={message} size={20} />}
               <div class="player-party-chat-body">
-                {!grouped && <span class="player-party-name">{displayName(message)}</span>}
+                {!grouped && <span class="player-party-name"><ChatDisplayName member={message} /></span>}
                 <p class="player-party-chat-text">{message.text}</p>
               </div>
             </div>

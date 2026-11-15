@@ -106,4 +106,5 @@ export type PlayerSelector =
   | "captionStyle"
   | "quality"
   | "audio"
-  | "provider";
+  | "provider"
+  | "settings";

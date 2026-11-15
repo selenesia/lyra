@@ -2,6 +2,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { ChatChannel, ChatMember } from "../../features/chat/chatProtocol.ts";
 import { MESSAGE_TOKEN } from "../../features/chat/chatText.ts";
+import { profileIntent } from "../../features/chat/chatProfiles.ts";
 
 interface MessageTextProps {
   text: string;
@@ -72,6 +73,7 @@ function render(text: string, props: MessageTextProps, depth: number, inSpoiler 
         <button
           type="button"
           class={classes}
+          {...profileIntent(member.author)}
           onClick={(event) => {
             event.stopPropagation();
             props.onOpenProfile(member);

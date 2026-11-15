@@ -14,13 +14,18 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [label, setLabel] = useState("");
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const targetRef = useRef<HTMLElement | null>(null);
+  targetRef.current = target;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const show = (event: Event) => {
       const button = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-tooltip]") : null;
-      if (!button || button.matches(":disabled")) return;
+      if (!button || button.matches(":disabled") || (event.type === "focusin" && !button.matches(":focus-visible"))) {
+        if (button !== targetRef.current) setTarget(null);
+        return;
+      }
       setTarget(button);
       setLabel(button.dataset.tooltip ?? "");
     };
@@ -31,7 +36,10 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
     };
     const hide = () => setTarget(null);
     const sync = (records: MutationRecord[]) => {
+      const current = targetRef.current;
+      if (current && (!current.isConnected || !current.checkVisibility() || current.matches(":disabled"))) setTarget(null);
       for (const record of records) {
+        if (record.type !== "attributes") continue;
         const button = record.target;
         if (!(button instanceof HTMLElement) || !button.matches("[data-tooltip]") || button.matches(":disabled")) continue;
         if (!button.matches(":hover, :focus-visible")) continue;
@@ -40,7 +48,7 @@ export default function ChatTooltip({ containerRef }: { containerRef: RefObject<
       }
     };
     const observer = new MutationObserver(sync);
-    observer.observe(container, { attributes: true, attributeFilter: ["data-tooltip"], subtree: true });
+    observer.observe(container, { attributes: true, attributeFilter: ["data-tooltip", "class", "disabled"], childList: true, subtree: true });
     container.addEventListener("pointerover", show);
     container.addEventListener("focusin", show);
     container.addEventListener("pointerout", leave);

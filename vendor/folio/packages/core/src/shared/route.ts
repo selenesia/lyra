@@ -67,8 +67,32 @@ export function sealRoute(input: string | URL): string {
 	return url.origin + route[1] + "?s=" + token + (hash ? "#" + encodeRouteToken(hash.slice(1)) : "");
 }
 
+export function sealRoutePrefix(input: string | URL): string {
+	const url = new NativeURL(String(input));
+	const route = url.pathname.match(/^(.*\/f)\/[a-z0-9]+\/[a-z0-9]+\//);
+	if (!route || url.hash) return url.href;
+	return url.origin + route[1] + "/~" + encodeRouteToken(url.pathname + url.search) + "/";
+}
+
+function openRoutePrefix(url: URL, route: string, token: string, rest: string): URL {
+	const sealed = decodeRouteToken(token);
+	const query = sealed.indexOf("?");
+	const path = query === -1 ? sealed : sealed.slice(0, query);
+	if (!path.startsWith(route + "/") || !/^[a-z0-9]+\/[a-z0-9]+\//.test(path.slice(route.length + 1))) {
+		throw new Error("invalid navigation link... /ᐠ - ˕ -マ");
+	}
+	const internal = new NativeURL(
+		path + encodeURIComponent(rest + url.search) + (query === -1 ? "" : sealed.slice(query)),
+		url.origin
+	);
+	internal.hash = url.hash;
+	return internal;
+}
+
 export function openRoute(input: string | URL): URL {
 	const url = new NativeURL(String(input));
+	const prefixed = url.pathname.match(/^(.*\/f)\/~([\w-]+)\/(.*)$/s);
+	if (prefixed) return openRoutePrefix(url, prefixed[1], prefixed[2], prefixed[3]);
 	if (!url.pathname.endsWith("/f")) return url;
 	const token = url.searchParams.get("s");
 	if (!token || [...url.searchParams.keys()].some((key) => key !== "s") || url.searchParams.getAll("s").length !== 1) {

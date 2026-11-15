@@ -11,7 +11,7 @@
     opacity var(--motion-enter) var(--motion-ease),
     visibility 0s;
   white-space: nowrap;
-  width: 220px;
+  width: 200px;
   will-change: margin-left, opacity;
   z-index: 3;
 }
@@ -43,11 +43,11 @@ body.browser-view .footer {
 
 body:not(.browser-view) .meow {
   overflow-y: auto;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
 }
 
 body.sidebar-hidden .sidebar {
-  margin-left: -220px;
+  margin-left: -200px;
   opacity: 0;
   transition:
     margin-left var(--motion-enter) var(--motion-ease),

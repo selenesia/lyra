@@ -1,4 +1,6 @@
+import { CHAT_NAME_STYLE_FIELDS, isChatNameStyle } from "../src/features/chat/chatNameStyle.ts";
 import { createHash, randomBytes } from "crypto";
+import { ChatTextBusy } from "./chat-text-check.mjs";
 import { httpError } from "./errors.mjs";
 import { ChatAuthUnavailable } from "./chat-auth.mjs";
 import { PERMANENT } from "./chat-store.mjs";
@@ -6,6 +8,7 @@ import { chatAudioVideoDemuxer } from "./chat-audio-video.mjs";
 import { chatImageType, readChatImage } from "./chat-media.mjs";
 import { createChatGifs } from "./chat-gifs.mjs";
 import { createPartyRegistry } from "./chat-party.mjs";
+import { createVoiceRegistry } from "./chat-voice.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
 import { moderate, readModeration } from "../src/features/chat/moderation.ts";
 import { blockedNotice } from "../src/features/chat/moderationNotice.ts";
@@ -18,8 +21,10 @@ import {
   CHAT_ATTACHMENT,
   CHAT_CONVERSATION_LIMITS,
   CHAT_PARTY_LIMITS,
+  CHAT_PROFILE_COLORS,
   CHAT_PROFILE_TEXT,
   CHAT_UPLOAD_BYTES,
+  CHAT_VOICE_LIMITS,
   attachmentKind,
   canPostIn,
   canReadChannel,
@@ -33,10 +38,13 @@ import {
   isChatChannel,
   isChatReaction,
   isChatTarget,
+  isChatVoiceChannel,
   isConversationKey,
   isPartyControl,
   isPartyId,
+  isVoiceSession,
   readPartyMedia,
+  readVoiceSignal,
   replySnippet,
   sortMembers,
 } from "../src/features/chat/chatProtocol.ts";
@@ -81,9 +89,9 @@ async function readBody(request, limit) {
   }
 }
 
-async function readJson(request) {
+async function readJson(request, limit = BODY_MAX_BYTES) {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") || "")) return null;
-  const body = await readBody(request, BODY_MAX_BYTES);
+  const body = await readBody(request, limit);
   if (!body) return null;
   try {
     const payload = JSON.parse(body.toString());
@@ -147,6 +155,12 @@ export function createChatRoom({
   partyStateLimit = 8,
   partyStateWindowMs = 4_000,
   maxPartyStreamsPerUser = 4,
+  voiceCapacity = CHAT_VOICE_LIMITS.members,
+  voiceGraceMs = CHAT_VOICE_LIMITS.graceMs,
+  voiceStaleMs = CHAT_VOICE_LIMITS.staleMs,
+  voiceJoinLimit = 8,
+  voiceSignalLimit = 240,
+  voiceStateLimit = 20,
   now = Date.now,
 } = {}) {
   const encoder = new TextEncoder();
@@ -170,6 +184,9 @@ export function createChatRoom({
     ...(row.status && { status: row.status }),
     ...(row.decoration && { decoration: row.decoration }),
     ...(row.nameplate && { nameplate: row.nameplate }),
+    ...(row.nameFont && { nameFont: row.nameFont }),
+    ...(row.nameEffect && { nameEffect: row.nameEffect }),
+    ...(row.nameColor && { nameColor: row.nameColor }),
   });
   const streamUser = (row) => ({
     id: row.id,
@@ -180,6 +197,9 @@ export function createChatRoom({
     status: row.status,
     decoration: row.decoration,
     nameplate: row.nameplate,
+    nameFont: row.nameFont,
+    nameEffect: row.nameEffect,
+    nameColor: row.nameColor,
   });
   const memberCache = new Map();
   const parties = createPartyRegistry({
@@ -193,6 +213,19 @@ export function createChatRoom({
     maxMs: partyMaxMs,
     messageLimit: CHAT_PARTY_LIMITS.messages,
     announce: (party) => broadcast(frame("party", party), party.target),
+  });
+  const voices = createVoiceRegistry({
+    now,
+    frame,
+    pingFrame,
+    pingMs,
+    member,
+    delayMs: presenceDelayMs,
+    capacity: voiceCapacity,
+    graceMs: voiceGraceMs,
+    staleMs: voiceStaleMs,
+    queueLimit: CHAT_VOICE_LIMITS.queue,
+    announce: (room) => broadcast(frame("voice", room)),
   });
 
   function broadcast(bytes, channel) {
@@ -302,6 +335,7 @@ export function createChatRoom({
     memberCache.clear();
     for (const stream of [...streams.values()]) if (stream.user.id === userId) stream.close();
     dropParties(userId);
+    voices.drop(userId, "CHAT_VOICE_ENDED");
     for (const { id, kind, members: ids } of memberships) {
       const exists = !!store.conversationInfo(id);
       if (!exists) endPartiesIn(conversationKey(id));
@@ -390,10 +424,14 @@ export function createChatRoom({
     if (!entry) {
       entry = {
         sends: [], reacts: [], profiles: [], drafts: [], socials: [], searches: [], states: [],
+        voiceJoins: [], voiceSignals: [], voiceStates: [],
         typedAt: 0, draft: undefined,
       };
       activity.set(userId, entry);
     }
+    entry.voiceJoins = entry.voiceJoins.filter((at) => time - at < profileWindowMs);
+    entry.voiceSignals = entry.voiceSignals.filter((at) => time - at < sendWindowMs);
+    entry.voiceStates = entry.voiceStates.filter((at) => time - at < sendWindowMs);
     entry.sends = entry.sends.filter((at) => time - at < sendWindowMs);
     entry.reacts = entry.reacts.filter((at) => time - at < sendWindowMs);
     entry.drafts = entry.drafts.filter((at) => time - at < sendWindowMs);
@@ -477,6 +515,7 @@ export function createChatRoom({
       ids.add(party.host);
       for (const stream of party.streams.values()) ids.add(stream.user.id);
     }
+    for (const id of voices.users()) ids.add(id);
     for (const id of ids) {
       const row = store.user(id);
       if (!row) continue;
@@ -492,8 +531,10 @@ export function createChatRoom({
           stream.close();
         }
         dropParties(id);
+        voices.drop(id, "CHAT_BANNED");
       } else {
         sendTo(id, frame("muted", { until: fresh.muted_until > now() ? fresh.muted_until : 0 }));
+        if (fresh.muted_until > now()) voices.drop(id, "CHAT_MUTED");
       }
     }
   }
@@ -506,7 +547,7 @@ export function createChatRoom({
   }
 
   async function screenMessage(text, row, time, channel) {
-    const verdict = await screenText(text, activityOf(row.id, time));
+    const verdict = await screenText(text, activityOf(row.id, time), { userId: row.id });
     if (!verdict.allowed) return rejectContent(row, verdict, time, channel);
     return silenced(row);
   }
@@ -643,7 +684,9 @@ export function createChatRoom({
     const mine = activityOf(row.id, time);
     if (mine.reacts.length >= reactLimit) return httpError(429, "CHAT_RATE_LIMITED", "slow down a little");
     mine.reacts.push(time);
-    store.toggleReaction(numeric, row.id, payload.emoji, time);
+    if (!store.toggleReaction(numeric, row.id, payload.emoji, time, CHAT_LIMITS.reactions)) {
+      return httpError(400, "CHAT_REACTIONS_FULL", "this message has too many reactions");
+    }
     const updated = store.message(numeric);
     broadcast(frame("update", updated), updated.channel);
     return ok({ message: updated });
@@ -695,6 +738,7 @@ export function createChatRoom({
       audit(`${target.role} -> ${role}`);
       for (const stream of streams.values()) if (stream.user.id === target.id) stream.user = { ...stream.user, role };
       parties.refresh(target.id, { role });
+      voices.refresh(target.id, streamUser({ ...target, role }));
       revokeParties(target.id);
       broadcast(frame("role", { author: String(target.id), role }));
       sendTo(target.id, frame("viewer", viewer({ ...target, role })));
@@ -802,6 +846,7 @@ export function createChatRoom({
         stream.send(frame("members", members()));
         stream.send(frame("conversations", store.conversations(row.id).map(conversationView)));
         stream.send(frame("parties", parties.list().filter((party) => canRead(party.target, row)).map(parties.view)));
+        stream.send(frame("voices", voices.list()));
         announcePresence();
       },
       cancel() {
@@ -825,6 +870,7 @@ export function createChatRoom({
       ...(target.pronouns && { pronouns: target.pronouns }),
       ...(target.bio && { bio: target.bio }),
       ...(target.accent && { accent: target.accent }),
+      ...(target.accentSecondary && { accentSecondary: target.accentSecondary }),
       ...(target.banner_hash && { banner: target.banner_hash }),
       ...(target.effect && { effect: target.effect }),
       ...(target.frame && { frame: target.frame }),
@@ -843,6 +889,7 @@ export function createChatRoom({
   function announceProfile(updated) {
     for (const stream of streams.values()) if (stream.user.id === updated.id) stream.user = streamUser(updated);
     parties.refresh(updated.id, streamUser(updated));
+    voices.refresh(updated.id, streamUser(updated));
     broadcast(frame("profile", member(updated)));
   }
 
@@ -868,11 +915,12 @@ export function createChatRoom({
       if (text === null) return httpError(400, "CHAT_PROFILE_INVALID", `that ${PROFILE_LABELS[field]} is too long`, { field });
       fields[field] = text;
     }
-    if (payload.accent !== undefined) {
-      if (payload.accent !== null && !isChatAccent(payload.accent)) {
-        return httpError(400, "CHAT_PROFILE_INVALID", "that color is not valid", { field: "accent" });
+    for (const field of CHAT_PROFILE_COLORS) {
+      if (payload[field] === undefined) continue;
+      if (payload[field] !== null && !isChatAccent(payload[field])) {
+        return httpError(400, "CHAT_PROFILE_INVALID", "that color is not valid", { field });
       }
-      fields.accent = payload.accent;
+      fields[field] = payload[field];
     }
     for (const slot of CHAT_COSMETIC_SLOTS) {
       if (payload[slot] === undefined) continue;
@@ -880,6 +928,13 @@ export function createChatRoom({
         return httpError(400, "CHAT_PROFILE_INVALID", "that cosmetic is not valid", { field: slot });
       }
       fields[slot] = payload[slot];
+    }
+    for (const field of CHAT_NAME_STYLE_FIELDS) {
+      if (payload[field] === undefined) continue;
+      if (payload[field] !== null && !isChatNameStyle(field, payload[field])) {
+        return httpError(400, "CHAT_PROFILE_INVALID", "that name style is not valid", { field });
+      }
+      fields[field] = payload[field];
     }
     for (const kind of Object.keys(CHAT_MEDIA)) {
       if (payload[kind] === undefined) continue;
@@ -1380,6 +1435,74 @@ export function createChatRoom({
     return parties.connect(party, streamUser(row), signal);
   }
 
+  const voiceMissing = () => httpError(404, "CHAT_VOICE_NOT_FOUND", "that voice session ended");
+
+  function voiceJoin(payload, row, time) {
+    if (!isChatVoiceChannel(payload.channel)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
+    const refused = silenced(row);
+    if (refused) return refused;
+    const mine = activityOf(row.id, time);
+    if (mine.voiceJoins.length >= voiceJoinLimit) return rateLimited();
+    mine.voiceJoins.push(time);
+    const joined = voices.join(streamUser(row), payload.channel, {
+      muted: payload.muted === true,
+      deafened: payload.deafened === true,
+    });
+    if (joined.full) return httpError(409, "CHAT_VOICE_FULL", "that voice channel is full");
+    return ok({ voice: { session: joined.session.id, channel: joined.session.channel } });
+  }
+
+  function voiceSignal(payload, session, row, time) {
+    const data = readVoiceSignal(payload.data);
+    if (!data || !isVoiceSession(payload.to)) return invalid();
+    const mine = activityOf(row.id, time);
+    if (mine.voiceSignals.length >= voiceSignalLimit) return rateLimited();
+    mine.voiceSignals.push(time);
+    const target = voices.get(payload.to);
+    if (!target || !voices.relay(session, target, data)) {
+      return httpError(404, "CHAT_VOICE_PEER_NOT_FOUND", "that person is not in this voice channel");
+    }
+    return ok();
+  }
+
+  function voiceState(payload, session, row, time) {
+    if (typeof payload.muted !== "boolean" || typeof payload.deafened !== "boolean") return invalid();
+    const mine = activityOf(row.id, time);
+    if (mine.voiceStates.length >= voiceStateLimit) return rateLimited();
+    mine.voiceStates.push(time);
+    voices.setState(session, payload.muted, payload.deafened);
+    return ok();
+  }
+
+  async function voiceAction(request, row) {
+    if (crossSite(request)) return httpError(403, "CHAT_REQUEST_DENIED", "this request is not allowed");
+    const length = request.headers.get("content-length");
+    if (length && !(Number(length) <= CHAT_VOICE_LIMITS.body)) return httpError(413, "CHAT_REQUEST_TOO_LARGE", "this request is too large");
+    const payload = await readJson(request, CHAT_VOICE_LIMITS.body);
+    if (!payload) return invalid();
+    const time = now();
+    row = store.guard.apply(store.user(row.id) ?? row, time);
+    if (payload.type === "join") return voiceJoin(payload, row, time);
+    const session = isVoiceSession(payload.session) ? voices.get(payload.session) : undefined;
+    if (!session || session.user.id !== row.id) return voiceMissing();
+    voices.touch(session);
+    if (payload.type === "leave") {
+      voices.end(session);
+      return ok();
+    }
+    if (payload.type === "ping") return ok();
+    if (payload.type === "state") return voiceState(payload, session, row, time);
+    if (payload.type === "signal") return voiceSignal(payload, session, row, time);
+    return invalid();
+  }
+
+  function voiceStream(url, row, signal) {
+    const id = url.searchParams.get("voice");
+    const session = isVoiceSession(id) ? voices.get(id) : undefined;
+    if (!session || session.user.id !== row.id) return reply(voiceMissing());
+    return voices.connect(session, signal);
+  }
+
   async function action(request, row, ip) {
     if (crossSite(request)) return httpError(403, "CHAT_REQUEST_DENIED", "this request is not allowed");
     const contentType = request.headers.get("content-type") || "";
@@ -1467,14 +1590,17 @@ export function createChatRoom({
     }
     if (mediaRoute?.[2] && (method === "GET" || method === "HEAD")) return media(request, mediaRoute[1], mediaRoute[2]);
     const known =
-      (["message", "profile"].includes(route) && method === "POST") ||
+      (["message", "profile", "voice"].includes(route) && method === "POST") ||
       (mediaRoute && !mediaRoute[2] && method === "POST") ||
       (gifRoute && method === "GET") ||
       (["stream", "me", "history", "profile", "users", "party", "gifs"].includes(route) && method === "GET");
     if (!known) return reply(httpError(404, "CHAT_ROUTE_NOT_FOUND", "not found"));
     const { row, failure } = await session(request, ip, browser);
     if (failure) return reply(failure);
-    if (route === "stream") return url.searchParams.has("party") ? watchParty(url, row, request.signal) : connect(row, request.signal);
+    if (route === "stream") {
+      if (url.searchParams.has("voice")) return voiceStream(url, row, request.signal);
+      return url.searchParams.has("party") ? watchParty(url, row, request.signal) : connect(row, request.signal);
+    }
     if (route === "me") return json(200, { viewer: viewer(row) });
     if (gifRoute) {
       const found = await gifs.media(gifRoute[1], url.searchParams.get("size"), row.id);
@@ -1487,13 +1613,21 @@ export function createChatRoom({
     else if (route === "party") result = partyInfo(url, row);
     else if (route === "profile") result = method === "POST" ? await editProfile(request, row) : profile(url, row);
     else if (mediaRoute) result = await upload(request, mediaRoute[1], row);
+    else if (route === "voice") result = await voiceAction(request, row);
     else result = await action(request, row, ip);
     return json(result.status, result.body);
   }
 
   async function handle(request, { ip = "unknown" } = {}) {
     const browser = store.guard.browser(request);
-    const response = await handleRequest(request, ip, browser);
+    let response;
+    try {
+      response = await handleRequest(request, ip, browser);
+    } catch (error) {
+      if (!(error instanceof ChatTextBusy)) throw error;
+      response = reply(httpError(503, "CHAT_TEXT_CHECK_BUSY", "chat is busy, try again in a moment"));
+      response.headers.set("Retry-After", "2");
+    }
     if (browser.authenticated) response.headers.append("Set-Cookie", browser.cookie);
     return response;
   }
@@ -1534,6 +1668,7 @@ export function createChatRoom({
     presenceTimer = undefined;
     for (const stream of [...streams.values()]) stream.close();
     parties.close();
+    voices.close();
     memberCache.clear();
   }
 

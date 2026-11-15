@@ -1,7 +1,7 @@
 import { ElementType, Parser } from "htmlparser2";
 import { ChildNode, ParentNode, DomHandler, Element, Comment } from "domhandler";
 import render from "dom-serializer";
-import { URLMeta, rewriteUrl } from "@rewriters/url";
+import { URLMeta, rewriteUrl, rewriteUrlPrefix } from "@rewriters/url";
 import { rewriteCss } from "@rewriters/css";
 import { rewriteJs } from "@rewriters/js";
 import { FolioContext } from "@/shared";
@@ -420,7 +420,9 @@ function traverseParsedHtml(
 				for (const key in map.imports) {
 					let url = map.imports[key];
 					if (typeof url === "string") {
-						url = rewriteUrl(url, context, meta, { isModule: true });
+						url = key.endsWith("/") && url.endsWith("/")
+							? rewriteUrlPrefix(url, context, meta, { isModule: true })
+							: rewriteUrl(url, context, meta, { isModule: true });
 						map.imports[key] = url;
 					}
 				}

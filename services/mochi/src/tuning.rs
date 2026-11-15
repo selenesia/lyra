@@ -122,7 +122,9 @@ fn worker_heap_bytes(max_script_bytes: usize) -> usize {
 }
 
 fn compute(ram_mb: u64, cores: usize, disk_mb: u64) -> MochiTuning {
-    let folio_rewrite_workers = (cores / 2).clamp(1, 2);
+    let folio_rewrite_workers = (cores / 2)
+        .clamp(1, 4)
+        .min((ram_mb / 1536).clamp(2, 4) as usize);
     let folio_rewrite_max_bytes =
         (ram_mb / (320 * folio_rewrite_workers as u64)).clamp(1, 16) as usize * 1024 * 1024;
     let worker_threads = cores

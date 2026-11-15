@@ -1,9 +1,10 @@
+import type { ChatNameStyle } from "./chatNameStyle.ts";
 import { roleRank, type ChatRole } from "./chatRoles.ts";
 
-export const CHAT_LIMITS = { text: 500, replySnippet: 120, page: 50 } as const;
+export const CHAT_LIMITS = { text: 500, replySnippet: 120, page: 50, reactions: 20 } as const;
 export const CHAT_CATEGORIES = [
   { name: "info", channels: ["rules", "announcements", "updates"] },
-  { name: "social", channels: ["general", "general-2", "introductions", "art", "music", "debating"] },
+  { name: "social", channels: ["general", "introductions", "art", "music"] },
   { name: "support", channels: ["help", "suggestions", "bugs"] },
   { name: "staff", channels: ["staff-chat"] },
 ] as const;
@@ -11,6 +12,7 @@ export const CHAT_CHANNELS = CHAT_CATEGORIES.flatMap((category) => category.chan
 const CHAT_STAFF_CHANNELS: readonly ChatChannel[] = ["announcements", "rules", "updates"];
 export const CHAT_REACTIONS = ["👍", "❤️", "😂", "😮", "😭", "🔥", "💀", "✨"] as const;
 export const CHAT_REACTION_FACES = 4;
+const REACTION_EMOJI = /^\p{RGI_Emoji}$/v;
 export const CHAT_PROFILE_LIMITS = { display: 32, pronouns: 24, status: 64, bio: 300, bioLines: 6 } as const;
 export const CHAT_MEDIA = {
   avatar: { width: 256, height: 256, bytes: 64 * 1024, gif: { width: 1024, height: 1024, bytes: 2 * 1024 * 1024 } },
@@ -23,12 +25,25 @@ export const CHAT_AUDIO = { bytes: 20 * 1024 * 1024, seconds: 15 * 60 } as const
 export const CHAT_UPLOAD_BYTES = Math.max(CHAT_ATTACHMENT.gif.bytes, CHAT_VIDEO.bytes, CHAT_AUDIO.bytes);
 export const CHAT_PROFILE_TEXT = ["display", "pronouns", "status", "bio"] as const;
 export const CHAT_COSMETIC_SLOTS = ["decoration", "effect", "nameplate", "frame"] as const;
+export const CHAT_PROFILE_COLORS = ["accent", "accentSecondary"] as const;
 export const CHAT_CONVERSATION_LIMITS = { name: 32, groupMembers: 10, groups: 30, userSearch: 8 } as const;
 export const CHAT_PARTY_LIMITS = { watchers: 50, hosted: 3, query: 2048, messages: 100, idleMs: 10 * 60_000, maxMs: 12 * 60 * 60_000 } as const;
 export const CHAT_PARTY_PATHS = { watch: "/stream/watch", anime: "/stream/anime" } as const;
 export const CHAT_PARTY_COMMAND = /^\/(?:party|watch)(?=\s|$)/i;
 export const CHAT_GIFS = { page: 24, pages: 20, query: 64, title: 100 } as const;
 export const CHAT_GIF_COMMAND = /^\/gif(?=\s|$)/i;
+export const CHAT_VOICE_CHANNELS = ["lounge", "gaming"] as const;
+export const CHAT_VOICE_LIMITS = {
+  members: 10,
+  body: 16 * 1024,
+  sdp: 12_000,
+  candidates: 16,
+  candidate: 512,
+  graceMs: 20_000,
+  pingMs: 15_000,
+  staleMs: 60_000,
+  queue: 64,
+} as const;
 
 export type ChatChannel = (typeof CHAT_CATEGORIES)[number]["channels"][number];
 export type ChatConversationKey = `conv:${number}`;
@@ -41,6 +56,8 @@ export type ChatMediaKind = keyof typeof CHAT_MEDIA;
 export type ChatAttachmentKind = "image" | "video" | "audio";
 export type ChatProfileText = (typeof CHAT_PROFILE_TEXT)[number];
 export type ChatCosmeticSlot = (typeof CHAT_COSMETIC_SLOTS)[number];
+export type ChatProfileColor = (typeof CHAT_PROFILE_COLORS)[number];
+export type ChatVoiceChannel = (typeof CHAT_VOICE_CHANNELS)[number];
 
 interface ChatReply {
   id: string;
@@ -112,7 +129,7 @@ export interface ChatConversation {
   mentioned?: boolean;
 }
 
-export interface ChatMessage {
+export interface ChatMessage extends ChatNameStyle {
   id: string;
   channel: ChatTarget;
   author: string;
@@ -133,7 +150,7 @@ export interface ChatMessage {
   party?: ChatPartyInvite;
 }
 
-export interface ChatMember {
+export interface ChatMember extends ChatNameStyle {
   author: string;
   name: string;
   role: ChatRole;
@@ -149,6 +166,29 @@ export interface ChatPresence {
   leave: string[];
 }
 
+export interface ChatVoicePeer extends ChatMember {
+  session: string;
+  seq: number;
+  muted: boolean;
+  deafened: boolean;
+}
+
+export interface ChatVoiceRoom {
+  channel: ChatVoiceChannel;
+  members: ChatVoicePeer[];
+}
+
+export interface ChatVoiceCandidate {
+  candidate: string;
+  sdpMid: string | null;
+  sdpMLineIndex: number | null;
+}
+
+export type ChatVoiceSignal =
+  | { kind: "offer" | "answer"; sdp: string }
+  | { kind: "candidates"; candidates: ChatVoiceCandidate[] }
+  | { kind: "restart" };
+
 export function sortMembers(list: ChatMember[]): ChatMember[] {
   return list.sort((a, b) => roleRank(b.role) - roleRank(a.role) || a.name.localeCompare(b.name));
 }
@@ -162,6 +202,8 @@ export interface ChatProfile extends ChatMember {
   joinedAt: number;
   pronouns?: string;
   bio?: string;
+  accent?: string;
+  accentSecondary?: string;
   banner?: string;
   effect?: string;
   frame?: string;
@@ -210,6 +252,44 @@ export function isPartyId(value: unknown): value is string {
 
 export function isPartyControl(value: unknown): value is ChatPartyControl {
   return value === "host" || value === "everyone";
+}
+
+export function isChatVoiceChannel(value: unknown): value is ChatVoiceChannel {
+  return typeof value === "string" && (CHAT_VOICE_CHANNELS as readonly string[]).includes(value);
+}
+
+export function isVoiceSession(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{16}$/.test(value);
+}
+
+const VOICE_SDP = /^v=0\r?\n[\x20-\x7e\r\n\t]*$/;
+const VOICE_CANDIDATE = /^candidate:[\x20-\x7e]+$/;
+
+export function readVoiceSignal(value: unknown): ChatVoiceSignal | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  if (data.kind === "offer" || data.kind === "answer") {
+    const sdp = data.sdp;
+    if (typeof sdp !== "string" || sdp.length > CHAT_VOICE_LIMITS.sdp || !VOICE_SDP.test(sdp)) return null;
+    return { kind: data.kind, sdp };
+  }
+  if (data.kind === "restart") return { kind: "restart" };
+  if (data.kind !== "candidates" || !Array.isArray(data.candidates)) return null;
+  if (!data.candidates.length || data.candidates.length > CHAT_VOICE_LIMITS.candidates) return null;
+  const candidates: ChatVoiceCandidate[] = [];
+  for (const entry of data.candidates as unknown[]) {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+    const candidate = item?.candidate;
+    if (typeof candidate !== "string" || candidate.length > CHAT_VOICE_LIMITS.candidate || !VOICE_CANDIDATE.test(candidate)) return null;
+    const mid = item?.sdpMid;
+    const index = item?.sdpMLineIndex;
+    candidates.push({
+      candidate,
+      sdpMid: typeof mid === "string" && /^[\w-]{1,16}$/.test(mid) ? mid : null,
+      sdpMLineIndex: typeof index === "number" && Number.isInteger(index) && index >= 0 && index < 8 ? index : null,
+    });
+  }
+  return { kind: "candidates", candidates };
 }
 
 export function cleanConversationName(value: unknown): string | null {
@@ -285,7 +365,7 @@ export function canReadChannel(role: ChatRole, channel: ChatChannel): boolean {
 }
 
 export function isChatReaction(value: unknown): value is string {
-  return typeof value === "string" && (CHAT_REACTIONS as readonly string[]).includes(value);
+  return typeof value === "string" && value.length <= 32 && REACTION_EMOJI.test(value);
 }
 
 export function cleanChatText(value: unknown): string {

@@ -11,7 +11,7 @@
   padding: clamp(28px, 4vw, 36px) clamp(14px, 4vw, 44px) 60px;
   box-sizing: border-box;
   width: min(100%, calc(100vw - 32px));
-  max-width: 1280px;
+  max-width: 1680px;
   margin: 0 auto;
   position: relative;
 }
@@ -30,7 +30,6 @@ body.watch-view .meow {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  scrollbar-gutter: stable;
 }
 
 body.games-view .main-container,
@@ -140,6 +139,12 @@ body.watch-view .watch-page {
   color: var(--color-result);
   text-align: center;
   margin: 18px 0 6px;
+}
+
+@media (width > 700px) {
+  .catalog-page {
+    padding-inline: clamp(14px, 2vw, 32px);
+  }
 }
 
 @media (max-width: 700px) {

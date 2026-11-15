@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useCosmeticMotion } from "../../features/chat/cosmeticMotion.ts";
+import { prefersReducedMotion } from "../../core/config/advancedSettings.ts";
 import { useVirtualGrid } from "../../hooks/useVirtualGrid.ts";
 import { negativeMessage } from "../../core/runtime/messages.ts";
 import type { ChatCosmeticSlot, ChatMember } from "../../features/chat/chatProtocol.ts";
 import {
   NAMEPLATE_PALETTES,
+  cosmeticBlob,
   cosmeticMatches,
   cosmeticUrl,
   loadCosmetics,
@@ -60,19 +62,9 @@ function EffectLayer({ layer }: { layer: CosmeticEffectLayer }) {
     let current: string | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
-    let cachedName = "";
-    let cachedBlob: Promise<Blob | null> | null = null;
     const sources = layer.random?.length ? layer.random : [layer.src];
-    let firstPlay = true;
-    const blobFor = (name: string) => {
-      if (cachedName !== name || !cachedBlob) {
-        cachedName = name;
-        cachedBlob = fetch(cosmeticUrl(name), { signal: controller.signal })
-          .then((response) => (response.ok ? response.blob() : null))
-          .catch(() => null);
-      }
-      return cachedBlob;
-    };
+    const pick = () => sources[Math.floor(Math.random() * sources.length)]!;
+    let name = pick();
     const show = (next: string | null) => {
       if (current) URL.revokeObjectURL(current);
       current = next;
@@ -82,14 +74,16 @@ function EffectLayer({ layer }: { layer: CosmeticEffectLayer }) {
       timer = setTimeout(() => {
         if (!alive) return;
         if (!layer.loop || layer.delay > 0) show(null);
-        if (layer.loop) timer = setTimeout(() => void play(), layer.delay);
-        else cachedBlob = null;
+        if (layer.loop) {
+          timer = setTimeout(() => {
+            name = pick();
+            void play();
+          }, layer.delay);
+        }
       }, Math.max(layer.duration, 100));
     };
     const play = async () => {
-      const name = firstPlay ? cachedName : sources[Math.floor(Math.random() * sources.length)]!;
-      firstPlay = false;
-      const blob = await blobFor(name);
+      const blob = await cosmeticBlob(name, controller.signal);
       if (!alive) return;
       if (blob) {
         const url = URL.createObjectURL(blob);
@@ -101,14 +95,12 @@ function EffectLayer({ layer }: { layer: CosmeticEffectLayer }) {
         show(url);
       } else scheduleEnd();
     };
-    const first = sources[Math.floor(Math.random() * sources.length)]!;
-    void blobFor(first);
+    void cosmeticBlob(name, controller.signal);
     timer = setTimeout(() => void play(), layer.start);
     return () => {
       alive = false;
       controller.abort();
       clearTimeout(timer);
-      cachedBlob = null;
       loadedRef.current = null;
       if (current) URL.revokeObjectURL(current);
     };
@@ -127,7 +119,7 @@ export function ProfileEffect({ id }: { id?: string | undefined }) {
   return (
     <div ref={ref} class="chat-profile-effect" aria-hidden="true">
       {!moving
-        ? effect.still && (
+        ? effect.still && (document.hidden || prefersReducedMotion()) && (
             <img class="chat-effect-layer" src={cosmeticUrl(effect.still)} alt="" draggable={false} style={layerStyle(EFFECT_STILL)} />
           )
         : effect.layers.map((layer, index) => <EffectLayer key={`${effect.id}:${index}`} layer={layer} />)}
