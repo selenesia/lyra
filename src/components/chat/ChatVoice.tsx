@@ -1,12 +1,12 @@
 import ChatDisplayName from "./ChatDisplayName.tsx";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { profileIntent } from "../../features/chat/chatProfiles.ts";
 import {
   CHAT_VOICE_CHANNELS,
   CHAT_VOICE_LIMITS,
+  CHAT_VOICE_NAMES,
   displayName,
   type ChatMember,
-  type ChatVoiceChannel,
   type ChatVoicePeer,
 } from "../../features/chat/chatProtocol.ts";
 import type { ChatVoices } from "../../features/chat/chatRoom.ts";
@@ -36,7 +36,6 @@ import ChatAvatar from "./ChatAvatar.tsx";
 
 const ERROR_MS = 5_000;
 const QUALITY_LABELS = { good: "good connection", fair: "unsteady connection", poor: "weak connection" } as const;
-const VOICE_NAMES: Record<ChatVoiceChannel, string> = { lounge: "vc", gaming: "vc-2" };
 
 interface VoiceChannelsProps {
   voices: ChatVoices;
@@ -102,6 +101,31 @@ function channelTooltip(name: string, here: boolean, count: number): string {
   return `join ${name}`;
 }
 
+function VoiceDuration({ startedAt, visible }: { startedAt: number; visible: boolean }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!visible) return;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const update = () => {
+      clearInterval(timer);
+      if (document.hidden) return;
+      setNow(Date.now());
+      timer = setInterval(() => setNow(Date.now()), 1_000);
+    };
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [visible, startedAt]);
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000));
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor(seconds / 60) % 60;
+  const duration = `${hours ? `${hours}:${String(minutes).padStart(2, "0")}` : minutes}:${String(seconds % 60).padStart(2, "0")}`;
+  return <span class="chat-voice-count" role="timer" aria-label={`call duration ${duration}`}>{duration}</span>;
+}
+
 export function ChatVoiceChannels({ voices, viewerAuthor, blocked, visible, onOpenProfile }: VoiceChannelsProps) {
   const voice = useVoice();
   const speaking = useVoiceSpeaking(visible && !!voice.channel);
@@ -110,8 +134,9 @@ export function ChatVoiceChannels({ voices, viewerAuthor, blocked, visible, onOp
   return (
     <>
       {CHAT_VOICE_CHANNELS.map((channel) => {
-        const name = VOICE_NAMES[channel];
-        const members = voices[channel] ?? [];
+        const name = CHAT_VOICE_NAMES[channel];
+        const room = voices[channel];
+        const members = room?.members ?? [];
         const here = voice.channel === channel;
         const full = !here && members.length >= CHAT_VOICE_LIMITS.members;
         return (
@@ -127,7 +152,12 @@ export function ChatVoiceChannels({ voices, viewerAuthor, blocked, visible, onOp
               }}
             >
               <IconVolumeHalf size={16} class="chat-channel-icon" />
-              <span class="chat-channel-name">{name}</span>
+              <span class="chat-voice-heading">
+                <span class="chat-channel-name">{name}</span>
+                {members.length > 0 && room?.startedAt != null && (
+                  <VoiceDuration startedAt={room.startedAt} visible={visible} />
+                )}
+              </span>
               {members.length > 0 && (
                 <span class="chat-voice-count">
                   {members.length}/{CHAT_VOICE_LIMITS.members}
@@ -187,7 +217,7 @@ export function ChatVoicePanel({ voice }: { voice: VoiceSnapshot }) {
           <span class="chat-voice-status-text">
             <span class="chat-voice-status-label">{statusText(voice)}</span>
             <span class="chat-voice-status-channel">
-              {VOICE_NAMES[voice.channel]}
+              {CHAT_VOICE_NAMES[voice.channel]}
               {live && voice.ping !== null && <span class="chat-voice-ping"> · {voice.ping} ms</span>}
             </span>
           </span>

@@ -598,6 +598,8 @@
   overflow-y: auto;
 }
 .player-selector-options.player-subtitle-options button.is-active,
+.player-selector-options.player-audio-options button.is-active,
+.player-selector-options.player-quality-options button.is-active,
 .player-selector-options.player-party-options button.is-active {
   color: var(--text-white);
 }
@@ -789,10 +791,6 @@
   color: var(--status-error-text);
 }
 .video-container:has(.player-party-chat.is-open) .player-next-episode-card {
-  display: none;
-}
-.player-selector-options.player-audio-options button.is-active,
-.player-selector-options.player-quality-options button.is-active {
   display: none;
 }
 .player-option-check {

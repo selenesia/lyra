@@ -107,24 +107,11 @@
   flex-shrink: 0;
   height: 24px;
   margin-right: 2px;
-  opacity: 0;
   width: 24px;
-}
-
-.chat-voice-member:hover .chat-voice-local,
-.chat-tool.chat-voice-local:focus-visible,
-.chat-tool.chat-voice-local.is-on {
-  opacity: 1;
 }
 
 .chat-tool.chat-voice-local.is-on {
   color: var(--status-error-text);
-}
-
-@media (hover: none) {
-  .chat-tool.chat-voice-local {
-    opacity: 1;
-  }
 }
 
 .chat-voice-error {
@@ -264,4 +251,16 @@
   .chat-voice-status-label {
     display: none;
   }
+}
+
+.chat-voice-heading {
+  align-items: baseline;
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-voice-heading > .chat-channel-name {
+  flex: 0 1 auto;
 }

@@ -31,7 +31,6 @@ import {
   type ChatTyping,
   type ChatViewer,
   type ChatVoiceChannel,
-  type ChatVoicePeer,
   type ChatVoiceRoom,
   displayName,
   isChatMediaKind,
@@ -60,7 +59,7 @@ export type ChatAccess =
 export type ChatHistory = Record<ChatChannel, ChatEntry[]> & Partial<Record<ChatConversationKey, ChatEntry[]>>;
 export type ChatUnread = Partial<Record<ChatTarget, { count: number; mention: boolean }>>;
 export type ChatParties = Readonly<Record<string, ChatParty>>;
-export type ChatVoices = Readonly<Partial<Record<ChatVoiceChannel, ChatVoicePeer[]>>>;
+export type ChatVoices = Readonly<Partial<Record<ChatVoiceChannel, ChatVoiceRoom>>>;
 
 export interface ChatFailure {
   error: string;
@@ -76,7 +75,7 @@ export type ChatResult = {
   failure?: ChatFailure;
   removed?: number;
 };
-export type ChatModeration = "role" | "timeout" | "untimeout" | "ban" | "unban" | "clearprofile";
+export type ChatModeration = "role" | "timeout" | "untimeout" | "ban" | "unban" | "clearprofile" | "voicekick";
 export type ChatProfileEdit = Partial<Record<"display" | "pronouns" | "status" | "bio" | ChatProfileColor | ChatCosmeticSlot | ChatNameStyleField, string | null>> &
   Partial<Record<ChatMediaKind, null>>;
 
@@ -230,6 +229,8 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
       return failure("that message is gone");
     case "CHAT_USER_NOT_FOUND":
       return failure("that user has not joined chat yet");
+    case "CHAT_VOICE_NOT_FOUND":
+      return failure("that person is not in a voice channel");
     case "CHAT_FORBIDDEN":
       return failure("you do not have permission for that");
     case "CHAT_CHANNEL_LOCKED":
@@ -665,14 +666,14 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
         "voices",
         (event) => {
           const rooms = parse<ChatVoiceRoom[]>(event);
-          setVoices(Object.fromEntries(rooms.map((room) => [room.channel, room.members])));
+          setVoices(Object.fromEntries(rooms.map((room) => [room.channel, room])));
         },
       ],
       [
         "voice",
         (event) => {
           const room = parse<ChatVoiceRoom>(event);
-          setVoices((current) => ({ ...current, [room.channel]: room.members }));
+          setVoices((current) => ({ ...current, [room.channel]: room }));
         },
       ],
       [

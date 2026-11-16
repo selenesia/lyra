@@ -22,6 +22,7 @@ export function createVoiceRegistry({
 }) {
   const sessions = new Map();
   const byUser = new Map();
+  const startedAt = new Map();
   const announcing = new Map();
   const retryFrame = new TextEncoder().encode("retry: 1500\n\n");
   let order = 0;
@@ -50,7 +51,7 @@ export function createVoiceRegistry({
   }
 
   function roomView(channel) {
-    return { channel, members: membersOf(channel).map(peerView) };
+    return { channel, startedAt: startedAt.get(channel) ?? null, members: membersOf(channel).map(peerView) };
   }
 
   function announceSoon(channel) {
@@ -108,7 +109,9 @@ export function createVoiceRegistry({
     const previous = byUser.get(user.id);
     const taken = membersOf(channel).filter((session) => session !== previous).length;
     if (taken >= capacity) return { full: true };
+    const channelStartedAt = startedAt.get(channel) ?? now();
     if (previous) end(previous, "CHAT_VOICE_MOVED");
+    startedAt.set(channel, channelStartedAt);
     let id;
     do id = randomBytes(12).toString("base64url");
     while (sessions.has(id));
@@ -136,6 +139,7 @@ export function createVoiceRegistry({
   function end(session, code) {
     if (!live(session)) return false;
     sessions.delete(session.id);
+    if (!membersOf(session.channel).length) startedAt.delete(session.channel);
     if (byUser.get(session.user.id) === session) byUser.delete(session.user.id);
     clearTimeout(session.graceTimer);
     const stream = session.stream;
@@ -245,6 +249,7 @@ export function createVoiceRegistry({
       session.stream?.close();
     }
     byUser.clear();
+    startedAt.clear();
     stopTimers();
   }
 

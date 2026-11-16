@@ -25,6 +25,7 @@ import {
   CHAT_GIF_COMMAND,
   CHAT_PARTY_COMMAND,
   CHAT_VIDEO,
+  CHAT_VOICE_CHANNELS,
   canPostIn,
   canReadChannel,
   cleanChatText,
@@ -1197,6 +1198,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       viewer={viewer}
       blocked={blockedAuthors.has(profile.author)}
       online={onlineAuthors.has(profile.author) || profile.author === viewer.author}
+      voiceChannel={
+        CHAT_VOICE_CHANNELS.find((entry) => voices[entry]?.members.some((member) => member.author === profile.author)) ?? null
+      }
       loadProfile={room.loadProfile}
       moderate={moderateInChannel}
       saveProfile={room.saveProfile}

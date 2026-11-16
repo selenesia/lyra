@@ -749,6 +749,16 @@ export function createChatRoom({
       return ok({ user: member({ ...target, role }) });
     }
 
+    if (action === "voicekick") {
+      if (!fromConsole && !canTimeout(actorRole, target.role)) {
+        return httpError(403, "CHAT_FORBIDDEN", "you can not kick that user from voice");
+      }
+      if (!voices.of(target.id)) return httpError(404, "CHAT_VOICE_NOT_FOUND", "that person is not in a voice channel");
+      audit(null);
+      voices.drop(target.id, "CHAT_VOICE_KICKED");
+      return ok();
+    }
+
     if (action === "timeout" || action === "untimeout") {
       if (!fromConsole && !canTimeout(actorRole, target.role)) return httpError(403, "CHAT_FORBIDDEN", "you can not time out that user");
       let until = 0;
@@ -1543,7 +1553,7 @@ export function createChatRoom({
     if (refused?.body.code === "CHAT_BANNED") return refused;
     const type = payload.type ?? "send";
     if (type === "delete") return remove(payload, row, time);
-    if (["role", "timeout", "untimeout", "ban", "unban", "clearprofile"].includes(type)) {
+    if (["role", "timeout", "untimeout", "ban", "unban", "clearprofile", "voicekick"].includes(type)) {
       const { row: target, failure } =
         payload.targetName === undefined ? findTarget(payload.target) : findTargetByName(payload.targetName);
       if (failure) return failure;

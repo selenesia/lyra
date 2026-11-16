@@ -29,12 +29,14 @@ import {
   CHAT_MEDIA,
   CHAT_PROFILE_COLORS,
   CHAT_PROFILE_LIMITS,
+  CHAT_VOICE_NAMES,
   type ChatCosmeticSlot,
   type ChatMediaKind,
   type ChatMember,
   type ChatProfile as Profile,
   type ChatProfileColor,
   type ChatViewer,
+  type ChatVoiceChannel,
 } from "../../features/chat/chatProtocol.ts";
 import { avatarColor, chatMediaUrl, encodeChatImage, sampledAvatarColor } from "../../features/chat/chatMedia.ts";
 import { cachedProfile, profileIntent } from "../../features/chat/chatProfiles.ts";
@@ -195,6 +197,7 @@ interface ChatProfileProps {
   viewer: ChatViewer;
   blocked: boolean;
   online: boolean;
+  voiceChannel: ChatVoiceChannel | null;
   loadProfile: (id: string, fresh?: boolean) => Promise<Profile | null>;
   moderate: (type: ChatModeration, target: string, extra?: Record<string, unknown>) => Promise<ChatResult>;
   saveProfile: (fields: ChatProfileEdit) => Promise<ChatResult>;
@@ -212,6 +215,7 @@ export default function ChatProfile({
   viewer,
   blocked,
   online,
+  voiceChannel,
   loadProfile,
   moderate,
   saveProfile,
@@ -281,6 +285,7 @@ export default function ChatProfile({
   const split = editing && splitEditor;
   const timeoutAllowed = !self && canTimeout(viewer.role, shown.role);
   const banAllowed = !self && canBan(viewer.role, shown.role);
+  const voiceAllowed = !self && !!voiceChannel && canTimeout(viewer.role, shown.role);
   const roles = self ? [] : assignableRoles(viewer.role, shown.role);
 
   const avatarUrl =
@@ -865,6 +870,23 @@ export default function ChatProfile({
                   <button type="button" class="chat-secondary-btn" onClick={() => onToggleBlock(shown)}>
                     {blocked ? "unblock" : "block"}
                   </button>
+                </div>
+              )}
+
+              {voiceAllowed && voiceChannel && (
+                <div class="chat-profile-field">
+                  <label>voice</label>
+                  <p class="chat-profile-hint">they are in {CHAT_VOICE_NAMES[voiceChannel]}. kicking ends their call.</p>
+                  <div class="chat-profile-row">
+                    <button
+                      type="button"
+                      class="chat-secondary-btn"
+                      disabled={busy}
+                      onClick={() => void run("voicekick", {}, `${shown.name} is kicked from voice`)}
+                    >
+                      kick from vc
+                    </button>
+                  </div>
                 </div>
               )}
 

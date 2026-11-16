@@ -118,7 +118,7 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
 function sameSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
   if (left.size !== right.size) return false;
   for (const entry of left) if (!right.has(entry)) return false;
-  return true;
+  return true;  
 }
 
 function failureText(code: unknown): string {
@@ -135,6 +135,8 @@ function failureText(code: unknown): string {
       return negativeMessage("log in to use voice");
     case "CHAT_VOICE_MOVED":
       return "voice moved to another tab";
+    case "CHAT_VOICE_KICKED":
+      return negativeMessage("a staff member removed you from voice");
     default:
       return negativeMessage("voice is unavailable right now");
   }

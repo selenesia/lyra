@@ -167,12 +167,12 @@ export function partyFailureText(code: unknown, status: number): string {
     case "CHAT_MUTED":
       return "you are timed out for a bit";
     case "CHAT_LOGIN_REQUIRED":
-      return "make a cloudsync account to join watch parties";
+      return "make a cloudsync account to do watch parties";
     case "CHAT_BANNED":
     case "CHAT_USERNAME_BLOCKED":
       return "you can't join watch parties right now";
   }
-  if (status === 401) return "make a cloudsync account to join watch parties";
+  if (status === 401) return "make a cloudsync account to do watch parties";
   if (status === 404) return "this watch party has ended or is unavailable";
   return "the watch party is unreachable right now";
 }

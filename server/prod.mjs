@@ -3,6 +3,7 @@ import net from "net";
 import path from "path";
 import { availableParallelism, totalmem } from "os";
 import { httpError } from "./errors.mjs";
+import { createBlockedIps } from "./blocked-ips.mjs";
 import { createDnsService } from "./dns.mjs";
 import { createPresence } from "./presence.mjs";
 import { createNoticeBoard, noticeSocketPath } from "./notice.mjs";
@@ -88,6 +89,7 @@ const API_LIMIT_MAX_CLIENTS = Math.max(
   Math.floor(HOST_MEMORY_BYTES / (1024 * 1024)) * 8,
 );
 const apiHits = new Map();
+const blockedIps = createBlockedIps();
 const searchSuggestionService = createSearchSuggestionService();
 const metrics = createMetrics();
 const dnsService = createDnsService();
@@ -578,6 +580,12 @@ async function injectAdcashPage(req, response) {
 
 async function appFetch(req, server, url) {
   const pathname = url.pathname;
+  const clientIp = getClientIp(req, server);
+
+  if (blockedIps.matches(clientIp)) {
+    const failure = httpError(403, "FORBIDDEN", "no");
+    return jsonResponse(failure.body, failure.status);
+  }
 
   if (shuttingDown) {
     if (pathname === "/health" || pathname === "/eturnal/health") {

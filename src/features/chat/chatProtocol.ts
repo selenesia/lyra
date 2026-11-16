@@ -33,6 +33,7 @@ export const CHAT_PARTY_COMMAND = /^\/(?:party|watch)(?=\s|$)/i;
 export const CHAT_GIFS = { page: 24, pages: 20, query: 64, title: 100 } as const;
 export const CHAT_GIF_COMMAND = /^\/gif(?=\s|$)/i;
 export const CHAT_VOICE_CHANNELS = ["lounge", "gaming"] as const;
+export const CHAT_VOICE_NAMES: Record<ChatVoiceChannel, string> = { lounge: "vc", gaming: "vc-2" };
 export const CHAT_VOICE_LIMITS = {
   members: 10,
   body: 16 * 1024,
@@ -175,6 +176,7 @@ export interface ChatVoicePeer extends ChatMember {
 
 export interface ChatVoiceRoom {
   channel: ChatVoiceChannel;
+  startedAt: number | null;
   members: ChatVoicePeer[];
 }
 
