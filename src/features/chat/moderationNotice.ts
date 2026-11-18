@@ -25,6 +25,10 @@ export function isModerationCategory(value: unknown): value is ModerationCategor
   return typeof value === "string" && Object.hasOwn(CATEGORY_LABELS, value);
 }
 
+export function moderationLabel(category: ModerationCategory): string {
+  return CATEGORY_LABELS[category];
+}
+
 export function blockedNotice(subject: string, category: ModerationCategory, tense: "was" | "would be" = "was"): string {
   if (category === "crisis") {
     return `that ${subject} ${tense === "was" ? "was not" : "will not be"} posted.  findahelpline.com can connect you with someone to talk to`;

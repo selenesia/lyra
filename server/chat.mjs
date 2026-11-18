@@ -11,7 +11,7 @@ import { createPartyRegistry } from "./chat-party.mjs";
 import { createVoiceRegistry } from "./chat-voice.mjs";
 import { textVerdict } from "./chat-text-policy.mjs";
 import { moderate, readModeration } from "../src/features/chat/moderation.ts";
-import { blockedNotice } from "../src/features/chat/moderationNotice.ts";
+import { blockedNotice, moderationLabel } from "../src/features/chat/moderationNotice.ts";
 import {
   CHAT_CHANNELS,
   CHAT_COSMETIC_SLOTS,
@@ -33,6 +33,7 @@ import {
   cleanProfileText,
   conversationIdOf,
   conversationKey,
+  durationLabel,
   isChatAccent,
   isCosmeticId,
   isChatChannel,
@@ -42,6 +43,7 @@ import {
   isConversationKey,
   isPartyControl,
   isPartyId,
+  isReadOnlyChannel,
   isVoiceSession,
   readPartyMedia,
   readVoiceSignal,
@@ -260,6 +262,8 @@ export function createChatRoom({
   function targetGate(target, row) {
     if (!isChatTarget(target)) return httpError(400, "CHAT_CHANNEL_INVALID", "that channel does not exist");
     if (isConversationKey(target)) return canRead(target, row) ? null : conversationMissing();
+    if (!canReadChannel(row.role, target)) return httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
+    if (isReadOnlyChannel(target)) return httpError(403, "CHAT_CHANNEL_READ_ONLY", "this channel is read-only");
     return canPostIn(row.role, target) ? null : httpError(403, "CHAT_CHANNEL_LOCKED", "only staff can post here");
   }
 
@@ -456,6 +460,25 @@ export function createChatRoom({
     broadcast(frame("message", message), channel);
   }
 
+  function logEvent(user, text, time) {
+    if (user) announce("logs", user, { action: "log", text: oneLine(text) }, time);
+  }
+
+  function logChannel(target) {
+    return isChatChannel(target) ? `#${target}` : null;
+  }
+
+  function oneLine(text) {
+    return text.replace(/\s+/g, " ").trim();
+  }
+
+  function messageBody(message) {
+    if (message.text) return `: "${replySnippet(message.text)}"`;
+    if (message.party) return ": [watch party]";
+    if (message.attachment) return `: [${attachmentKind(message.attachment.type)}]`;
+    return "";
+  }
+
   function strike(stale, points, time, channel) {
     if (!points) return 0;
     const row = store.user(stale.id) ?? stale;
@@ -472,12 +495,17 @@ export function createChatRoom({
     if (mutes > row.mute_count) {
       store.guard.restrict(row, "timeout", mutedUntil);
       refreshRestrictions();
+      announce(channel, row, { action: "timeout", until: mutedUntil }, time);
+      logEvent(row, `${nameOf(row)} was timed out for ${durationLabel(mutedUntil - time)} after repeated violations`, time);
     }
-    if (mutes > row.mute_count) announce(channel, row, { action: "timeout", until: mutedUntil }, time);
     return mutedUntil > time ? mutedUntil : 0;
   }
 
   function rejectContent(row, verdict, time, channel) {
+    const where = logChannel(channel);
+    if (where && verdict.category) {
+      logEvent(row, `the ai blocked a message from ${nameOf(row)} in ${where} (${moderationLabel(verdict.category)})`, time);
+    }
     const until = strike(row, verdict.strikes, time, channel);
     return httpError(422, "CHAT_MESSAGE_BLOCKED", blockedNotice("message", verdict.category), {
       category: verdict.category,
@@ -658,19 +686,26 @@ export function createChatRoom({
     store.editMessage(numeric, written.text, time);
     const updated = store.message(numeric);
     broadcast(frame("update", updated), updated.channel);
+    if (isChatChannel(updated.channel)) logEvent(row, `${nameOf(row)} edited a message in #${updated.channel}${messageBody(updated)}`, time);
     return ok({ message: updated });
   }
 
   function remove(payload, row, time) {
     const { message, numeric, failure } = findMessage(payload.id, row);
     if (failure) return failure;
+    if (message.notice && message.channel === "logs") return httpError(403, "CHAT_FORBIDDEN", "you can not delete that message");
     const own = !message.notice && message.author === String(row.id);
-    if (!own && !(isChatChannel(message.channel) && canDeleteAny(row.role) && outranks(row.role, message.role))) {
+    const channelMessage = isChatChannel(message.channel);
+    const staff = channelMessage && canDeleteAny(row.role);
+    if (!own && !(staff && outranks(row.role, message.role))) {
       return httpError(403, "CHAT_FORBIDDEN", "you can not delete that message");
     }
     store.deleteMessage(numeric);
     if (!own) {
       store.audit({ time, actorId: row.id, action: "delete", targetId: Number(message.author) });
+    }
+    if (channelMessage) {
+      logEvent(row, `${nameOf(row)} deleted ${own ? "their own message" : `a message from ${message.name}`} in #${message.channel}${messageBody(message)}`, time);
     }
     broadcast(frame("remove", { id: message.id, channel: message.channel }), message.channel);
     return ok();
@@ -727,6 +762,9 @@ export function createChatRoom({
     const audit = (detail) =>
       store.audit({ time, actorId: actor?.id, action, targetId: target.id, detail: detail ?? null });
     const channel = isChatChannel(payload.channel) && canReadChannel(actorRole, payload.channel) ? payload.channel : undefined;
+    const actorName = actor ? nameOf(actor) : "console";
+    const targetName = nameOf(target);
+    const log = (text) => logEvent(actor ?? target, text, time);
 
     if (action === "role") {
       const role = payload.role;
@@ -745,6 +783,7 @@ export function createChatRoom({
       if (canReadChannel(target.role, "staff-chat") !== canReadChannel(role, "staff-chat")) {
         sendTo(target.id, frame("history", visibleHistory(role)));
       }
+      log(`${actorName} changed ${targetName}'s role from ${target.role} to ${role}`);
       announcePresence();
       return ok({ user: member({ ...target, role }) });
     }
@@ -755,6 +794,7 @@ export function createChatRoom({
       }
       if (!voices.of(target.id)) return httpError(404, "CHAT_VOICE_NOT_FOUND", "that person is not in a voice channel");
       audit(null);
+      log(`${actorName} kicked ${targetName} from voice`);
       voices.drop(target.id, "CHAT_VOICE_KICKED");
       return ok();
     }
@@ -771,8 +811,13 @@ export function createChatRoom({
       store.guard.restrict(target, "timeout", until);
       audit(until ? `${Math.round((until - time) / 60_000)} min` : null);
       refreshRestrictions();
-      if (until) announce(channel, target, { action, until }, time);
-      else if (target.muted_until > time) announce(channel, target, { action }, time);
+      if (until) {
+        announce(channel, target, { action, until }, time);
+        log(`${actorName} timed out ${targetName} for ${durationLabel(until - time)}`);
+      } else if (target.muted_until > time) {
+        announce(channel, target, { action }, time);
+        log(`${actorName} removed ${targetName}'s timeout`);
+      }
       return ok({ user: { ...member(target), ...(until && { mutedUntil: until }) } });
     }
 
@@ -780,6 +825,7 @@ export function createChatRoom({
       if (!fromConsole && !canTimeout(actorRole, target.role)) return httpError(403, "CHAT_FORBIDDEN", "you can not reset that profile");
       const cleared = store.clearProfile(target.id);
       audit(null);
+      log(`${actorName} reset ${targetName}'s profile`);
       announceProfile(cleared);
       return ok({ user: member(cleared) });
     }
@@ -790,7 +836,10 @@ export function createChatRoom({
         store.setBan(target.id, 0, null);
         store.guard.restrict(target, "ban", 0);
         audit(null);
-        if (target.banned_until > time) announce(channel, target, { action }, time);
+        if (target.banned_until > time) {
+          announce(channel, target, { action }, time);
+          log(`${actorName} unbanned ${targetName}`);
+        }
         return ok({ user: member(target) });
       }
       const minutes = minutesFrom(payload.minutes, { optional: true });
@@ -805,6 +854,8 @@ export function createChatRoom({
       refreshRestrictions();
       dropParties(target.id);
       announce(channel, target, { action, ...(until < PERMANENT && { until }) }, time);
+      const details = [reason, removed.length && `${removed.length} messages removed`].filter(Boolean).join(", ");
+      log(`${actorName} banned ${targetName} ${minutes === null ? "permanently" : `for ${durationLabel(until - time)}`}${details ? `: ${details}` : ""}`);
       return ok({ user: member(target), removed: removed.length });
     }
 
@@ -958,6 +1009,9 @@ export function createChatRoom({
       if (!fields[field]) continue;
       const verdict = await screenText(fields[field]);
       if (verdict.allowed) continue;
+      if (verdict.category) {
+        logEvent(row, `the ai blocked ${nameOf(row)}'s ${PROFILE_LABELS[field]} (${moderationLabel(verdict.category)})`, time);
+      }
       const until = strike(row, verdict.strikes, time);
       return httpError(422, "CHAT_PROFILE_BLOCKED", blockedNotice(PROFILE_LABELS[field], verdict.category), {
         field,
@@ -995,6 +1049,10 @@ export function createChatRoom({
         return httpError(503, "CHAT_MEDIA_CHECK_UNAVAILABLE", `${video.kind ?? "image"} checks are unavailable right now`, video);
       }
       if (!verdict.allowed) {
+        const where = logChannel(channel);
+        if (where && verdict.category) {
+          logEvent(row, `the ai blocked ${kind === "audio" ? "an audio file" : `a${kind === "image" ? "n" : ""} ${kind}`} from ${nameOf(row)} in ${where} (${moderationLabel(verdict.category)})`, time);
+        }
         const until = strike(row, 1, time, channel);
         return httpError(422, "CHAT_MEDIA_BLOCKED", blockedNotice(kind, verdict.category), {
           kind, category: verdict.category, ...(until && { until }),
@@ -1130,6 +1188,9 @@ export function createChatRoom({
     if (name) {
       const verdict = await screenText(name);
       if (!verdict.allowed) {
+        if (verdict.category) {
+          logEvent(row, `the ai blocked a group name from ${nameOf(row)} (${moderationLabel(verdict.category)})`, time);
+        }
         const until = strike(row, verdict.strikes, time);
         return httpError(422, "CHAT_NAME_BLOCKED", blockedNotice("group name", verdict.category), {
           category: verdict.category,

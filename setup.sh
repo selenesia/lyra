@@ -12,6 +12,13 @@ set -euo pipefail
 
 export PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin"
 
+BLOCK_MODE=0
+for argument in "$@"; do
+  case "$argument" in
+    --block) BLOCK_MODE=1 ;;
+  esac
+done
+
 NEGATIVE="... /ᐠ - ˕ -マ"
 POSITIVE="!! (˵◝ ⩊  ◜˵マ"
 
@@ -168,6 +175,176 @@ trap 'rm -rf -- "$SETUP_TEMP"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+BLOCK_PATH="/etc/lyra/block"
+BLOCK_CADDY_PATH="/etc/caddy/block.caddy"
+
+block_rules() {
+  local source="$1"
+  if [ ! -f "$source" ]; then
+    return 0
+  fi
+  sed -e 's/#.*//' -e 's/[[:space:]]//g' "$source" | awk 'NF && !seen[$0]++'
+}
+
+render_block_caddy() {
+  local list="$1"
+  local rules=()
+  local rule
+  local match="255.255.255.255/32"
+  while IFS= read -r rule; do
+    rules+=("$rule")
+  done < <(block_rules "$list")
+  if [ "${#rules[@]}" -gt 0 ]; then
+    match="${rules[*]}"
+  fi
+  printf '(block) {\n'
+  printf '    @block remote_ip %s\n' "$match"
+  printf '    respond @block "no... /ᐠ - ˕ -マ" 403\n'
+  printf '}\n'
+}
+
+normalize_block() {
+  BLOCK_INPUT="$1" "$BUN_BIN" -e '
+import { normalizeBlockList } from "./server/block.mjs";
+const result = normalizeBlockList(process.env.BLOCK_INPUT || "");
+for (const rule of result.rules) console.log(rule);
+if (result.invalid.length > 0) process.exit(1);
+'
+}
+
+configure_block() {
+  BLOCK_ADDED=""
+  local input="${LYRA_BLOCK:-}"
+  if [ -z "$input" ] && [ ! -t 0 ]; then
+    return 0
+  fi
+  if [ -s "$BLOCK_PATH" ]; then
+    log "block: $(block_rules "$BLOCK_PATH" | paste -sd ', ' -)"
+  fi
+  while true; do
+    if [ -z "$input" ]; then
+      read -r -p "block> " input
+    fi
+    if BLOCK_ADDED="$(normalize_block "$input")"; then
+      return 0
+    fi
+    fail "please enter valid ipv4 addresses, wildcards, or cidrs"
+    [ -t 0 ] || return 1
+    input=""
+  done
+}
+
+apply_block() {
+  local added="$1"
+  local pending="$SETUP_TEMP/block"
+  {
+    block_rules "$BLOCK_PATH"
+    if [ -n "$added" ]; then
+      printf '%s\n' "$added"
+    fi
+  } | awk 'NF && !seen[$0]++' > "$pending"
+  sudo install -d -m 755 /etc/lyra
+  sudo install -m 644 "$pending" "$BLOCK_PATH"
+}
+
+install_block_caddy() {
+  local pending="$SETUP_TEMP/block.caddy"
+  render_block_caddy "$BLOCK_PATH" > "$pending"
+  sudo install -d -m 755 /etc/caddy
+  sudo install -m 644 "$pending" "$BLOCK_CADDY_PATH"
+}
+
+install_block_firewall() {
+  sudo tee /usr/local/bin/lyra-block.sh >/dev/null <<'BLOCKFIREWALL'
+#!/bin/bash
+set -euo pipefail
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LIST=/etc/lyra/block
+
+fail() { printf '[lyra-block] %s... /ᐠ - ˕ -マ\n' "$*" >&2; }
+success() { printf '[lyra-block] %s!! (˵◝ ⩊  ◜˵マ\n' "$*"; }
+
+IPTABLES="$(command -v iptables || true)"
+if [ -z "$IPTABLES" ]; then
+  fail "iptables is unavailable"
+  exit 0
+fi
+
+"$IPTABLES" -w 5 -N LYRA_BLOCK 2>/dev/null || true
+if ! "$IPTABLES" -w 5 -C INPUT -j LYRA_BLOCK 2>/dev/null; then
+  "$IPTABLES" -w 5 -I INPUT 1 -j LYRA_BLOCK
+fi
+"$IPTABLES" -w 5 -F LYRA_BLOCK
+"$IPTABLES" -w 5 -A LYRA_BLOCK -i lo -j RETURN
+if [ -f "$LIST" ]; then
+  while IFS= read -r rule; do
+    rule="${rule%%#*}"
+    rule="${rule//[[:space:]]/}"
+    [ -n "$rule" ] || continue
+    "$IPTABLES" -w 5 -A LYRA_BLOCK -s "$rule" -j DROP
+  done < "$LIST"
+fi
+success "firewall rules applied"
+BLOCKFIREWALL
+  sudo chmod 755 /usr/local/bin/lyra-block.sh
+  sudo tee /etc/systemd/system/lyra-block.service >/dev/null <<'BLOCKUNIT'
+[Unit]
+Description=lyra block firewall rules
+After=network-pre.target docker.service ufw.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/lyra-block.sh
+
+[Install]
+WantedBy=multi-user.target
+BLOCKUNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable lyra-block.service >/dev/null 2>&1 || true
+  sudo systemctl restart lyra-block.service
+}
+
+run_block_mode() {
+  export PATH="$HOME/.bun/bin:$PATH"
+  if [ -z "${BUN_BIN:-}" ]; then
+    BUN_BIN="$(command -v bun || true)"
+  fi
+  if [ -z "${BUN_BIN:-}" ]; then
+    fail "bun is required to block ips; run the setup first"
+    exit 1
+  fi
+  configure_block
+  apply_block "$BLOCK_ADDED"
+  install_block_caddy
+  if ! command -v iptables >/dev/null 2>&1; then
+    fail "iptables is unavailable; firewall blocking is skipped"
+  fi
+  if ! install_block_firewall; then
+    fail "firewall blocking could not be applied"
+  fi
+  if command -v caddy >/dev/null 2>&1 && sudo test -f /etc/caddy/Caddyfile; then
+    if ! sudo grep -Fq "import block" /etc/caddy/Caddyfile; then
+      fail "caddy config is outdated; run setup once to enable edge blocking"
+    elif ! sudo runuser -u caddy -- caddy validate --config /etc/caddy/Caddyfile; then
+      fail "caddy config validation failed"
+      exit 1
+    elif ! sudo systemctl reload-or-restart caddy 2>/dev/null; then
+      fail "caddy did not reload"
+    fi
+  else
+    log "caddy is not installed; edge blocking applies after setup"
+  fi
+  success "block saved"
+}
+
+if [ "$BLOCK_MODE" -eq 1 ]; then
+  run_block_mode
+  exit 0
+fi
+
 edit_config() {
   local editor=()
   read -r -a editor <<< "${VISUAL:-${EDITOR:-nano}}"
@@ -185,7 +362,7 @@ configure_adcash() {
     return
   fi
   if [ -z "$choice" ]; then
-    log "enable adcash advertising on the production website?"
+    log "enable adcash advertising on the site?"
     log "type 'y' to configure adcash or 'n' to disable it"
   fi
   while true; do
@@ -240,6 +417,34 @@ validate_adcash() {
       process.exit(1);
     }
   ' "$ADCASH_SOURCE"
+}
+
+configure_tutorials() {
+  TUTORIAL_RESET=0
+  local choice="${LYRA_RESET_TUTORIALS:-}"
+  if [ -z "$choice" ] && [ ! -t 0 ]; then return; fi
+  if [ -z "$choice" ]; then
+    log "make everyone do the home and chat tutorials again?"
+    log "type 'y' to reset tutorials or 'n' to keep their completion"
+  fi
+  while true; do
+    if [ -z "$choice" ]; then read -r -p "> " choice; fi
+    case "$choice" in
+      y | yes | Y | YES | true | 1) TUTORIAL_RESET=1; return ;;
+      n | no | N | NO | false | 0) return ;;
+      *)
+        fail "please type 'y' or 'n'"
+        [ -t 0 ] || return 1
+        choice=""
+        ;;
+    esac
+  done
+}
+
+save_tutorial_revision() {
+  [ "$TUTORIAL_RESET" -eq 1 ] || return 0
+  cat /proc/sys/kernel/random/uuid > "$ROOT/.tutorial-revision.pending"
+  mv -f "$ROOT/.tutorial-revision.pending" "$ROOT/.tutorial-revision"
 }
 
 WG_ENABLED=0
@@ -361,6 +566,7 @@ else
 fi
 
 configure_adcash
+configure_tutorials
 export DEBIAN_FRONTEND=noninteractive
 
 retry 3 sudo apt-get update -y
@@ -660,6 +866,8 @@ if ! command -v eturnalctl >/dev/null 2>&1 && [ ! -x /opt/eturnal/bin/eturnalctl
   exit 1
 fi
 export PATH="/opt/eturnal/bin:$PATH"
+
+save_tutorial_revision
 
 case "$ADCASH_ACTION" in
   enable)
@@ -1118,6 +1326,9 @@ if [[ ! "$CACHE_AVAILABLE_KB" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 sudo install -d -m 755 /etc/lyra
+if ! sudo test -f "$BLOCK_PATH"; then
+  sudo install -m 644 /dev/null "$BLOCK_PATH"
+fi
 if ! sudo test -s /etc/lyra/metrics.token; then
   openssl rand -hex 32 | sudo sh -c 'umask 077; cat > /etc/lyra/metrics.token'
 fi
@@ -1332,6 +1543,7 @@ if [ -f /etc/caddy/Caddyfile ]; then
   success "existing caddy config backed up"
 fi
 
+install_block_caddy
 sudo install -d -m 750 -o caddy -g caddy /var/log/caddy
 sudo touch /var/log/caddy/access.json
 sudo chown caddy:caddy /var/log/caddy/access.json
@@ -1349,6 +1561,8 @@ sudo tee /etc/caddy/Caddyfile >/dev/null <<EOF
         ask http://127.0.0.1:3001/
     }
 }
+
+import /etc/caddy/block.caddy
 
 (mochi_stream) {
     @mochi_stream {
@@ -1407,6 +1621,8 @@ http://127.0.0.1:4001 {
     tls {
         on_demand
     }
+
+    import block
 
     log lyra_access {
         output file /var/log/caddy/access.json {
@@ -1658,6 +1874,7 @@ http://127.0.0.1:4001 {
 }
 
 :80 {
+    import block
     redir https://{host}{uri} permanent
 }
 EOF
@@ -1830,6 +2047,10 @@ tee -a ecosystem.config.cjs >/dev/null <<'EOF'
 EOF
 chmod 600 ecosystem.config.cjs
 umask "$SETUP_UMASK"
+
+if ! install_block_firewall; then
+  fail "firewall blocking could not be applied"
+fi
 
 if command -v ufw >/dev/null 2>&1; then
   UFW_STATUS=$(sudo ufw status)

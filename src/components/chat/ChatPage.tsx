@@ -33,6 +33,7 @@ import {
   displayName,
   isChatChannel,
   isConversationKey,
+  isReadOnlyChannel,
   noticeText,
   partyPlayerPath,
   type ChatAttachmentKind,
@@ -452,6 +453,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const mutedUntil = viewer?.mutedUntil ?? 0;
   const muted = mutedUntil > now;
   const locked = !!viewer && !!channel && !canPostIn(viewer.role, channel);
+  const readOnly = !!channel && isReadOnlyChannel(channel);
   const others = useMemo(
     () => conversation?.members.filter((member) => member.author !== viewer?.author) ?? [],
     [conversation, viewer?.author],
@@ -818,7 +820,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
     [channelQuery, readableChannels],
   );
   const pickerSize = picking ? partyTitles.titles.length : pickingGif ? gifResults.gifs.length : suggestions.length || channelSuggestions.length;
-  const pickerIndex = Math.min(picking || pickingGif ? suggestionIndex : Math.max(0, suggestionIndex), pickerSize - 1);
+  const pickerIndex = Math.min(suggestionIndex, pickerSize - 1);
 
   useEffect(() => {
     if (pickingGif && pickerIndex >= 0) gifGridRef.current?.children[pickerIndex]?.scrollIntoView({ block: "nearest" });
@@ -948,7 +950,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       return;
     }
     if (locked) {
-      setHint(negativeMessage("only staff can post here"));
+      setHint(negativeMessage(readOnly ? "this channel is read-only" : "only staff can post here"));
       return;
     }
     if (mode?.kind !== "edit" && CHAT_PARTY_COMMAND.test(text)) {
@@ -984,7 +986,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       setAttachment(null);
     }
     focusFieldAfterRender();
-  }, [attachment, draft, focusFieldAfterRender, gifResults.loading, locked, mode, muted, partyTitles.loading, preparingImage, ready, room.edit, room.send, runRoleCommand, scrollToBottom, showFailure, target]);
+  }, [attachment, draft, focusFieldAfterRender, gifResults.loading, locked, mode, muted, partyTitles.loading, preparingImage, readOnly, ready, room.edit, room.send, runRoleCommand, scrollToBottom, showFailure, target]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -998,18 +1000,18 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
         if (next + columns >= pickerSize) gifResults.loadMore();
         return;
       }
-      if (pickerSize && ["Tab", "Enter", "ArrowUp", "ArrowDown"].includes(event.key) && (event.key !== "Tab" || pickerIndex >= 0)) {
+      const moving = event.key === "ArrowUp" || event.key === "ArrowDown";
+      const activating = event.key === "Enter" || event.key === "Tab";
+      if (pickerSize && (moving || (activating && (pickerIndex >= 0 || (event.key === "Enter" && (picking || pickingGif)))))) {
         event.preventDefault();
         if (event.key === "ArrowUp") setSuggestionIndex(pickerIndex < 0 ? pickerSize - 1 : (pickerIndex - 1 + pickerSize) % pickerSize);
-        else if (event.key === "ArrowDown") setSuggestionIndex((pickerIndex + 1) % pickerSize);
-        else if (picking) {
-          if (pickerIndex >= 0) void startParty(partyTitles.titles[pickerIndex]!);
+        else if (event.key === "ArrowDown") setSuggestionIndex(pickerIndex < 0 ? 0 : (pickerIndex + 1) % pickerSize);
+        else if (pickerIndex >= 0) {
+          if (picking) void startParty(partyTitles.titles[pickerIndex]!);
+          else if (pickingGif) void pickGif(gifResults.gifs[pickerIndex]!);
+          else if (suggestions.length) insertMention(suggestions[pickerIndex]!.name);
+          else insertChannel(channelSuggestions[pickerIndex]!.name);
         }
-        else if (pickingGif) {
-          if (pickerIndex >= 0) void pickGif(gifResults.gifs[pickerIndex]!);
-        }
-        else if (suggestions.length) insertMention(suggestions[pickerIndex]!.name);
-        else insertChannel(channelSuggestions[pickerIndex]!.name);
         return;
       }
       if (event.key === "ArrowUp" && !draft && !mode && viewer) {
@@ -1066,7 +1068,9 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
   const placeholder = muted
     ? `you are timed out until ${timeFormat.format(mutedUntil).toLowerCase()}`
     : locked
-      ? `only staff can post in ${title}`
+      ? readOnly
+        ? "this channel is read-only"
+        : `only staff can post in ${title}`
       : mode?.kind === "edit"
         ? "edit your message"
         : `message ${destination} (˶>⩊<˶)`;
@@ -1131,6 +1135,11 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
       if (entry.notice) {
         rows.push(
           <div class="chat-message chat-notice" key={entry.id} data-id={entry.id}>
+            {entry.notice.action === "log" && (
+              <>
+                <span class="chat-message-time">{timeFormat.format(entry.at).toLowerCase()}</span>{" "}
+              </>
+            )}
             {noticeText(displayName(entry), entry.notice, entry.at)}
           </div>,
         );
@@ -1381,7 +1390,7 @@ export default function ChatPage({ openOnMount = false }: { openOnMount?: boolea
                 </div>
               )}
               {suggestions.length > 0 && (
-                <div class="chat-suggestions" role="listbox">
+                <div class="chat-suggestions chat-mention-suggestions" role="listbox">
                   {suggestions.map((member, index) => (
                     <button
                       type="button"

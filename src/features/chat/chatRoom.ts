@@ -235,6 +235,8 @@ function describeFailure(code: unknown, body: Record<string, unknown>): ChatFail
       return failure("you do not have permission for that");
     case "CHAT_CHANNEL_LOCKED":
       return failure("only staff can post here");
+    case "CHAT_CHANNEL_READ_ONLY":
+      return failure("this channel is read-only");
     case "CHAT_ROLE_INVALID":
       return failure("that role does not exist");
     case "CHAT_DURATION_INVALID":

@@ -6,10 +6,12 @@ export const CHAT_CATEGORIES = [
   { name: "info", channels: ["rules", "announcements", "updates"] },
   { name: "social", channels: ["general", "introductions", "art", "music"] },
   { name: "support", channels: ["help", "suggestions", "bugs"] },
-  { name: "staff", channels: ["staff-chat"] },
+  { name: "staff", channels: ["staff-chat", "logs"] },
 ] as const;
 export const CHAT_CHANNELS = CHAT_CATEGORIES.flatMap((category) => category.channels);
 const CHAT_STAFF_CHANNELS: readonly ChatChannel[] = ["announcements", "rules", "updates"];
+const CHAT_STAFF_ONLY_CHANNELS: readonly ChatChannel[] = ["staff-chat", "logs"];
+const CHAT_READ_ONLY_CHANNELS: readonly ChatChannel[] = ["logs"];
 export const CHAT_REACTIONS = ["👍", "❤️", "😂", "😮", "😭", "🔥", "💀", "✨"] as const;
 export const CHAT_REACTION_FACES = 4;
 const REACTION_EMOJI = /^\p{RGI_Emoji}$/v;
@@ -68,10 +70,11 @@ interface ChatReply {
 }
 
 export interface ChatNotice {
-  action: "timeout" | "untimeout" | "ban" | "unban" | "create" | "add" | "remove" | "leave" | "rename";
+  action: "timeout" | "untimeout" | "ban" | "unban" | "create" | "add" | "remove" | "leave" | "rename" | "log";
   until?: number;
   by?: string;
   name?: string;
+  text?: string;
 }
 
 export type ChatReactor = Pick<ChatMember, "name" | "display" | "avatar">;
@@ -359,11 +362,15 @@ export function partyPosition(playback: ChatPartyPlayback, serverNow: number): n
 }
 
 export function canPostIn(role: ChatRole, channel: ChatChannel): boolean {
-  return canReadChannel(role, channel) && (!CHAT_STAFF_CHANNELS.includes(channel) || roleRank(role) >= roleRank("mod"));
+  return canReadChannel(role, channel) && !isReadOnlyChannel(channel) && (!CHAT_STAFF_CHANNELS.includes(channel) || roleRank(role) >= roleRank("mod"));
 }
 
 export function canReadChannel(role: ChatRole, channel: ChatChannel): boolean {
-  return channel !== "staff-chat" || roleRank(role) >= roleRank("mod");
+  return !CHAT_STAFF_ONLY_CHANNELS.includes(channel) || roleRank(role) >= roleRank("mod");
+}
+
+export function isReadOnlyChannel(channel: ChatChannel): boolean {
+  return CHAT_READ_ONLY_CHANNELS.includes(channel);
 }
 
 export function isChatReaction(value: unknown): value is string {
@@ -412,7 +419,7 @@ export function displayName(member: Pick<ChatMember, "name" | "display">): strin
   return member.display || member.name;
 }
 
-function durationLabel(ms: number): string {
+export function durationLabel(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
   const [count, unit] =
     minutes % 10_080 === 0 ? [minutes / 10_080, "week"]
@@ -423,6 +430,7 @@ function durationLabel(ms: number): string {
 }
 
 export function noticeText(name: string, notice: ChatNotice, at: number): string {
+  if (notice.action === "log") return notice.text ?? "";
   const length = notice.until ? ` for ${durationLabel(notice.until - at)}` : "";
   if (notice.action === "timeout") return `${name} was timed out${length}`;
   if (notice.action === "untimeout") return `${name} is no longer timed out`;
