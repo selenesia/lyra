@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { brotliDecompressSync } from "node:zlib";
+import { zstdDecompressSync } from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -168,7 +168,7 @@ async function serverRewrite(fixture, meta) {
   const reply = JSON.parse(new TextDecoder().decode(await readPart()));
   const payload = Uint8Array.from(await readPart());
   if (reply.status !== "rewritten") return null;
-  const output = brotliDecompressSync(payload);
+  const output = zstdDecompressSync(payload);
   return reply.patched ? applyImportUrls(output, context, meta) : output;
 }
 

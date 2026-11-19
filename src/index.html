@@ -42,6 +42,9 @@
         const storedTheme = localStorage.getItem("theme");
         if (storedTheme && storedTheme !== "default")
           document.documentElement.setAttribute("data-theme", storedTheme);
+        const storedBackground = localStorage.getItem("lyra-theme-background");
+        if (storedBackground && /^#[0-9a-f]{6}$/.test(storedBackground))
+          document.documentElement.style.setProperty("--bg-body", storedBackground);
       })();
     </script>
     <link rel="icon" href="/!!/https://d3njjcbhbojbot.cloudfront.net/web/images/favicons/apple-touch-icon-v2-57x57.png" type="image/x-icon" />
@@ -53,6 +56,9 @@
     <noscript><link href="https://fonts.googleapis.com/css2?family=Lexend:wght@100..900&display=swap" rel="stylesheet" /></noscript>
     <script>
       (function () {
+        try {
+          if (localStorage.getItem("titleMascot") === "false") return;
+        } catch {}
         const peakUrls = [
           "/assets/images/peaks/hachii.webp",
           "/assets/images/peaks/kona.webp",

@@ -57,6 +57,24 @@ use tower_http::cors::{Any, CorsLayer};
 
 const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const STREAM_RAM_IDLE: Duration = Duration::from_secs(2 * 60);
+
+fn response_compression() -> CompressionLayer<impl Predicate> {
+    let predicate = DefaultPredicate::new()
+        .and(NotForContentType::const_new("video/"))
+        .and(NotForContentType::const_new("audio/"))
+        .and(
+            |status: StatusCode,
+             _version: Version,
+             headers: &HeaderMap,
+             extensions: &Extensions| {
+                status != StatusCode::PARTIAL_CONTENT
+                    && !headers.contains_key(CONTENT_RANGE)
+                    && extensions.get::<stream::MediaPayload>().is_none()
+            },
+        );
+    CompressionLayer::new().compress_when(predicate)
+}
 
 #[global_allocator]
 static GLOBAL: folio::rewrite::worker::CappedAllocator<MiMalloc> =
@@ -189,6 +207,7 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
             (response.body.len() as u32).saturating_add(256)
         })
         .time_to_live(Duration::from_secs(tuning.cache_ttl_secs))
+        .time_to_idle(STREAM_RAM_IDLE)
         .build();
 
     let stream_fills = Cache::builder()
@@ -348,17 +367,6 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
-    let compression_predicate = DefaultPredicate::new()
-        .and(NotForContentType::const_new("video/"))
-        .and(NotForContentType::const_new("audio/"))
-        .and(
-            |status: StatusCode,
-             _version: Version,
-             headers: &HeaderMap,
-             _extensions: &Extensions| {
-                status != StatusCode::PARTIAL_CONTENT && !headers.contains_key(CONTENT_RANGE)
-            },
-        );
 
     let app = Router::new()
         .route("/health", axum::routing::get(|| async { "oki" }))
@@ -438,7 +446,7 @@ async fn async_main(tuning: tuning::MochiTuning) -> AppResult<()> {
             state.memory_pressure.clone(),
             memory::admit,
         ))
-        .layer(CompressionLayer::new().compress_when(compression_predicate))
+        .layer(response_compression())
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             admission::Admission::from_env(),
@@ -478,3 +486,4 @@ async fn shutdown_signal() {
         let _ = tokio::signal::ctrl_c().await;
     }
 }
+

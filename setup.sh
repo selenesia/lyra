@@ -12,29 +12,95 @@ set -euo pipefail
 
 export PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin"
 
+usage() {
+  cat <<'USAGE'
+usage: bash setup.sh [--block] [--yes]
+
+  (no option)  install or update lyra on this server
+  --block      add ips to the block list without rerunning the setup
+  --yes, -y    skip the confirmation before services are stopped
+  --help, -h   show this help
+
+unattended runs read these instead of prompting:
+  LYRA_WIREGUARD=1          route mochi and nuru through /etc/wireguard/wg0.conf
+  LYRA_ADCASH=y|n           enable or disable adcash
+  LYRA_ADCASH_TAG_FILE=...  inline adcash zone script
+  LYRA_RESET_TUTORIALS=y|n  make everyone redo the tutorials
+  LYRA_BLOCK="ip, cidr"     ips for --block
+  LYRA_PUBLIC_IP=...        public ipv4 when detection fails
+  MOCHI_INSTANCES, NURU_INSTANCES, TURN_HOST, TURN_PORT, TURN_USERNAME, TURN_CREDENTIAL
+USAGE
+}
+
 BLOCK_MODE=0
+ASSUME_YES=0
 for argument in "$@"; do
   case "$argument" in
     --block) BLOCK_MODE=1 ;;
+    --yes | -y) ASSUME_YES=1 ;;
+    --help | -h) usage; exit 0 ;;
+    *)
+      printf '[setup] unknown option: %s... /ᐠ - ˕ -マ\n' "$argument" >&2
+      usage >&2
+      exit 2
+      ;;
   esac
 done
 
 NEGATIVE="... /ᐠ - ˕ -マ"
 POSITIVE="!! (˵◝ ⩊  ◜˵マ"
 
+TAG="[setup]"
+TAG_FAIL="[setup]"
+TAG_OK="[setup]"
+STEP_MARK="==>"
+DIM=""
+RESET=""
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  TAG=$'\033[1;35m[setup]\033[0m'
+  TAG_FAIL=$'\033[1;31m[setup]\033[0m'
+  TAG_OK=$'\033[1;32m[setup]\033[0m'
+  STEP_MARK=$'\033[1;36m==>\033[0m'
+  DIM=$'\033[2m'
+  RESET=$'\033[0m'
+fi
+
 log() {
-  printf '[setup] %s\n' "$*"
+  printf '%s %s\n' "$TAG" "$*"
 }
 
 fail() {
-  printf '[setup] %s%s\n' "$*" "$NEGATIVE" >&2
+  printf '%s %s%s\n' "$TAG_FAIL" "$*" "$NEGATIVE" >&2
 }
 
 success() {
-  printf '[setup] %s%s\n' "$*" "$POSITIVE"
+  printf '%s %s%s\n' "$TAG_OK" "$*" "$POSITIVE"
 }
 
-trap 'fail "setup failed at line $LINENO"' ERR
+SETUP_STARTED_AT=$SECONDS
+STEP_INDEX=0
+STEP_TOTAL=12
+STEP_STARTED_AT=$SECONDS
+
+elapsed() {
+  local seconds=$(($1))
+  if [ "$seconds" -ge 60 ]; then
+    printf '%dm %02ds' $((seconds / 60)) $((seconds % 60))
+  else
+    printf '%ds' "$seconds"
+  fi
+}
+
+step() {
+  if [ "$STEP_INDEX" -gt 0 ]; then
+    printf '%s    took %s%s\n' "$DIM" "$(elapsed SECONDS-STEP_STARTED_AT)" "$RESET"
+  fi
+  STEP_INDEX=$((STEP_INDEX + 1))
+  STEP_STARTED_AT=$SECONDS
+  printf '\n%s [%d/%d] %s\n' "$STEP_MARK" "$STEP_INDEX" "$STEP_TOTAL" "$*"
+}
+
+trap 'fail "setup failed at line $LINENO, see the output above"' ERR
 
 retry() {
   local attempts="$1"
@@ -55,6 +121,32 @@ require_cmd() {
     fail "$cmd is required but was not found"
     exit 1
   fi
+}
+
+ask_yes_no() {
+  local question="$1"
+  local default="$2"
+  local hint="[y/N]"
+  local answer
+  [ "$default" = y ] && hint="[Y/n]"
+  while true; do
+    read -r -p "$TAG $question $hint " answer || return 1
+    case "${answer:-$default}" in
+      y | yes | Y | YES) return 0 ;;
+      n | no | N | NO) return 1 ;;
+    esac
+    fail "please type 'y' or 'n'"
+  done
+}
+
+backup_file() {
+  local file="$1"
+  local stale
+  sudo test -f "$file" || return 0
+  sudo cp -p "$file" "$file.bak.$(date +%s)"
+  while IFS= read -r stale; do
+    sudo rm -f -- "$stale"
+  done < <(sudo find "$(dirname "$file")" -maxdepth 1 -name "$(basename "$file").bak.*" -printf '%T@ %p\n' | sort -rn | tail -n +4 | cut -d' ' -f2-)
 }
 
 PROXY_CPUS=$(nproc 2>/dev/null || echo 1)
@@ -171,7 +263,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 SETUP_TEMP="$(mktemp -d)"
-trap 'rm -rf -- "$SETUP_TEMP"' EXIT
+CHAT_SETUP_PID=""
+cleanup() {
+  if [ -n "$CHAT_SETUP_PID" ]; then
+    pkill -TERM -P "$CHAT_SETUP_PID" 2>/dev/null || true
+    kill "$CHAT_SETUP_PID" 2>/dev/null || true
+  fi
+  rm -rf -- "$SETUP_TEMP"
+}
+trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -221,9 +321,12 @@ configure_block() {
   if [ -s "$BLOCK_PATH" ]; then
     log "block: $(block_rules "$BLOCK_PATH" | paste -sd ', ' -)"
   fi
+  if [ -z "$input" ]; then
+    log "enter ipv4 addresses, * wildcards, or cidrs, separated by commas or spaces"
+  fi
   while true; do
     if [ -z "$input" ]; then
-      read -r -p "block> " input
+      read -r -p "ips to block> " input
     fi
     if BLOCK_ADDED="$(normalize_block "$input")"; then
       return 0
@@ -357,39 +460,24 @@ configure_adcash() {
   ADCASH_ACTION=keep
   ADCASH_SOURCE="${LYRA_ADCASH_TAG_FILE:-}"
   local choice="${LYRA_ADCASH:-}"
-  local keep_choice
-  if [ -z "$choice" ] && [ ! -t 0 ]; then
-    return
-  fi
+  local current=n
   if [ -z "$choice" ]; then
-    log "enable adcash advertising on the site?"
-    log "type 'y' to configure adcash or 'n' to disable it"
+    [ -t 0 ] || return 0
+    [ -s "$ADCASH_TAG_PATH" ] && current=y
+    if ask_yes_no "show adcash ads on the site?" "$current"; then choice=y; else choice=n; fi
   fi
-  while true; do
-    if [ -z "$choice" ]; then read -r -p "> " choice; fi
-    case "$choice" in
-      y | yes | Y | YES | true | 1) ADCASH_ACTION=enable; break ;;
-      n | no | N | NO | false | 0) ADCASH_ACTION=disable; return ;;
-      *)
-        fail "please type 'y' or 'n'"
-        [ -t 0 ] || return 1
-        choice=""
-        ;;
-    esac
-  done
-  if [ -z "$ADCASH_SOURCE" ] && [ -t 0 ] && [ -s "$ADCASH_TAG_PATH" ]; then
-    log "type 'k' to keep existing adcash config or 'r' to replace it"
-    while true; do
-      read -r -p "> " keep_choice
-      case "$keep_choice" in
-        k | keep) ADCASH_SOURCE="$ADCASH_TAG_PATH"; break ;;
-        r | replace) break ;;
-        *) fail "please type 'k' or 'r'" ;;
-      esac
-    done
-  fi
-  if [ -z "$ADCASH_SOURCE" ] && [ ! -t 0 ] && [ -s "$ADCASH_TAG_PATH" ]; then
-    ADCASH_SOURCE="$ADCASH_TAG_PATH"
+  case "$choice" in
+    y | yes | Y | YES | true | 1) ADCASH_ACTION=enable ;;
+    n | no | N | NO | false | 0) ADCASH_ACTION=disable; return 0 ;;
+    *)
+      fail "LYRA_ADCASH must be y or n"
+      return 1
+      ;;
+  esac
+  if [ -z "$ADCASH_SOURCE" ] && [ -s "$ADCASH_TAG_PATH" ]; then
+    if [ ! -t 0 ] || ask_yes_no "keep the saved adcash zone script?" y; then
+      ADCASH_SOURCE="$ADCASH_TAG_PATH"
+    fi
   fi
   if [ -z "$ADCASH_SOURCE" ] && [ -t 0 ]; then
     ADCASH_SOURCE="$SETUP_TEMP/adcash-zone.tag"
@@ -422,23 +510,19 @@ validate_adcash() {
 configure_tutorials() {
   TUTORIAL_RESET=0
   local choice="${LYRA_RESET_TUTORIALS:-}"
-  if [ -z "$choice" ] && [ ! -t 0 ]; then return; fi
   if [ -z "$choice" ]; then
-    log "make everyone do the home and chat tutorials again?"
-    log "type 'y' to reset tutorials or 'n' to keep their completion"
+    [ -t 0 ] || return 0
+    if ask_yes_no "make everyone redo the home and chat tutorials?" n; then TUTORIAL_RESET=1; fi
+    return 0
   fi
-  while true; do
-    if [ -z "$choice" ]; then read -r -p "> " choice; fi
-    case "$choice" in
-      y | yes | Y | YES | true | 1) TUTORIAL_RESET=1; return ;;
-      n | no | N | NO | false | 0) return ;;
-      *)
-        fail "please type 'y' or 'n'"
-        [ -t 0 ] || return 1
-        choice=""
-        ;;
-    esac
-  done
+  case "$choice" in
+    y | yes | Y | YES | true | 1) TUTORIAL_RESET=1 ;;
+    n | no | N | NO | false | 0) ;;
+    *)
+      fail "LYRA_RESET_TUTORIALS must be y or n"
+      return 1
+      ;;
+  esac
 }
 
 save_tutorial_revision() {
@@ -457,54 +541,21 @@ if sudo [ -f /etc/wireguard/wg0.conf ]; then
 fi
 
 if [ -t 0 ]; then
-  log "route mochi and nuru through a wireguard vpn?"
-  fail "all outbound traffic from both services will use the vpn and may be slower"
-  if [ "$WG_CONFIG_EXISTS" -eq 1 ]; then
-    log "type 'y' to use wireguard or 'n' to keep both services on the server's direct connection"
-  else
-    log "type 'y' to configure wireguard or 'n' to use the server's direct connection"
+  WG_DEFAULT=n
+  if [ "$WG_CONFIG_EXISTS" -eq 1 ] && systemctl is-enabled --quiet wg-quick@wg0 2>/dev/null; then
+    WG_DEFAULT=y
   fi
-  while true; do
-    read -r -p "> " ws_choice
-    case "$ws_choice" in
-    yes | y)
-      WG_ENABLED=1
-      break
-      ;;
-    no | n)
-      WG_ENABLED=0
-      break
-      ;;
-    *)
-      fail "please type 'y' or 'n'"
-      ;;
-    esac
-  done
-
-  if [ "$WG_ENABLED" -eq 1 ] && [ "$WG_CONFIG_EXISTS" -eq 1 ]; then
-    log "type 'k' to keep existing config or 'r' to replace it"
-    while true; do
-      read -r -p "> " keep_choice
-      case "$keep_choice" in
-      k | keep)
-        WG_REUSE=1
-        break
-        ;;
-      r | replace)
-        WG_REUSE=0
-        break
-        ;;
-      *)
-        fail "please type 'k' or 'r'"
-        ;;
-      esac
-    done
+  log "wireguard sends all outbound mochi and nuru traffic through a vpn, which can be slower"
+  if ask_yes_no "route mochi and nuru through wireguard?" "$WG_DEFAULT"; then
+    WG_ENABLED=1
+    if [ "$WG_CONFIG_EXISTS" -eq 1 ] && ask_yes_no "keep the existing wireguard config?" y; then
+      WG_REUSE=1
+    fi
   fi
 
   if [ "$WG_ENABLED" -eq 1 ] && [ "$WG_REUSE" -eq 0 ]; then
-    while true; do
-      WG_CONFIG_FILE="$SETUP_TEMP/wg0.conf"
-      cat >"$WG_CONFIG_FILE" <<'WGEOF'
+    WG_CONFIG_FILE="$SETUP_TEMP/wg0.conf"
+    cat >"$WG_CONFIG_FILE" <<'WGEOF'
 # paste your wireguard config below then save and exit!
 #
 # example:
@@ -519,31 +570,19 @@ if [ -t 0 ]; then
 # Endpoint = ...
 # PresharedKey = ...
 WGEOF
+    while true; do
       edit_config "$WG_CONFIG_FILE"
       if ! grep -Eq '^[[:space:]]*[^#[:space:]]' "$WG_CONFIG_FILE" 2>/dev/null; then
-        fail "empty config"
-        log "type 'r' to retry or 'c' to cancel vpn setup"
-        read -r -p "> " retry
-        case "$retry" in
-        r | retry) continue ;;
-        *)
-          WG_ENABLED=0
-          break
-          ;;
-        esac
+        fail "the wireguard config is empty"
       elif ! grep -Eq '^[[:space:]]*\[Interface\][[:space:]]*$' "$WG_CONFIG_FILE" 2>/dev/null; then
-        fail "invalid config (missing [Interface] section)"
-        log "type 'r' to retry or 'c' to cancel vpn setup"
-        read -r -p "> " retry
-        case "$retry" in
-        r | retry) continue ;;
-        *)
-          WG_ENABLED=0
-          break
-          ;;
-        esac
+        fail "the wireguard config has no [Interface] section"
       else
         success "wireguard config is valid"
+        break
+      fi
+      if ! ask_yes_no "edit the wireguard config again?" y; then
+        WG_ENABLED=0
+        log "wireguard skipped, mochi and nuru will use the direct connection"
         break
       fi
     done
@@ -567,11 +606,40 @@ fi
 
 configure_adcash
 configure_tutorials
+
+show_plan() {
+  local wireguard="off, direct connection"
+  local adcash="unchanged"
+  local tutorials="kept"
+  if [ "$WG_ENABLED" -eq 1 ]; then
+    wireguard="on, new config"
+    [ "$WG_REUSE" -eq 0 ] || wireguard="on, existing config"
+  fi
+  case "$ADCASH_ACTION" in
+    enable) adcash="on" ;;
+    disable) adcash="off" ;;
+  esac
+  [ "$TUTORIAL_RESET" -eq 0 ] || tutorials="reset for everyone"
+  printf '\n'
+  log "server      ${PRETTY_NAME:-linux}, $PROXY_CPUS cpus, $((PROXY_RAM_MB / 1024)) gb ram"
+  log "workers     up to $MOCHI_INSTANCES mochi, $NURU_INSTANCES nuru"
+  log "wireguard   $wireguard"
+  log "adcash      $adcash"
+  log "tutorials   $tutorials"
+  log "the site goes down while services are stopped, rebuilt, and restarted"
+}
+show_plan
+if [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ] && ! ask_yes_no "start the setup?" y; then
+  log "setup cancelled, nothing was changed"
+  exit 0
+fi
 export DEBIAN_FRONTEND=noninteractive
 
-retry 3 sudo apt-get update -y
-retry 3 sudo apt-get install -y --no-install-recommends unzip libcap2-bin jq dnsutils binaryen build-essential cmake libclang-dev pkg-config libssl-dev git debian-keyring debian-archive-keyring apt-transport-https docker.io docker-cli libjemalloc2 ca-certificates curl gnupg lsb-release openssl psmisc ffmpeg
+step "installing system packages"
+retry 3 sudo apt-get update -qq
+retry 3 sudo apt-get install -y -qq --no-install-recommends unzip libcap2-bin jq dnsutils binaryen build-essential cmake libclang-dev pkg-config libssl-dev git debian-keyring debian-archive-keyring apt-transport-https docker.io docker-cli libjemalloc2 ca-certificates curl gnupg lsb-release openssl psmisc ffmpeg
 
+step "checking bun and site config"
 BUN_VERSION="1.4.4"
 export PATH="$HOME/.bun/bin:$PATH"
 BUN_CURRENT_VERSION="$(bun --version 2>/dev/null || true)"
@@ -606,7 +674,7 @@ try {
 }
 '
 
-log "the setup process is about to start; support is available at discord.gg/4GeWaGPh6c"
+log "support is available at discord.gg/4GeWaGPh6c"
 success "setup started"
 
 stop_pm2() {
@@ -708,7 +776,8 @@ release_service_ports() {
   [ "$used" -eq 0 ]
 }
 
-log "stopping all running services..."
+step "stopping running services"
+log "stopping all running services"
 while read -r unit _; do
   if [[ "$unit" =~ ^(mochi|nuru)@[0-9]+\.service$ ]]; then
     sudo systemctl stop "$unit"
@@ -740,27 +809,17 @@ if command -v ip >/dev/null 2>&1; then
 fi
 kill_service_processes
 release_service_ports
+sudo rm -f /etc/systemd/system/lyra-cosmetics.service /etc/systemd/system/lyra-cosmetics.timer
+if [ "$WG_ENABLED" -eq 0 ]; then
+  sudo rm -f /etc/systemd/system/nuru-route.service /etc/systemd/system/nuru-route.timer /usr/local/bin/nuru-route.sh
+fi
+sudo systemctl daemon-reload
 success "all services stopped"
 
-if [ "$WG_ENABLED" -eq 0 ]; then
-  sudo systemctl stop nuru 2>/dev/null || true
-  sudo systemctl disable nuru 2>/dev/null || true
-  sudo systemctl stop nuru-route.timer 2>/dev/null || true
-  sudo systemctl disable nuru-route.timer 2>/dev/null || true
-  sudo systemctl stop wg-quick@wg0 2>/dev/null || true
-  sudo systemctl disable wg-quick@wg0 2>/dev/null || true
-  sudo wg-quick down wg0 2>/dev/null || true
-  sudo rm -f /etc/systemd/system/nuru-route.service /etc/systemd/system/nuru-route.timer /usr/local/bin/nuru-route.sh
-  sudo systemctl daemon-reload
-fi
-
-if command -v ip >/dev/null 2>&1; then
-  sudo ip link delete veth0-global 2>/dev/null || true
-fi
+step "preparing the network"
 if command -v modprobe >/dev/null 2>&1; then
   sudo modprobe nf_conntrack || true
 fi
-release_service_ports
 
 if [ "$WG_ENABLED" -eq 1 ]; then
   RESOLV_CONF_BACKUP=""
@@ -856,10 +915,11 @@ Table = off
   fi
 fi
 
+step "installing toolchains"
 if ! command -v eturnalctl >/dev/null 2>&1 && [ ! -x /opt/eturnal/bin/eturnalctl ]; then
-  curl -fsS -o /tmp/eturnal-install.sh https://eturnal.net/install
-  sudo sh /tmp/eturnal-install.sh
-  rm -f /tmp/eturnal-install.sh
+  log "installing eturnal"
+  curl -fsS -o "$SETUP_TEMP/eturnal-install.sh" https://eturnal.net/install
+  sudo sh "$SETUP_TEMP/eturnal-install.sh"
 fi
 if ! command -v eturnalctl >/dev/null 2>&1 && [ ! -x /opt/eturnal/bin/eturnalctl ]; then
   fail "eturnal installation failed"
@@ -934,20 +994,19 @@ fi
 if ! dpkg-query -W -f='${Status}' caddy 2>/dev/null | grep -q "install ok installed"; then
   sudo mkdir -p /usr/share/keyrings /etc/apt/sources.list.d
   curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/gpg.key" | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-  retry 3 sudo apt-get update -y
-  retry 3 sudo apt-get install -y --no-install-recommends caddy
+  curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+  retry 3 sudo apt-get update -qq
+  retry 3 sudo apt-get install -y -qq --no-install-recommends caddy
 fi
 
-if [ -f /etc/sysctl.d/99-lyra-optimizations.conf ]; then
-  sudo cp /etc/sysctl.d/99-lyra-optimizations.conf /etc/sysctl.d/99-lyra-optimizations.conf.bak.$(date +%s)
-fi
+step "tuning the kernel"
+backup_file /etc/sysctl.d/99-lyra-optimizations.conf
 
 LYRA_RESERVED_PORTS="$(sudo sysctl -n net.ipv4.ip_local_reserved_ports)"
 LYRA_RESERVED_PORTS="${LYRA_RESERVED_PORTS:+$LYRA_RESERVED_PORTS,}2019,3001,${TURN_PORT:-3478},4000-4444,6001,8923"
 sudo sysctl -w "net.ipv4.ip_local_reserved_ports=$LYRA_RESERVED_PORTS" >/dev/null
 
-cat <<EOF | sudo tee /etc/sysctl.d/99-lyra-optimizations.conf
+cat <<EOF | sudo tee /etc/sysctl.d/99-lyra-optimizations.conf >/dev/null
 net.netfilter.nf_conntrack_max = 524288
 net.netfilter.nf_conntrack_tcp_timeout_close_wait = 10
 net.netfilter.nf_conntrack_tcp_timeout_time_wait = 10
@@ -994,27 +1053,46 @@ net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.accept_redirects = 0
 net.ipv4.conf.default.send_redirects = 0
 EOF
-sudo sysctl -p /etc/sysctl.d/99-lyra-optimizations.conf || true
+sudo sysctl -p /etc/sysctl.d/99-lyra-optimizations.conf >/dev/null || true
 
 if ! grep -q "^\* soft nofile" /etc/security/limits.conf; then
-  echo "* soft nofile 1048576" | sudo tee -a /etc/security/limits.conf
+  echo "* soft nofile 1048576" | sudo tee -a /etc/security/limits.conf >/dev/null
 fi
 if ! grep -q "^\* hard nofile" /etc/security/limits.conf; then
-  echo "* hard nofile 1048576" | sudo tee -a /etc/security/limits.conf
+  echo "* hard nofile 1048576" | sudo tee -a /etc/security/limits.conf >/dev/null
 fi
 
-if [ -d "$ROOT/services/nuru" ]; then
-  (
-    cd "$ROOT/services/nuru"
-    RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
-    sudo cp "$ROOT/target/release/nuru" /usr/local/bin/nuru
-    sudo setcap cap_net_bind_service=+ep /usr/local/bin/nuru || true
-  )
+step "building services"
+log "installing javascript dependencies"
+if [ -f bun.lock ]; then
+  "$BUN_BIN" install --frozen-lockfile --prefer-offline || "$BUN_BIN" install
 else
-  fail "nuru service directory not found"
-  exit 1
+  "$BUN_BIN" install
 fi
 
+CHAT_SETUP_LOG="$SETUP_TEMP/chat-setup.log"
+CHAT_SETUP_PID=""
+if [ "$PROXY_RAM_MB" -ge 8192 ]; then
+  log "preparing chat models in the background while rust builds"
+  retry 3 "$BUN_BIN" run setup:chat >"$CHAT_SETUP_LOG" 2>&1 &
+  CHAT_SETUP_PID=$!
+fi
+
+for service in nuru mochi cloudsync; do
+  if [ ! -d "$ROOT/services/$service" ]; then
+    fail "$service service directory not found"
+    exit 1
+  fi
+  log "building $service"
+  (
+    cd "$ROOT/services/$service"
+    RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
+  )
+done
+sudo cp "$ROOT/target/release/nuru" /usr/local/bin/nuru
+sudo setcap cap_net_bind_service=+ep /usr/local/bin/nuru || true
+
+step "configuring vpn routing and turn"
 id -u mochi >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin mochi
 id -u nuru >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin nuru
 
@@ -1209,23 +1287,31 @@ NRTIMER
   sudo systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true
 fi
 
-PUBLIC_IP="$(curl -s4 --max-time 8 ifconfig.me || true)"
-[ -z "$PUBLIC_IP" ] && PUBLIC_IP="$(dig +short txt ch whoami.cloudflare @1.0.0.1 2>/dev/null | tr -d '"' || true)"
-[ -z "$PUBLIC_IP" ] && PUBLIC_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}' || true)"
+is_ipv4() {
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local octet
+  for octet in "${BASH_REMATCH[@]:1}"; do
+    [ "$octet" -le 255 ] || return 1
+  done
+}
 
-if [ -z "$PUBLIC_IP" ]; then
-  fail "couldn't detect public ip"
+PUBLIC_IP="${LYRA_PUBLIC_IP:-}"
+is_ipv4 "$PUBLIC_IP" || PUBLIC_IP="$(curl -fs4 --max-time 8 https://ifconfig.me 2>/dev/null || true)"
+is_ipv4 "$PUBLIC_IP" || PUBLIC_IP="$(dig +short txt ch whoami.cloudflare @1.0.0.1 2>/dev/null | tr -d '"' || true)"
+is_ipv4 "$PUBLIC_IP" || PUBLIC_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1 || true)"
+
+if ! is_ipv4 "$PUBLIC_IP"; then
+  fail "couldn't detect the public ip, set LYRA_PUBLIC_IP"
   exit 1
 fi
+log "public ip: $PUBLIC_IP"
 
 TURN_HOST="${TURN_HOST:-$PUBLIC_IP}"
 TURN_PORT="${TURN_PORT:-3478}"
 TURN_USERNAME="${TURN_USERNAME:-lyly}"
 TURN_CREDENTIAL="${TURN_CREDENTIAL:-$(openssl rand -hex 24)}"
 
-if [ -f /etc/eturnal.yml ]; then
-  sudo cp /etc/eturnal.yml /etc/eturnal.yml.bak.$(date +%s)
-fi
+backup_file /etc/eturnal.yml
 
 sudo tee /etc/eturnal.yml >/dev/null <<EOF
 eturnal:
@@ -1285,30 +1371,23 @@ require_cmd caddy
 export PATH="$HOME/.bun/bin:$PATH"
 export IP="$PUBLIC_IP"
 
-if [ -f bun.lock ]; then
-  "$BUN_BIN" install --frozen-lockfile --prefer-offline || "$BUN_BIN" install
+step "preparing chat and service config"
+if [ -n "$CHAT_SETUP_PID" ]; then
+  log "waiting for chat models and database"
+  if ! wait "$CHAT_SETUP_PID"; then
+    CHAT_SETUP_PID=""
+    tail -n 40 "$CHAT_SETUP_LOG" >&2 || true
+    fail "chat setup failed"
+    exit 1
+  fi
+  CHAT_SETUP_PID=""
+  success "chat models and database are ready"
 else
-  "$BUN_BIN" install
-fi
-
-log "preparing chat models and database"
-if ! retry 3 "$BUN_BIN" run setup:chat; then
-  fail "chat setup failed"
-  exit 1
-fi
-
-if [ -d "$ROOT/services/mochi" ]; then
-  (
-    cd "$ROOT/services/mochi"
-    RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
-  )
-fi
-
-if [ -d "$ROOT/services/cloudsync" ]; then
-  (
-    cd "$ROOT/services/cloudsync"
-    RUSTFLAGS="-C target-cpu=native" "$CARGO_BIN" build --release --locked
-  )
+  log "preparing chat models and database"
+  if ! retry 3 "$BUN_BIN" run setup:chat; then
+    fail "chat setup failed"
+    exit 1
+  fi
 fi
 
 sudo cp "$ROOT/target/release/mochi" /usr/local/bin/mochi
@@ -1319,7 +1398,7 @@ sudo mkdir -p "$COSMETICS_DIR"
 if [ ! -s "$ROOT/services/mochi/cosmetics/shop_skus.json" ]; then
   fail "services/mochi/cosmetics/shop_skus.json is missing, profile cosmetics will stay empty"
 fi
-sudo chown -R mochi:mochi /var/cache/lyra-mochi
+sudo find /var/cache/lyra-mochi \( ! -user mochi -o ! -group mochi \) -exec chown mochi:mochi {} +
 CACHE_AVAILABLE_KB=$(df -Pk /var/cache/lyra-mochi | awk 'NR == 2 { print $4 }')
 if [[ ! "$CACHE_AVAILABLE_KB" =~ ^[1-9][0-9]*$ ]]; then
   fail "available cache disk space could not be determined"
@@ -1436,7 +1515,7 @@ for ((i = 0; i < MOCHI_INSTANCES; i++)); do
   sudo mkdir -p "/var/cache/lyra-mochi/instance-$i/cache/stream"
   sudo chown -R mochi:mochi "/var/cache/lyra-mochi/instance-$i"
 done
-sudo tee /etc/systemd/system/mochi@.service <<EOF
+sudo tee /etc/systemd/system/mochi@.service >/dev/null <<EOF
 [Unit]
 Description=mochi reverse proxy and anime stream cache
 After=network-online.target$MOCHI_VPN_AFTER
@@ -1456,6 +1535,7 @@ WorkingDirectory=/var/cache/lyra-mochi/instance-%i
 EnvironmentFile=/etc/mochi/instance-%i.env
 EnvironmentFile=/etc/lyra/metrics.env
 $MOCHI_VPN_PRESTART
+ExecStartPre=-+/usr/bin/flock /run/lyra-cosmetics.lock /usr/bin/install -C -p -o mochi -g mochi -m 644 "$ROOT/services/mochi/cosmetics/shop_skus.json" "$COSMETICS_DIR/source.json"
 ExecStart=/usr/local/bin/mochi
 Restart=always
 RestartSec=10
@@ -1479,57 +1559,20 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo tee /etc/systemd/system/lyra-cosmetics.service >/dev/null <<EOF
-[Unit]
-Description=lyra profile cosmetics mirror refresh
-After=network-online.target$MOCHI_VPN_AFTER
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-User=mochi
-Group=mochi
-Slice=lyra-proxy.slice
-Nice=10
-WorkingDirectory=$COSMETICS_DIR
-$MOCHI_VPN_PRESTART
-ExecStartPre=-+/usr/bin/install -p -o mochi -g mochi -m 644 "$ROOT/services/mochi/cosmetics/shop_skus.json" "$COSMETICS_DIR/source.json"
-ExecStart=/usr/local/bin/mochi --cosmetics-sync
-TimeoutStartSec=4h
-Restart=on-failure
-RestartSec=20min
-Environment=RUST_LOG=mochi=info
-Environment=MOCHI_COSMETICS_DIR=$COSMETICS_DIR
-Environment=MOCHI_COSMETICS_SOURCE=$COSMETICS_DIR/source.json
-EOF
-sudo tee /etc/systemd/system/lyra-cosmetics.timer >/dev/null <<EOF
-[Unit]
-Description=refresh lyra profile cosmetics
-
-[Timer]
-OnBootSec=15min
-OnUnitActiveSec=6h
-RandomizedDelaySec=20min
-
-[Install]
-WantedBy=timers.target
-EOF
 sudo mkdir -p /etc/mochi
 for ((i = 0; i < MOCHI_INSTANCES; i++)); do
   printf 'MOCHI_PORT=%s\n' "$((4100 + i))" | sudo tee "/etc/mochi/instance-$i.env" >/dev/null
 done
+printf 'MOCHI_COSMETICS_REFRESH_HOURS=6\n' | sudo tee -a /etc/mochi/instance-0.env >/dev/null
 
+step "building the site"
 LYRA_WISP_PATH="/$("$BUN_BIN" -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')/"
 LYRA_WISP_PATH="$LYRA_WISP_PATH" "$BUN_BIN" --bun run build
 
 sudo mkdir -p /etc/nuru /etc/systemd/system/caddy.service.d
 
-if [ -f /etc/systemd/system/caddy.service.d/override.conf ]; then
-  sudo cp /etc/systemd/system/caddy.service.d/override.conf /etc/systemd/system/caddy.service.d/override.conf.bak.$(date +%s)
-  success "existing caddy override config backed up"
-fi
-
-sudo tee /etc/systemd/system/caddy.service.d/override.conf <<EOF
+backup_file /etc/systemd/system/caddy.service.d/override.conf
+sudo tee /etc/systemd/system/caddy.service.d/override.conf >/dev/null <<EOF
 [Service]
 Environment="NO_PROXY=127.0.0.1"
 LimitNOFILE=1048576
@@ -1538,10 +1581,7 @@ RestartSec=5
 EOF
 sudo systemctl daemon-reload
 
-if [ -f /etc/caddy/Caddyfile ]; then
-  sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.$(date +%s)
-  success "existing caddy config backed up"
-fi
+backup_file /etc/caddy/Caddyfile
 
 install_block_caddy
 sudo install -d -m 750 -o caddy -g caddy /var/log/caddy
@@ -1926,12 +1966,9 @@ else
   exit 1
 fi
 
-TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || free -m | awk '/^Mem:/ {print $2}' 2>/dev/null || 8192)
-[ -z "$TOTAL_RAM_MB" ] || [ "$TOTAL_RAM_MB" -le 0 ] && TOTAL_RAM_MB=8192
-
 calc_mem() {
   local pct=$1 min=$2 max=$3
-  local val=$((TOTAL_RAM_MB * pct / 100))
+  local val=$((PROXY_RAM_MB * pct / 100))
   [ "$val" -lt "$min" ] && val=$min
   [ "$val" -gt "$max" ] && val=$max
   echo "$val"
@@ -2151,6 +2188,7 @@ if [ -f "$ROOT/services/cloudsync/.db" ]; then
   chmod 600 "$ROOT/services/cloudsync/.db-wal" 2>/dev/null || true
 fi
 
+step "starting services"
 sudo systemctl daemon-reload
 sudo systemctl start lyra-proxy.slice
 PROXY_CGROUP=$(systemctl show --property=ControlGroup --value lyra-proxy.slice)
@@ -2158,28 +2196,7 @@ if [ -z "$PROXY_CGROUP" ] || ! retry 5 proxy_limits_active "/sys/fs/cgroup$PROXY
     fail "proxy resource limits could not be activated"
     exit 1
 fi
-log "mirroring profile cosmetics into $COSMETICS_DIR, the first run downloads a few gb"
-sudo journalctl -u lyra-cosmetics.service -f -n 0 -o cat &
-COSMETICS_LOG_PID=$!
-COSMETICS_READY=0
-for attempt in 1 2 3; do
-  if sudo systemctl start lyra-cosmetics.service; then
-    COSMETICS_READY=1
-    break
-  fi
-  if [ "$attempt" -lt 3 ]; then
-    log "some cosmetics are still missing, retrying ($attempt/3)"
-    sleep 15
-  fi
-done
-if [ "$COSMETICS_READY" -eq 1 ]; then
-  success "every profile cosmetic is mirrored"
-else
-  fail "some profile cosmetics did not download, lyra-cosmetics will keep retrying"
-fi
-kill "$COSMETICS_LOG_PID" 2>/dev/null || true
-wait "$COSMETICS_LOG_PID" 2>/dev/null || true
-sudo systemctl enable --now lyra-cosmetics.timer >/dev/null 2>&1
+log "starting $MOCHI_INSTANCES mochi instances"
 sudo systemctl enable "${MOCHI_SERVICES[@]}" >/dev/null 2>&1
 sudo systemctl restart "${MOCHI_SERVICES[@]}"
 for svc in "${MOCHI_SERVICES[@]}"; do
@@ -2259,6 +2276,7 @@ sudo runuser -u caddy -- caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl enable caddy >/dev/null 2>&1 || true
 sudo systemctl restart caddy
 
+step "checking health"
 SERVICE_HEALTH_CHECKS=(
   "tls-approval|http://127.0.0.1:3001/health"
   "lyra|http://127.0.0.1:4444/health"
@@ -2284,6 +2302,11 @@ for health_check in "${SERVICE_HEALTH_CHECKS[@]}"; do
     exit 1
   fi
 done
+printf '%s    took %s%s\n' "$DIM" "$(elapsed SECONDS-STEP_STARTED_AT)" "$RESET"
 
-success "all done; lyra is now running"
-log "to become chat owner, open chat once while logged in, then run: bun run chat role <username> owner"
+printf '\n'
+success "lyra is running on $PUBLIC_IP after $(elapsed SECONDS-SETUP_STARTED_AT)"
+log "workers     $MOCHI_INSTANCES mochi, $NURU_INSTANCES nuru"
+log "logs        $BUN_BIN $PM2_BIN logs, journalctl -u mochi@0 -u nuru@0 -f"
+log "block ips   bash setup.sh --block"
+log "chat owner  open chat once while logged in, then run: bun run chat role <username> owner"

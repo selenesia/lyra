@@ -394,51 +394,96 @@ pub async fn write_to_disk(cache_key: &str, status: u16, headers: &HeaderMap, bo
     write_to_disk_path(get_cache_path(cache_key), status, headers, body).await;
 }
 
+type PendingWrite = tokio::task::JoinHandle<io::Result<std::fs::File>>;
+
 pub struct StreamCacheWriter {
     cache_path: String,
     temp_path: String,
-    writer: Option<BufWriter<File>>,
+    file: Option<std::fs::File>,
+    in_flight: Option<PendingWrite>,
+    pending: Vec<Bytes>,
+    pending_len: usize,
     published: bool,
+}
+
+fn closed_stream_writer() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "stream cache writer is closed... /ᐠ - ˕ -マ",
+    )
+}
+
+fn write_all_chunks(file: &mut std::fs::File, chunks: &[Bytes]) -> io::Result<()> {
+    use std::io::{IoSlice, Write};
+    let mut slices: Vec<IoSlice<'_>> = chunks
+        .iter()
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| IoSlice::new(chunk))
+        .collect();
+    let mut remaining = slices.as_mut_slice();
+    while !remaining.is_empty() {
+        match file.write_vectored(remaining) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(written) => IoSlice::advance_slices(&mut remaining, written),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 impl StreamCacheWriter {
     pub async fn create(cache_key: &str, status: u16, headers: &HeaderMap) -> io::Result<Self> {
+        let mut header = Vec::with_capacity(cache_header_len(headers) as usize);
+        write_cache_header(&mut header, status, headers).await?;
         let cache_path = get_stream_cache_path(cache_key);
         let temp_path = format!("{}.{}.tmp", cache_path, uuid::Uuid::new_v4());
-        let file = File::create(&temp_path).await?;
-        let mut writer = disk_writer(file);
-        if let Err(error) = write_cache_header(&mut writer, status, headers).await {
-            drop(writer);
-            let _ = fs::remove_file(&temp_path).await;
-            return Err(error);
-        }
+        let file = File::create(&temp_path).await?.into_std().await;
         Ok(Self {
             cache_path,
             temp_path,
-            writer: Some(writer),
+            file: Some(file),
+            in_flight: None,
+            pending_len: header.len(),
+            pending: vec![Bytes::from(header)],
             published: false,
         })
     }
 
-    pub async fn write(&mut self, chunk: &[u8]) -> io::Result<()> {
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "stream cache writer is closed... /ᐠ - ˕ -マ",
-            )
-        })?;
-        writer.write_all(chunk).await
+    async fn take_file(&mut self) -> io::Result<std::fs::File> {
+        match self.in_flight.take() {
+            Some(write) => write.await.map_err(io::Error::other)?,
+            None => self.file.take().ok_or_else(closed_stream_writer),
+        }
+    }
+
+    async fn write_pending(&mut self) -> io::Result<()> {
+        let mut file = self.take_file().await?;
+        let chunks = std::mem::take(&mut self.pending);
+        self.pending_len = 0;
+        self.in_flight = Some(tokio::task::spawn_blocking(move || {
+            write_all_chunks(&mut file, &chunks).map(|()| file)
+        }));
+        Ok(())
+    }
+
+    pub async fn write(&mut self, chunk: Bytes) -> io::Result<()> {
+        if self.file.is_none() && self.in_flight.is_none() {
+            return Err(closed_stream_writer());
+        }
+        self.pending_len += chunk.len();
+        self.pending.push(chunk);
+        if self.pending_len >= DISK_CHUNK_BYTES {
+            self.write_pending().await?;
+        }
+        Ok(())
     }
 
     pub async fn commit(mut self) -> io::Result<()> {
-        let mut writer = self.writer.take().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "stream cache writer is closed... /ᐠ - ˕ -マ",
-            )
-        })?;
-        writer.flush().await?;
-        drop(writer);
+        if !self.pending.is_empty() {
+            self.write_pending().await?;
+        }
+        drop(self.take_file().await?);
         fs::rename(&self.temp_path, &self.cache_path).await?;
         self.published = true;
         Ok(())
@@ -448,7 +493,8 @@ impl StreamCacheWriter {
 impl Drop for StreamCacheWriter {
     fn drop(&mut self) {
         if !self.published {
-            self.writer.take();
+            self.file.take();
+            self.in_flight.take();
             let _ = std::fs::remove_file(&self.temp_path);
         }
     }

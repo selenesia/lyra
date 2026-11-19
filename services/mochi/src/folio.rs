@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use bytes::{Bytes, BytesMut};
+use coding::{Accepted, Coding};
 use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -16,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::wrappers::ReceiverStream;
 use url::Url;
 
+pub(crate) mod coding;
 pub(crate) mod rewrite;
 
 pub const PREFIX: &str = "/!!folio/";
@@ -47,6 +49,8 @@ pub struct MetricsSnapshot {
     cache_revalidations: u64,
     rejected_targets: u64,
     upstream_errors: u64,
+    coded_passthrough: u64,
+    coded_decoded: u64,
     rewrite: Option<serde_json::Value>,
 }
 
@@ -89,6 +93,8 @@ pub async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
         cache_revalidations: metrics.cache_revalidations.load(Ordering::Relaxed),
         rejected_targets: metrics.rejected_targets.load(Ordering::Relaxed),
         upstream_errors: metrics.upstream_errors.load(Ordering::Relaxed),
+        coded_passthrough: metrics.coded_passthrough.load(Ordering::Relaxed),
+        coded_decoded: metrics.coded_decoded.load(Ordering::Relaxed),
         rewrite: state
             .folio_rewriter
             .as_ref()
@@ -137,6 +143,7 @@ pub async fn request_handler(
         }
         _ => None,
     };
+    let accepted = Accepted::from_headers(&headers);
     let session = headers
         .get(SESSION_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -174,13 +181,14 @@ pub async fn request_handler(
             return rewrite::respond(
                 &state,
                 intent,
+                accepted,
                 cached_meta(entry, "HIT"),
-                entry.body.clone(),
+                (entry.body.clone(), entry.coding),
                 &entry.body_digest,
             )
             .await;
         }
-        return cached_response(entry, "HIT");
+        return cached_response(&state, entry, "HIT", accepted);
     }
     state
         .folio_metrics
@@ -214,6 +222,10 @@ pub async fn request_handler(
             .folio_client
             .request(method.clone(), target.as_str())
             .default_headers(false)
+            .gzip(false)
+            .brotli(false)
+            .deflate(false)
+            .zstd(false)
             .headers(upstream_headers.clone());
         if !upstream_headers.contains_key("range") {
             request = request.header("accept-encoding", BROWSER_ACCEPT_ENCODING);
@@ -290,13 +302,14 @@ pub async fn request_handler(
                 return rewrite::respond(
                     &state,
                     intent,
+                    accepted,
                     cached_meta(&refreshed, "REVALIDATED"),
-                    refreshed.body.clone(),
+                    (refreshed.body.clone(), refreshed.coding),
                     &refreshed.body_digest,
                 )
                 .await;
             }
-            return cached_response(&refreshed, "REVALIDATED");
+            return cached_response(&state, &refreshed, "REVALIDATED", accepted);
         }
     }
 
@@ -304,7 +317,12 @@ pub async fn request_handler(
     let status_text = status.canonical_reason().unwrap_or("").to_owned();
     let upstream_url = upstream.uri().to_string();
     let stored_at_ms = now_ms();
-    let raw_headers = aged_headers(upstream.headers(), request_started.elapsed());
+    let coding = Coding::of(upstream.headers());
+    let raw_headers = aged_headers(
+        upstream.headers(),
+        request_started.elapsed(),
+        coding.is_some(),
+    );
     let cache_policy = cache_policy(
         status.as_u16(),
         &raw_headers,
@@ -342,6 +360,7 @@ pub async fn request_handler(
                 request_url: target.to_string(),
                 raw_headers,
                 body: Bytes::new(),
+                coding: None,
                 fresh_until_ms,
                 stored_at_ms,
                 body_digest: Default::default(),
@@ -415,13 +434,22 @@ pub async fn request_handler(
                         request_url: target.to_string(),
                         raw_headers,
                         body: body.clone(),
+                        coding,
                         fresh_until_ms,
                         stored_at_ms,
                         body_digest: body_digest.clone(),
                     });
                     publish_cache(&state, cache_key, entry, generation).await;
                 }
-                return rewrite::respond(&state, intent, meta, body, &body_digest).await;
+                return rewrite::respond(
+                    &state,
+                    intent,
+                    accepted,
+                    meta,
+                    (body, coding),
+                    &body_digest,
+                )
+                .await;
             }
         }
     }
@@ -491,6 +519,7 @@ pub async fn request_handler(
                 request_url: target.to_string(),
                 raw_headers,
                 body: finish_cached_body(buffer),
+                coding,
                 fresh_until_ms,
                 stored_at_ms,
                 body_digest: Default::default(),
@@ -499,7 +528,13 @@ pub async fn request_handler(
         }
     });
 
-    response_with_meta(Body::from_stream(ReceiverStream::new(receiver)), &meta)
+    coded_response(
+        &state,
+        Body::from_stream(ReceiverStream::new(receiver)),
+        coding,
+        accepted,
+        &meta,
+    )
 }
 
 async fn invalidate_target(state: &AppState, target: &str) {
@@ -718,12 +753,13 @@ fn cache_policy(
         return None;
     }
     let shared = !sensitive_request && !has_directive(headers, "private");
-    let lifetime = crate::cache::freshness_lifetime(&parsed, shared, max_ttl_secs)?;
+    let lifetime = crate::cache::freshness_lifetime(&parsed, shared, u64::MAX)?;
     let age = crate::cache::response_age(&parsed, SystemTime::now(), std::time::Duration::ZERO)?;
     Some(
         std::time::Duration::from_secs(lifetime)
             .saturating_sub(age)
-            .as_secs(),
+            .as_secs()
+            .min(max_ttl_secs),
     )
 }
 
@@ -760,8 +796,18 @@ fn raw_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str
         .map(|(_, value)| value.as_str())
 }
 
-fn aged_headers(headers: &HeaderMap, delay: std::time::Duration) -> Vec<(String, String)> {
+fn aged_headers(
+    headers: &HeaderMap,
+    delay: std::time::Duration,
+    coded: bool,
+) -> Vec<(String, String)> {
     let mut raw = raw_headers(headers);
+    if coded {
+        raw.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("content-encoding")
+                && !name.eq_ignore_ascii_case("content-length")
+        });
+    }
     let age = crate::cache::response_age(headers, SystemTime::now(), delay)
         .map(|age| {
             age.as_secs()
@@ -779,7 +825,7 @@ fn refresh_cached_response(
     delay: std::time::Duration,
     max_ttl_secs: u64,
 ) -> FolioCachedResponse {
-    let replacement = aged_headers(headers, delay);
+    let replacement = aged_headers(headers, delay, Coding::of(headers).is_some());
     let replacement_names = replacement
         .iter()
         .map(|(name, _)| name.to_ascii_lowercase())
@@ -799,6 +845,7 @@ fn refresh_cached_response(
         request_url: cached.request_url.clone(),
         raw_headers,
         body: cached.body.clone(),
+        coding: cached.coding,
         fresh_until_ms: now_ms().saturating_add(ttl.saturating_mul(1000)),
         stored_at_ms: now_ms(),
         body_digest: cached.body_digest.clone(),
@@ -809,8 +856,65 @@ fn response_has_no_body(status: u16) -> bool {
     matches!(status, 101 | 103 | 204 | 205 | 304)
 }
 
-fn cached_response(entry: &FolioCachedResponse, cache: &'static str) -> Response {
-    response_with_meta(Body::from(entry.body.clone()), &cached_meta(entry, cache))
+fn cached_response(
+    state: &AppState,
+    entry: &FolioCachedResponse,
+    cache: &'static str,
+    accepted: Accepted,
+) -> Response {
+    coded_response(
+        state,
+        Body::from(entry.body.clone()),
+        entry.coding,
+        accepted,
+        &cached_meta(entry, cache),
+    )
+}
+
+fn coded_response(
+    state: &AppState,
+    body: Body,
+    coding: Option<Coding>,
+    accepted: Accepted,
+    meta: &UpstreamMeta,
+) -> Response {
+    let Some(coding) = coding else {
+        return response_with_meta(body, meta);
+    };
+    let passthrough = accepted.allows(coding);
+    let counter = if passthrough {
+        &state.folio_metrics.coded_passthrough
+    } else {
+        &state.folio_metrics.coded_decoded
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+    let body = if passthrough {
+        body
+    } else {
+        Body::from_stream(coding::decode_stream(coding, body.into_data_stream()))
+    };
+    with_coding(
+        response_with_meta(body, meta),
+        passthrough.then_some(coding),
+    )
+}
+
+fn with_coding(mut response: Response, coding: Option<Coding>) -> Response {
+    if !response.headers().contains_key(UPSTREAM_META_HEADER) {
+        return response;
+    }
+    let headers = response.headers_mut();
+    if let Some(coding) = coding {
+        headers.insert(
+            axum::http::header::CONTENT_ENCODING,
+            HeaderValue::from_static(coding.name()),
+        );
+    }
+    headers.append(
+        axum::http::header::VARY,
+        HeaderValue::from_static("accept-encoding"),
+    );
+    response
 }
 
 fn cached_meta(entry: &FolioCachedResponse, cache: &'static str) -> UpstreamMeta {

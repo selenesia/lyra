@@ -13,6 +13,7 @@ import {
 import type { ChatMember } from "../../features/chat/chatProtocol.ts";
 import ChatDisplayName from "./ChatDisplayName.tsx";
 import { IconCrossMedium } from "../icons";
+import "../../assets/styles/chat/chat-color.css";
 
 const RECENT_STORAGE = "lyra-chat-name-colors";
 const RECENT_LIMIT = 12;
@@ -51,11 +52,13 @@ interface ChatColorPickerProps {
   title?: string;
   value: string | undefined;
   member?: Pick<ChatMember, "name" | "display"> & ChatNameStyle;
+  adjust?: ((color: string) => string) | undefined;
+  onPreview?: (color: string) => void;
   onPick: (color: string) => void;
   onClose: () => void;
 }
 
-export default function ChatColorPicker({ title = "custom color", value, member, onPick, onClose }: ChatColorPickerProps) {
+export default function ChatColorPicker({ title = "custom color", value, member, adjust, onPreview, onPick, onClose }: ChatColorPickerProps) {
   const [isClosing, setIsClosing] = useState(false);
   const [hsv, setHsv] = useState<Hsv>(() => rgbToHsv(hexToRgb(value && isCustomNameColor(value) ? value : "#d3b4ff")));
   const [hexText, setHexText] = useState(() => rgbToHex(hsvToRgb(...hsv)));
@@ -84,7 +87,16 @@ export default function ChatColorPicker({ title = "custom color", value, member,
   }, []);
 
   const hex = rgbToHex(hsvToRgb(...hsv));
-  const shown = member ? readableNameColor(hex) : hex;
+  const shown = member ? readableNameColor(hex) : adjust ? adjust(hex) : hex;
+  const previewRef = useRef({ initial: shown, onPreview });
+  previewRef.current.onPreview = onPreview;
+
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (shown === preview.initial) return;
+    preview.initial = "";
+    preview.onPreview?.(shown);
+  }, [shown]);
 
   const update = useCallback((next: Hsv) => {
     setHsv(next);

@@ -167,7 +167,7 @@ impl SegmentFill {
         }
 
         if let Some(writer) = self.disk.as_mut() {
-            if writer.write(&chunk).await.is_err() {
+            if writer.write(chunk.clone()).await.is_err() {
                 self.disk.take();
                 self.disk_failed = true;
             }
@@ -599,6 +599,7 @@ pub(super) async fn start_segment_fill(
             .get(upstream_url)
             .header(ACCEPT, accept)
             .headers(provider.headers())
+            .header(ACCEPT_ENCODING, "identity")
     })
     .await
     {
@@ -621,15 +622,12 @@ pub(super) async fn start_segment_fill(
     }
 
     let received_at = std::time::SystemTime::now();
-    let ttl =
-        crate::cache::freshness_lifetime(response.headers(), true, state.disk_cache_max_age_secs)
-            .zip(crate::cache::response_age(
-                response.headers(),
-                received_at,
-                started_at.elapsed(),
-            ))
-            .map(|(lifetime, age)| Duration::from_secs(lifetime).saturating_sub(age).as_secs())
-            .unwrap_or(0);
+    let ttl = segment_ttl(
+        response.headers(),
+        received_at,
+        started_at.elapsed(),
+        state.disk_cache_max_age_secs,
+    );
     let cacheable = ttl > 0 && crate::proxy::response_allows_shared_cache(response.headers());
     if mode == FillMode::Prefetch && !cacheable {
         fill_attempt.hand_off();
@@ -796,4 +794,25 @@ pub(super) async fn start_segment_fill(
         *downstream.headers_mut() = cache_headers;
         downstream
     }))
+}
+
+pub(super) fn segment_ttl(
+    headers: &HeaderMap,
+    received_at: std::time::SystemTime,
+    transfer_delay: Duration,
+    cap: u64,
+) -> u64 {
+    crate::cache::freshness_lifetime(headers, true, u64::MAX)
+        .zip(crate::cache::response_age(
+            headers,
+            received_at,
+            transfer_delay,
+        ))
+        .map(|(lifetime, age)| {
+            Duration::from_secs(lifetime)
+                .saturating_sub(age)
+                .as_secs()
+                .min(cap)
+        })
+        .unwrap_or(0)
 }

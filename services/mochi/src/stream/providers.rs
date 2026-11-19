@@ -606,6 +606,7 @@ pub(super) async fn probe_resource(
                 client
                     .get(url)
                     .headers(provider.headers())
+                    .header(ACCEPT_ENCODING, "identity")
                     .header(RANGE, "bytes=0-1023")
             })
             .await?;

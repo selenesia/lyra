@@ -24,6 +24,7 @@ pub struct FolioCachedResponse {
     pub request_url: String,
     pub raw_headers: Vec<(String, String)>,
     pub body: Bytes,
+    pub coding: Option<crate::folio::coding::Coding>,
     pub fresh_until_ms: u64,
     pub stored_at_ms: u64,
     pub body_digest: std::sync::OnceLock<[u8; 32]>,
@@ -58,6 +59,8 @@ pub struct FolioMetrics {
     pub cache_revalidations: AtomicU64,
     pub rejected_targets: AtomicU64,
     pub upstream_errors: AtomicU64,
+    pub coded_passthrough: AtomicU64,
+    pub coded_decoded: AtomicU64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

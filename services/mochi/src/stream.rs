@@ -10,7 +10,8 @@ use bytes::{Bytes, BytesMut};
 use futures_util::StreamExt;
 use moka::future::Cache;
 use reqwest::header::{
-    ACCEPT, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, REFERER, RETRY_AFTER,
+    ACCEPT, ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE,
+    REFERER, RETRY_AFTER,
 };
 use serde::Serialize;
 use std::io::SeekFrom;
@@ -58,6 +59,9 @@ const QUALITY_SETTLE_GRACE: Duration = Duration::from_millis(500);
 const AUTO_4K_GRACE: Duration = Duration::from_millis(1500);
 const MEDIA_ACCEPT: &str = "video/mp2t,video/mp4,application/octet-stream,*/*";
 const DISK_READ_CHUNK_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) struct MediaPayload;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 enum StreamProvider {

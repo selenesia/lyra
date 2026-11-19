@@ -1,4 +1,4 @@
-import type { ComponentChildren } from "preact";
+import { Fragment, type ComponentChildren } from "preact";
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   IconBook,
@@ -20,7 +20,16 @@ import { useSlidingPill } from "../../hooks/useSlidingPill.ts";
 import { settingsViewSignal } from "../../core/ui/uiSignals.ts";
 import { svgIcon } from "../../core/ui/svgIcon.ts";
 import { toast } from "../../core/ui/toast.ts";
-import { switchTheme } from "../../core/ui/theme.ts";
+import {
+  applyThemeColors,
+  readThemeColors,
+  readableBackgroundColor,
+  saveThemeColor,
+  switchTheme,
+  switchThemeColors,
+  type ThemeColorName,
+} from "../../core/ui/theme.ts";
+import ChatColorPicker from "../chat/ChatColorPicker.tsx";
 import { SEARCH_ENGINE_OPTIONS } from "../../core/config/config.ts";
 import {
   ADVANCED_SETTING_KEYS,
@@ -159,6 +168,13 @@ const FIELDS: readonly SettingField[] = [
     description: "autumn leaves falling across your screen.",
   },
   {
+    section: "appearance",
+    key: ADVANCED_SETTING_KEYS.titleMascot,
+    label: "home mascots",
+    description:
+      "the anime mascots above the search bar; turn it off to show the plain name.",
+  },
+  {
     section: "watch",
     key: WATCH_LANGUAGE_KEY,
     label: "movie and show audio",
@@ -244,6 +260,19 @@ const FIELDS: readonly SettingField[] = [
   },
 ];
 
+const THEME_COLOR_FIELDS: readonly {
+  name: ThemeColorName;
+  label: string;
+  title: string;
+}[] = [
+  { name: "background", label: "background", title: "background color" },
+  { name: "accent", label: "theme color", title: "theme color" },
+];
+const THEME_COLOR_LABEL = "custom colors";
+const THEME_COLOR_DESCRIPTION =
+  "pick your own background and theme color; the page updates as you drag.";
+const THEME_COLOR_KEYWORDS = "custom colors background theme color accent";
+
 const SUBTITLE_KEYWORDS =
   "subtitles style subtitles captions size color background edge preview";
 const EXTENSION_KEYWORDS = "extensions install chrome extension upload";
@@ -262,6 +291,7 @@ function readSettingValues(): Record<string, SettingValue> {
     theme: resolveTheme(localStorage.getItem("theme")),
     [ADVANCED_SETTING_KEYS.motion]: readMotionPreference(),
     [ADVANCED_SETTING_KEYS.fallingLeaves]: readAdvancedToggle("fallingLeaves"),
+    [ADVANCED_SETTING_KEYS.titleMascot]: readAdvancedToggle("titleMascot"),
     [WATCH_LANGUAGE_KEY]: readWatchLanguage(),
     [ANIME_LANGUAGE_KEY]: readAnimeLanguage(),
     [ANIME_QUALITY_KEY]: readAnimeQuality(),
@@ -336,6 +366,9 @@ function applySetting(key: string, value: SettingValue): void {
       break;
     case ADVANCED_SETTING_KEYS.fallingLeaves:
       announce("fallingLeavesUpdated");
+      break;
+    case ADVANCED_SETTING_KEYS.titleMascot:
+      announce("titleMascotUpdated");
       break;
   }
 }
@@ -538,7 +571,7 @@ function ExtensionManager({ active }: { active: boolean }) {
         {busy ? "working..." : "upload extension"}
         <input
           type="file"
-          accept=".zip,.crx,application/zip"
+          accept=".zip,.crx,application/zip,application/x-zip-compressed"
           disabled={busy}
           onChange={(event) => {
             const input = event.currentTarget;
@@ -595,6 +628,8 @@ export default function SettingsPage({
   const [query, setQuery] = useState("");
   const [values, setValues] = useState(readSettingValues);
   const [openSelect, setOpenSelect] = useState<string | null>(null);
+  const [themeColors, setThemeColors] = useState(readThemeColors);
+  const [colorPicking, setColorPicking] = useState<ThemeColorName | null>(null);
   const [versionInfo, setVersionInfo] = useState("");
   const closeSelect = useCallback(() => setOpenSelect(null), []);
 
@@ -625,8 +660,14 @@ export default function SettingsPage({
   }, [show, hide, toggle]);
 
   useEffect(() => {
-    if (visible) setValues(readSettingValues());
-    else setOpenSelect(null);
+    if (visible) {
+      setValues(readSettingValues());
+      setThemeColors(readThemeColors());
+    } else {
+      setOpenSelect(null);
+      setColorPicking(null);
+      applyThemeColors(readThemeColors());
+    }
   }, [visible]);
 
   useEffect(() => {
@@ -648,6 +689,21 @@ export default function SettingsPage({
     applySetting(key, value);
   };
 
+  const pickThemeColor = (name: ThemeColorName, color: string) => {
+    const next = { ...themeColors, [name]: color };
+    setThemeColors(next);
+    saveThemeColor(name, color);
+    toast.success("settings saved");
+    applyThemeColors(next);
+  };
+
+  const removeThemeColors = () => {
+    setThemeColors({});
+    for (const { name } of THEME_COLOR_FIELDS) saveThemeColor(name, undefined);
+    toast.success("settings saved");
+    switchThemeColors({});
+  };
+
   const sections = useMemo(
     () =>
       SECTIONS.filter(
@@ -660,14 +716,63 @@ export default function SettingsPage({
               field.section === section.id &&
               matchesQuery(search, field.label, field.description),
           ),
+          colors:
+            section.id === "appearance" &&
+            matchesQuery(search, THEME_COLOR_KEYWORDS, THEME_COLOR_DESCRIPTION),
           custom:
             (section.id === "subtitles" &&
               matchesQuery(search, SUBTITLE_KEYWORDS)) ||
             (section.id === "extensions" &&
               matchesQuery(search, EXTENSION_KEYWORDS)),
         }))
-        .filter((section) => section.fields.length > 0 || section.custom),
+        .filter(
+          (section) =>
+            section.fields.length > 0 ||
+            section.colors ||
+            section.custom,
+        ),
     [search, activeSection],
+  );
+  const themeColorItem = (
+    <SettingItem
+      key="theme-colors"
+      label={THEME_COLOR_LABEL}
+      description={THEME_COLOR_DESCRIPTION}
+    >
+      <div class="settings-page-choices settings-page-colors">
+        {THEME_COLOR_FIELDS.map(({ name, label }) => {
+          const color = themeColors[name];
+          return (
+            <button
+              type="button"
+              key={name}
+              class="settings-page-button settings-page-color-pick"
+              aria-haspopup="dialog"
+              aria-label={color ? `${label} ${color}` : label}
+              onClick={() => setColorPicking(name)}
+            >
+              <span
+                class={`chat-color-dot${color ? "" : " is-custom"}`}
+                style={color ? { background: color } : undefined}
+                aria-hidden="true"
+              />
+              {label}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          class="settings-page-button"
+          disabled={!themeColors.background && !themeColors.accent}
+          onClick={removeThemeColors}
+        >
+          remove
+        </button>
+      </div>
+    </SettingItem>
+  );
+  const pickingField = THEME_COLOR_FIELDS.find(
+    (field) => field.name === colorPicking,
   );
   const extensionsShown = sections.some(
     (section) => section.id === "extensions",
@@ -762,41 +867,47 @@ export default function SettingsPage({
             <div class="settings-page-section" key={section.id}>
               {search && <h2>{section.label}</h2>}
               <div class="settings-page-grid">
-                {section.fields.map((field) => {
+                {section.fields.map((field, index) => {
                   const value = values[field.key];
+                  const colorsHere =
+                    section.colors &&
+                    index === Math.min(2, section.fields.length) - 1;
                   return (
-                    <SettingItem
-                      key={field.key}
-                      label={field.label}
-                      description={field.description}
-                    >
-                      {field.options ? (
-                        <SettingSelect
-                          value={String(value)}
-                          options={field.options}
-                          format={field.format}
-                          open={openSelect === field.key}
-                          onOpen={() => setOpenSelect(field.key)}
-                          onClose={closeSelect}
-                          onChange={(next) => changeSetting(field.key, next)}
-                        />
-                      ) : (
-                        <input
-                          class="settings-page-toggle"
-                          type="checkbox"
-                          aria-label={field.label}
-                          checked={value === true}
-                          onChange={(event) =>
-                            changeSetting(
-                              field.key,
-                              event.currentTarget.checked,
-                            )
-                          }
-                        />
-                      )}
-                    </SettingItem>
+                    <Fragment key={field.key}>
+                      <SettingItem
+                        label={field.label}
+                        description={field.description}
+                      >
+                        {field.options ? (
+                          <SettingSelect
+                            value={String(value)}
+                            options={field.options}
+                            format={field.format}
+                            open={openSelect === field.key}
+                            onOpen={() => setOpenSelect(field.key)}
+                            onClose={closeSelect}
+                            onChange={(next) => changeSetting(field.key, next)}
+                          />
+                        ) : (
+                          <input
+                            class="settings-page-toggle"
+                            type="checkbox"
+                            aria-label={field.label}
+                            checked={value === true}
+                            onChange={(event) =>
+                              changeSetting(
+                                field.key,
+                                event.currentTarget.checked,
+                              )
+                            }
+                          />
+                        )}
+                      </SettingItem>
+                      {colorsHere && themeColorItem}
+                    </Fragment>
                   );
                 })}
+                {section.colors && section.fields.length === 0 && themeColorItem}
                 {section.custom && section.id === "subtitles" && (
                   <SettingItem
                     wide
@@ -820,6 +931,21 @@ export default function SettingsPage({
           ))}
         </div>
       </div>
+      {pickingField && (
+        <ChatColorPicker
+          title={pickingField.title}
+          value={themeColors[pickingField.name]}
+          adjust={pickingField.name === "background" ? readableBackgroundColor : undefined}
+          onPreview={(color) =>
+            applyThemeColors({ ...themeColors, [pickingField.name]: color })
+          }
+          onPick={(color) => pickThemeColor(pickingField.name, color)}
+          onClose={() => {
+            applyThemeColors(readThemeColors());
+            setColorPicking(null);
+          }}
+        />
+      )}
     </section>
   );
 }

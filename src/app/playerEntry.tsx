@@ -5,7 +5,7 @@ import { appPath } from "../core/runtime/hosting.ts";
 import { resolveWatchAnimePlayback } from "../features/watch/watchAnimePlayback.ts";
 import { parseTitlePlayback } from "../features/watch/watchPlayback.ts";
 import { resolveTheme } from "../core/config/settingsOptions.ts";
-import { applyTheme } from "../core/ui/theme.ts";
+import { applyTheme, applyThemeColors, readThemeColors } from "../core/ui/theme.ts";
 import {
   applyMotionPreference,
   readMotionPreference,
@@ -29,6 +29,7 @@ if (recoveryUrl.href !== window.location.href) {
 }
 
 applyTheme(resolveTheme(localStorage.getItem("theme")));
+applyThemeColors(readThemeColors());
 
 applyMotionPreference(readMotionPreference());
 

@@ -405,8 +405,8 @@ export function createChatRoom({
     let row = store.identify(identity, now());
     if (recycled) forgetUser(row.id, recycled);
     store.guard.observe(row, browser, now());
-    if (row.banned_until > now()) store.guard.restrict(row, "ban", row.banned_until);
-    if (row.muted_until > now()) store.guard.restrict(row, "timeout", row.muted_until);
+    if (row.banned_until > now()) store.guard.restrict(row, "ban", row.banned_until, now());
+    if (row.muted_until > now()) store.guard.restrict(row, "timeout", row.muted_until, now());
     row = store.guard.apply(row, now());
     if (row.banned_until > now()) {
       refreshRestrictions();
@@ -493,7 +493,7 @@ export function createChatRoom({
     }
     store.setStrikes(row.id, { points: current, updated: time, mutes, mutedUntil });
     if (mutes > row.mute_count) {
-      store.guard.restrict(row, "timeout", mutedUntil);
+      store.guard.restrict(row, "timeout", mutedUntil, time);
       refreshRestrictions();
       announce(channel, row, { action: "timeout", until: mutedUntil }, time);
       logEvent(row, `${nameOf(row)} was timed out for ${durationLabel(mutedUntil - time)} after repeated violations`, time);
@@ -808,7 +808,7 @@ export function createChatRoom({
         until = time + minutes * 60_000;
       }
       store.setMute(target.id, until);
-      store.guard.restrict(target, "timeout", until);
+      store.guard.restrict(target, "timeout", until, time);
       audit(until ? `${Math.round((until - time) / 60_000)} min` : null);
       refreshRestrictions();
       if (until) {
@@ -834,7 +834,7 @@ export function createChatRoom({
       if (!fromConsole && !canBan(actorRole, target.role)) return httpError(403, "CHAT_FORBIDDEN", "you can not ban that user");
       if (action === "unban") {
         store.setBan(target.id, 0, null);
-        store.guard.restrict(target, "ban", 0);
+        store.guard.restrict(target, "ban", 0, time);
         audit(null);
         if (target.banned_until > time) {
           announce(channel, target, { action }, time);
@@ -847,7 +847,7 @@ export function createChatRoom({
       const until = minutes === null ? PERMANENT : time + minutes * 60_000;
       const reason = typeof payload.reason === "string" ? cleanChatText(payload.reason).slice(0, 200) || null : null;
       store.setBan(target.id, until, reason);
-      store.guard.restrict(target, "ban", until);
+      store.guard.restrict(target, "ban", until, time);
       const removed = payload.purge ? store.purge(target.id, time - PURGE_WINDOW_MS) : [];
       audit([minutes === null ? "permanent" : `${minutes} min`, reason, removed.length && `${removed.length} removed`].filter(Boolean).join(", "));
       for (const entry of removed) broadcast(frame("remove", entry), entry.channel);
@@ -1690,7 +1690,7 @@ export function createChatRoom({
   }
 
   async function handle(request, { ip = "unknown" } = {}) {
-    const browser = store.guard.browser(request);
+    const browser = store.guard.browser(request, ip);
     let response;
     try {
       response = await handleRequest(request, ip, browser);
@@ -1699,7 +1699,10 @@ export function createChatRoom({
       response = reply(httpError(503, "CHAT_TEXT_CHECK_BUSY", "chat is busy, try again in a moment"));
       response.headers.set("Retry-After", "2");
     }
-    if (browser.authenticated) response.headers.append("Set-Cookie", browser.cookie);
+    if (browser.authenticated) {
+      response.headers.append("Set-Cookie", browser.cookie);
+      if (new URL(request.url).pathname.endsWith("/api/chat/me")) response.headers.set("x-lyra-chat-browser", browser.value);
+    }
     return response;
   }
 

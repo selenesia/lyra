@@ -414,6 +414,24 @@ body.settings-view .settings-page .catalog-topbar.has-scroll-shadow::before {
   min-width: 0;
 }
 
+.settings-page-colors {
+  flex-wrap: wrap;
+}
+
+.settings-page-colors .settings-page-button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.settings-page-colors .settings-page-color-pick {
+  gap: 8px;
+}
+
+.settings-page-color-pick .chat-color-dot {
+  height: 16px;
+  width: 16px;
+}
+
 .settings-page-subtitle-preview {
   align-items: flex-end;
   aspect-ratio: 16 / 9;

@@ -1,4 +1,5 @@
 use super::protocol::{read_part, write_parts, UrlModel, WorkerJob, WorkerReply};
+use crate::folio::coding;
 use base64::Engine as _;
 use js::cfg::{Config, Flags, UrlRewriter};
 use js::{Rewriter, RewriterError};
@@ -11,8 +12,7 @@ use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 pub const WORKER_ARG: &str = "--folio-rewrite-worker";
 pub const MAX_JOB_BYTES: usize = 64 * 1024;
 pub const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
-const BROTLI_QUALITY: u32 = 5;
-const BROTLI_WINDOW: u32 = 22;
+const ZSTD_LEVEL: i32 = 3;
 const MARKER_FILL: u8 = b'_';
 
 static HEAP_CAP: AtomicUsize = AtomicUsize::new(0);
@@ -253,14 +253,34 @@ fn patch_frame(mut js: Vec<u8>, urls: &[ImportUrl]) -> Option<Vec<u8>> {
 }
 
 fn compress(bytes: &[u8]) -> io::Result<Vec<u8>> {
-    let mut encoder = brotli::CompressorWriter::new(
-        Vec::with_capacity(bytes.len() / 4),
-        64 * 1024,
-        BROTLI_QUALITY,
-        BROTLI_WINDOW,
-    );
-    encoder.write_all(bytes)?;
-    Ok(encoder.into_inner())
+    zstd::bulk::compress(bytes, ZSTD_LEVEL)
+}
+
+fn source_limit(job: &WorkerJob) -> usize {
+    usize::try_from(job.max_source_bytes)
+        .ok()
+        .filter(|limit| *limit != 0)
+        .map_or(MAX_BODY_BYTES, |limit| limit.min(MAX_BODY_BYTES))
+}
+
+fn decoded_source<'body>(
+    job: &WorkerJob,
+    body: &'body [u8],
+) -> Result<std::borrow::Cow<'body, [u8]>, &'static str> {
+    let limit = source_limit(job);
+    let Some(coding) = job.coding else {
+        return if body.len() > limit {
+            Err("too-large")
+        } else {
+            Ok(body.into())
+        };
+    };
+    coding::decode(coding, body, limit)
+        .map(std::borrow::Cow::Owned)
+        .map_err(|error| match error {
+            coding::DecodeError::TooLarge => "too-large",
+            coding::DecodeError::Invalid => "encoding",
+        })
 }
 
 fn random_hex(length: usize) -> String {
@@ -299,7 +319,8 @@ impl RewriteSession {
         job: &WorkerJob,
         body: &[u8],
     ) -> Result<(bool, u64, Vec<u8>), &'static str> {
-        let source = std::str::from_utf8(body).map_err(|_| "not-utf8")?;
+        let body = decoded_source(job, body)?;
+        let source = std::str::from_utf8(&body).map_err(|_| "not-utf8")?;
         let config = Config {
             prefix: String::new(),
             wrapfn: job.config.wrapfn.clone(),

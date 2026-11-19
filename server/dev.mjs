@@ -200,6 +200,7 @@ function proxyDevService(req, res, next) {
       headers,
       agent: proxyAgent,
       timeout: 45_000,
+      maxHeaderSize: 256 * 1024,
     },
     (proxyRes) => {
       proxyRes.on("error", () => res.destroy());

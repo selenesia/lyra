@@ -10,7 +10,7 @@ import { scheduleIdleTask } from "../core/runtime/scheduler.ts";
 import { initCloaking } from "../features/cloaking.ts";
 import "../features/cloudsync/syncBoundary.ts";
 import { resolveTheme } from "../core/config/settingsOptions.ts";
-import { applyTheme } from "../core/ui/theme.ts";
+import { applyTheme, applyThemeColors, readThemeColors } from "../core/ui/theme.ts";
 import {
   applyMotionPreference,
   readAdvancedToggle,
@@ -33,6 +33,7 @@ if (recoveryUrl.searchParams.has("recovery")) {
 }
 
 applyTheme(resolveTheme(localStorage.getItem("theme")));
+applyThemeColors(readThemeColors());
 
 applyMotionPreference(readMotionPreference());
 

@@ -3,18 +3,24 @@ export const ADVANCED_SETTING_KEYS = {
   preloadProxy: "preloadProxyRuntime",
   motion: "motionPreference",
   fallingLeaves: "fallingLeaves",
+  titleMascot: "titleMascot",
 } as const;
 
 const DEFAULT_ADVANCED_SETTINGS = {
   saveHistory: true,
   preloadProxy: true,
   fallingLeaves: true,
+  titleMascot: true,
   motion: "system",
 } as const;
 
 export const MOTION_OPTIONS = ["system", "reduced", "full"] as const;
 export type MotionPreference = (typeof MOTION_OPTIONS)[number];
-export type AdvancedToggle = "saveHistory" | "preloadProxy" | "fallingLeaves";
+export type AdvancedToggle =
+  | "saveHistory"
+  | "preloadProxy"
+  | "fallingLeaves"
+  | "titleMascot";
 
 type StorageReader = Pick<Storage, "getItem">;
 

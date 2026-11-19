@@ -1,3 +1,4 @@
+use crate::folio::coding::Coding;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 
@@ -75,6 +76,10 @@ pub struct WorkerJob {
     pub flags: RewriteFlags,
     pub config: RewriteConfig,
     pub urls: Option<UrlModel>,
+    #[serde(default)]
+    pub coding: Option<Coding>,
+    #[serde(default)]
+    pub max_source_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

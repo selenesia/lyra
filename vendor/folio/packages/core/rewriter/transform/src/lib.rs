@@ -1,4 +1,6 @@
-use std::{fmt::Display, marker::PhantomData};
+#[cfg(feature = "debug")]
+use std::fmt::Display;
+use std::marker::PhantomData;
 
 use oxc::{
 	allocator::{Allocator, Vec},

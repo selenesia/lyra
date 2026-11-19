@@ -2,10 +2,11 @@ pub mod pool;
 pub mod protocol;
 pub mod worker;
 
-use super::{raw_header, response_with_meta, UpstreamMeta};
+use super::coding::{self, Accepted, Coding};
+use super::{coded_response, raw_header, response_with_meta, with_coding, UpstreamMeta};
 use crate::state::AppState;
 use axum::body::Body;
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use base64::Engine as _;
 use bytes::Bytes;
@@ -29,6 +30,8 @@ const BLOCKING_DIGEST_BYTES: usize = 1024 * 1024;
 const FAILED_SCRIPT_TTL: Duration = Duration::from_secs(5 * 60);
 const BLOCKING_INFLATE_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_GROWTH: u64 = 8;
+const BROTLI_QUALITY: u32 = 5;
+const BROTLI_WINDOW: u32 = 22;
 
 const JAVASCRIPT_ESSENCES: &[&str] = &[
     "application/ecmascript",
@@ -73,7 +76,6 @@ struct IntentEnvelope {
 pub struct RewriteIntent {
     pub kind: RewriteKind,
     pub job: WorkerJob,
-    pub accepts_brotli: bool,
 }
 
 fn identifier(name: &str) -> bool {
@@ -90,26 +92,6 @@ fn replacement_safe(name: &str) -> bool {
         .as_bytes()
         .windows(2)
         .any(|pair| pair[0] == b'$' && (pair[1] == b'$' || pair[1].is_ascii_digit()))
-}
-
-fn accepts_brotli(headers: &HeaderMap) -> bool {
-    headers
-        .get_all("accept-encoding")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|coding| {
-            let mut parts = coding.split(';').map(str::trim);
-            parts
-                .next()
-                .is_some_and(|name| name.eq_ignore_ascii_case("br"))
-                && !parts.any(|parameter| {
-                    parameter
-                        .strip_prefix("q=")
-                        .and_then(|weight| weight.parse::<f32>().ok())
-                        .is_some_and(|weight| weight <= 0.0)
-                })
-        })
 }
 
 pub fn parse_intent(headers: &HeaderMap) -> Result<Option<RewriteIntent>, &'static str> {
@@ -146,13 +128,14 @@ pub fn parse_intent(headers: &HeaderMap) -> Result<Option<RewriteIntent>, &'stat
     }
     Ok(Some(RewriteIntent {
         kind: intent.kind,
-        accepts_brotli: accepts_brotli(headers),
         job: WorkerJob {
             module: intent.module,
             base: intent.base,
             flags: intent.flags,
             config: intent.config,
             urls: intent.urls,
+            coding: None,
+            max_source_bytes: 0,
         },
     }))
 }
@@ -206,8 +189,9 @@ pub fn cache_key(job: &WorkerJob, digest: &[u8; 32]) -> String {
         hasher.update((bytes.len() as u64).to_be_bytes());
         hasher.update(bytes);
     };
-    field(b"folio-rewrite-v1");
+    field(b"folio-rewrite-v2");
     field(REWRITER_HASH.as_bytes());
+    field(job.coding.map_or("identity", Coding::name).as_bytes());
     field(&[job.module as u8]);
     field(job.base.as_bytes());
     field(&job.flags.values().map(u8::from));
@@ -249,12 +233,39 @@ pub fn rewritten_headers(raw: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
+pub struct RewrittenPayload {
+    zstd: Bytes,
+    brotli: tokio::sync::OnceCell<Option<Bytes>>,
+}
+
+impl RewrittenPayload {
+    fn new(zstd: Bytes) -> Arc<Self> {
+        Arc::new(Self {
+            zstd,
+            brotli: tokio::sync::OnceCell::new(),
+        })
+    }
+
+    pub fn zstd(&self) -> &Bytes {
+        &self.zstd
+    }
+
+    fn weight(&self) -> usize {
+        let brotli = self
+            .brotli
+            .get()
+            .and_then(Option::as_ref)
+            .map_or(0, Bytes::len);
+        self.zstd.len().saturating_add(brotli)
+    }
+}
+
 #[derive(Clone)]
 enum RewriteEntry {
     Rewritten {
         patched: bool,
         length: u64,
-        payload: Bytes,
+        payload: Arc<RewrittenPayload>,
     },
     Declined(&'static str),
 }
@@ -262,7 +273,8 @@ enum RewriteEntry {
 pub struct RewrittenScript {
     pub patched: bool,
     pub length: u64,
-    pub payload: Bytes,
+    pub payload: Arc<RewrittenPayload>,
+    key: String,
 }
 
 pub trait RewriteBackend: Send + Sync {
@@ -295,6 +307,7 @@ struct RewriteMetrics {
     rewrites: AtomicU64,
     rewrite_ms: AtomicU64,
     worker_failures: AtomicU64,
+    transcodes: AtomicU64,
     declined: DashMap<&'static str, u64>,
 }
 
@@ -307,9 +320,16 @@ pub struct FolioRewriter {
 }
 
 fn declined_reason(reason: &str) -> Option<&'static str> {
-    ["not-utf8", "parse", "url", "output"]
-        .into_iter()
-        .find(|known| *known == reason)
+    [
+        "not-utf8",
+        "parse",
+        "url",
+        "output",
+        "encoding",
+        "too-large",
+    ]
+    .into_iter()
+    .find(|known| *known == reason)
 }
 
 impl FolioRewriter {
@@ -320,7 +340,7 @@ impl FolioRewriter {
                 .max_capacity(cache_bytes)
                 .weigher(|key: &String, entry: &RewriteEntry| -> u32 {
                     let payload = match entry {
-                        RewriteEntry::Rewritten { payload, .. } => payload.len(),
+                        RewriteEntry::Rewritten { payload, .. } => payload.weight(),
                         RewriteEntry::Declined(_) => 0,
                     };
                     payload
@@ -362,6 +382,7 @@ impl FolioRewriter {
             "rewrites": metrics.rewrites.load(Ordering::Relaxed),
             "rewrite_ms": metrics.rewrite_ms.load(Ordering::Relaxed),
             "worker_failures": metrics.worker_failures.load(Ordering::Relaxed),
+            "transcodes": metrics.transcodes.load(Ordering::Relaxed),
             "declines": declined.iter().map(|(_, count)| count).sum::<u64>(),
             "declined": declined
                 .into_iter()
@@ -401,7 +422,7 @@ impl FolioRewriter {
                 Ok(RewriteEntry::Rewritten {
                     patched,
                     length,
-                    payload,
+                    payload: RewrittenPayload::new(payload),
                 })
             }
             PoolOutcome::Done {
@@ -425,10 +446,16 @@ impl FolioRewriter {
     pub async fn rewrite(
         self: &Arc<Self>,
         job: &WorkerJob,
+        coding: Option<Coding>,
         digest: &[u8; 32],
         body: Bytes,
     ) -> Result<RewrittenScript, &'static str> {
         self.metrics.requests.fetch_add(1, Ordering::Relaxed);
+        let job = &WorkerJob {
+            coding,
+            max_source_bytes: self.max_bytes as u64,
+            ..job.clone()
+        };
         let key = cache_key(job, digest);
         let entry = match self.cache.get(&key).await {
             Some(entry) => {
@@ -441,6 +468,7 @@ impl FolioRewriter {
                 }
                 let rewriter = self.clone();
                 let job = job.clone();
+                let key = key.clone();
                 let task = tokio::spawn(async move {
                     let ran = AtomicBool::new(false);
                     let entry = rewriter
@@ -470,42 +498,83 @@ impl FolioRewriter {
                 patched,
                 length,
                 payload,
+                key,
             }),
             RewriteEntry::Declined(reason) => self.decline(reason),
         }
     }
+
+    pub async fn brotli(&self, script: &RewrittenScript) -> Option<Bytes> {
+        let made = AtomicBool::new(false);
+        let brotli = script
+            .payload
+            .brotli
+            .get_or_init(|| async {
+                made.store(true, Ordering::Relaxed);
+                let zstd = script.payload.zstd.clone();
+                let length = script.length;
+                tokio::task::spawn_blocking(move || transcode_to_brotli(&zstd, length))
+                    .await
+                    .ok()
+                    .flatten()
+            })
+            .await
+            .clone();
+        if made.into_inner() && brotli.is_some() {
+            self.metrics.transcodes.fetch_add(1, Ordering::Relaxed);
+            self.cache
+                .insert(
+                    script.key.clone(),
+                    RewriteEntry::Rewritten {
+                        patched: script.patched,
+                        length: script.length,
+                        payload: script.payload.clone(),
+                    },
+                )
+                .await;
+        }
+        brotli
+    }
 }
 
-fn inflate(payload: &[u8], limit: usize) -> Option<Bytes> {
-    use std::io::Read;
-    let mut output = Vec::with_capacity(payload.len().saturating_mul(4));
-    brotli::Decompressor::new(payload, 64 * 1024)
-        .take(limit as u64 + 1)
-        .read_to_end(&mut output)
-        .ok()
-        .filter(|read| *read <= limit)
-        .map(|_| output.into())
+fn transcode_to_brotli(zstd: &[u8], length: u64) -> Option<Bytes> {
+    use std::io::Write;
+    let script = coding::decode(Coding::Zstd, zstd, usize::try_from(length).ok()?).ok()?;
+    let mut encoder = brotli::CompressorWriter::new(
+        Vec::with_capacity(zstd.len()),
+        64 * 1024,
+        BROTLI_QUALITY,
+        BROTLI_WINDOW,
+    );
+    encoder.write_all(&script).ok()?;
+    Some(encoder.into_inner().into())
 }
 
 async fn inflated(payload: Bytes, limit: usize) -> Option<Bytes> {
-    if payload.len() <= BLOCKING_INFLATE_BYTES {
-        return inflate(&payload, limit);
+    let inflate = move || {
+        coding::decode(Coding::Zstd, &payload, limit)
+            .ok()
+            .map(Bytes::from)
+    };
+    if limit <= BLOCKING_INFLATE_BYTES {
+        return inflate();
     }
-    tokio::task::spawn_blocking(move || inflate(&payload, limit))
-        .await
-        .ok()
-        .flatten()
+    tokio::task::spawn_blocking(inflate).await.ok().flatten()
 }
 
 pub(super) async fn respond(
     state: &Arc<AppState>,
     intent: &RewriteIntent,
+    accepted: Accepted,
     mut meta: UpstreamMeta,
-    body: Bytes,
+    (body, coding): (Bytes, Option<Coding>),
     known_digest: &std::sync::OnceLock<[u8; 32]>,
 ) -> Response {
+    let original = |body: Bytes, meta: &UpstreamMeta| {
+        coded_response(state, Body::from(body), coding, accepted, meta)
+    };
     let Some(rewriter) = state.folio_rewriter.as_ref() else {
-        return response_with_meta(Body::from(body), &meta);
+        return original(body, &meta);
     };
     let eligible = eligibility(
         intent,
@@ -523,7 +592,7 @@ pub(super) async fn respond(
         }
     });
     if eligible.is_err() {
-        return response_with_meta(Body::from(body), &meta);
+        return original(body, &meta);
     }
     let digest = match known_digest.get() {
         Some(digest) => *digest,
@@ -533,30 +602,29 @@ pub(super) async fn respond(
             digest
         }
     };
-    let Ok(script) = rewriter.rewrite(&intent.job, &digest, body.clone()).await else {
-        return response_with_meta(Body::from(body), &meta);
+    let Ok(script) = rewriter
+        .rewrite(&intent.job, coding, &digest, body.clone())
+        .await
+    else {
+        return original(body, &meta);
     };
     let length = usize::try_from(script.length).unwrap_or(usize::MAX);
-    let payload = if intent.accepts_brotli {
-        Some(script.payload)
+    let (served, payload) = if accepted.allows(Coding::Zstd) {
+        (Some(Coding::Zstd), Some(script.payload.zstd().clone()))
+    } else if accepted.allows(Coding::Br) {
+        (Some(Coding::Br), rewriter.brotli(&script).await)
     } else {
-        inflated(script.payload, length).await
+        (None, inflated(script.payload.zstd().clone(), length).await)
     };
     let Some(payload) = payload else {
         let _ = rewriter.decline::<()>("output");
-        return response_with_meta(Body::from(body), &meta);
+        return original(body, &meta);
     };
     meta.raw_headers = rewritten_headers(&meta.raw_headers);
     meta.raw_headers
         .push(("content-length".into(), script.length.to_string()));
     meta.rewritten = Some(if script.patched { 2 } else { 1 });
-    let mut response = response_with_meta(Body::from(payload), &meta);
-    if intent.accepts_brotli && response.headers().contains_key(super::UPSTREAM_META_HEADER) {
-        response
-            .headers_mut()
-            .insert("content-encoding", HeaderValue::from_static("br"));
-    }
-    response
+    with_coding(response_with_meta(Body::from(payload), &meta), served)
 }
 
 

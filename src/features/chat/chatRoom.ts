@@ -87,11 +87,29 @@ const PROFILE_FIELD_LABELS: Record<string, string> = {
 };
 
 const BLOCKED_STORAGE = "lyra-chat-blocked";
+const BROWSER_STORAGE = "lyra-chat-browser";
+const BROWSER_VALUE = /^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/;
 const VISIBLE_LIMIT = 400;
 const TYPING_MS = 4_000;
 const BACKGROUND_RELEASE_MS = 5_000;
 const READ_DELAY_MS = 600;
 const NO_ENTRIES: ChatEntry[] = [];
+
+function restoreBrowser() {
+  try {
+    const value = localStorage.getItem(BROWSER_STORAGE);
+    if (!value || !BROWSER_VALUE.test(value)) return;
+    document.cookie = `lyra_chat_browser=${value}; path=/api/chat; max-age=7776000; samesite=strict${location.protocol === "https:" ? "; secure" : ""}`;
+  } catch {}
+}
+
+function rememberBrowser(response: Response) {
+  const value = response.headers.get("x-lyra-chat-browser");
+  if (!value || !BROWSER_VALUE.test(value)) return;
+  try {
+    localStorage.setItem(BROWSER_STORAGE, value);
+  } catch {}
+}
 
 function readBlocked(): ChatMember[] {
   try {
@@ -401,8 +419,10 @@ export function useChatRoom({ target, visible }: ChatRoomOptions) {
   useEffect(() => {
     let cancelled = false;
     setAccess((current) => (current.state === "ready" ? current : { state: "checking" }));
+    restoreBrowser();
     fetch(appPath("/api/chat/me"), { cache: "no-store" })
       .then(async (response) => {
+        rememberBrowser(response);
         const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
         if (cancelled) return;
         if (response.ok) updateViewer(body.viewer as ChatViewer);

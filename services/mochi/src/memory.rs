@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::System;
 
+const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
 #[derive(Default)]
 pub struct MemoryPressure {
     shedding: AtomicBool,
@@ -80,8 +82,13 @@ pub fn spawn_monitor(state: Arc<AppState>) {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut was_shedding = false;
         let mut last_cleanup = tokio::time::Instant::now();
+        let mut last_expiry_sweep = tokio::time::Instant::now();
         loop {
             ticker.tick().await;
+            if last_expiry_sweep.elapsed() >= EXPIRY_SWEEP_INTERVAL {
+                last_expiry_sweep = tokio::time::Instant::now();
+                state.stream_cache.run_pending_tasks().await;
+            }
             system.refresh_memory();
             let (budget, available) =
                 adaptive_capacity::memory_budget(system.total_memory(), system.available_memory());

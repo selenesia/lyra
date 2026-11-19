@@ -99,6 +99,9 @@ export default function App() {
       document.documentElement.dataset.peakSrc ||
       peakUrls[getRandomPeakIndex()],
   );
+  const [titleMascot, setTitleMascot] = useState(() =>
+    readAdvancedToggle("titleMascot"),
+  );
 
   useEffect(() => {
     const showGames = () => setGamesMounted(true);
@@ -142,6 +145,12 @@ export default function App() {
       if (window.showChatPage === showChat) delete window.showChatPage;
       if (window.toggleChatPage === showChat) delete window.toggleChatPage;
     };
+  }, []);
+
+  useEffect(() => {
+    const sync = () => setTitleMascot(readAdvancedToggle("titleMascot"));
+    document.addEventListener("titleMascotUpdated", sync);
+    return () => document.removeEventListener("titleMascotUpdated", sync);
   }, []);
 
   useEffect(() => {
@@ -206,16 +215,20 @@ export default function App() {
         <NavBar />
         <div class="main-container">
           <div class="title">
-            <img
-              src={peakSrc}
-              alt=""
-              width="85"
-              height="90"
-              loading="eager"
-              decoding="async"
-              fetchpriority="high"
-              draggable={false}
-            />
+            {titleMascot ? (
+              <img
+                src={peakSrc}
+                alt=""
+                width="85"
+                height="90"
+                loading="eager"
+                decoding="async"
+                fetchpriority="high"
+                draggable={false}
+              />
+            ) : (
+              <h1 class="title-wordmark">lyly</h1>
+            )}
           </div>
           <SearchBar />
         </div>

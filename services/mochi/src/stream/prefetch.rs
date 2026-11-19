@@ -150,7 +150,7 @@ pub(super) async fn playlist_resource(
 ) -> Result<Response, ResolveError> {
     let resources = playlist_references(playlist_url, playlist).await;
     let upstream_url = resources.get(resource).ok_or(ResolveError::Invalid)?;
-    let response = get_cached_upstream_resource(
+    let mut response = get_cached_upstream_resource(
         state,
         upstream_url,
         source.provider,
@@ -160,7 +160,8 @@ pub(super) async fn playlist_resource(
         request_headers,
     )
     .await?;
-    if response.status().is_success() {
+    response.extensions_mut().insert(MediaPayload);
+    if response.status().is_success() && crate::cache::stream_cache_fresh(response.headers()) {
         prefetch_resources(
             state,
             source.provider,

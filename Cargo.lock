@@ -2329,6 +2329,7 @@ dependencies = [
  "adaptive-capacity",
  "aes",
  "aho-corasick",
+ "async-compression",
  "axum",
  "base64 0.22.1",
  "brotli",
@@ -2365,6 +2366,7 @@ dependencies = [
  "uuid",
  "wreq",
  "wreq-util",
+ "zstd",
 ]
 
 [[package]]
